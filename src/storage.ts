@@ -3,6 +3,8 @@ import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import type { OrganizationConfig, ScenarioState, Snapshot } from "./domain.js";
 
+export type StorageKind = "memory" | "sqlite" | "postgres";
+
 type SQLiteStatement = {
   all(...parameters: unknown[]): unknown[];
   get(...parameters: unknown[]): unknown;
@@ -22,6 +24,7 @@ type SQLiteModule = {
 const require = createRequire(import.meta.url);
 
 export interface SimulatorStorage {
+  readonly kind: StorageKind;
   listScenarioStates(): ScenarioState[];
   getScenarioState(scenarioId: string): ScenarioState | undefined;
   saveScenarioState(state: ScenarioState): void;
@@ -35,6 +38,7 @@ export interface SimulatorStorage {
 }
 
 export class MemorySimulatorStorage implements SimulatorStorage {
+  readonly kind = "memory" as const;
   private readonly states = new Map<string, ScenarioState>();
   private readonly snapshots = new Map<string, Snapshot>();
   private organizationConfig: OrganizationConfig | undefined;
@@ -82,6 +86,7 @@ export class MemorySimulatorStorage implements SimulatorStorage {
 }
 
 export class SQLiteSimulatorStorage implements SimulatorStorage {
+  readonly kind = "sqlite" as const;
   private readonly database: SQLiteDatabase;
 
   constructor(filename: string) {
