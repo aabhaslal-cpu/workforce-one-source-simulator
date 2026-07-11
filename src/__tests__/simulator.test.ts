@@ -1566,8 +1566,8 @@ describe("Milestone 3 operations", () => {
     const config = JSON.parse(await readFile(new URL("../../vercel.json", import.meta.url), "utf8"));
     const apiEntrypoint = await readFile(new URL("../../api/index.ts", import.meta.url), "utf8");
     expect(config.installCommand).toBe("pnpm install --frozen-lockfile");
-    expect(config.functions["api/index.ts"]).toMatchObject({ runtime: "nodejs22.x", maxDuration: 30 });
-    expect(config.crons).toContainEqual({ path: "/api/cron/tick", schedule: "*/5 * * * *" });
+    expect(config.functions["api/index.ts"]).toEqual({ maxDuration: 30 });
+    expect(config.crons).toBeUndefined();
     expect(config.rewrites).toContainEqual({ source: "/(.*)", destination: "/api/index" });
     expect(apiEntrypoint).toContain("export default {");
     expect(apiEntrypoint).toContain("fetch(request: Request");
