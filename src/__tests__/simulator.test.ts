@@ -1570,8 +1570,8 @@ describe("Milestone 3 operations", () => {
     expect(config.functions["api/index.ts"]).toEqual({ maxDuration: 30 });
     expect(config.crons).toBeUndefined();
     expect(config.rewrites).toContainEqual({ source: "/(.*)", destination: "/api/index" });
-    expect(apiEntrypoint).toContain("export default {");
-    expect(apiEntrypoint).toContain("fetch(request: Request");
+    expect(apiEntrypoint).toContain("const app = await createApp();");
+    expect(apiEntrypoint).toContain("export default app;");
 
     const { app } = await credentialedApp();
     expect((await app.request("/")).status).toBe(302);
