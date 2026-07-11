@@ -15,9 +15,10 @@ Milestone 2: Complete Department, Level, Source, and Scenario Coverage.
 ## Built In Milestone 2
 
 - Compact v3 cursor with `connectionId`, `worldRevision`, and `afterSequence`.
-- Independent persisted `ScenarioInstanceState` per scenario instance. Scenario packs are templates; runtime state lives on instances.
+- Independent persisted `ScenarioInstanceState` per scenario instance. Scenario packs are templates; runtime state lives on instances, including explicit event occurrence times.
 - Durable source-change ledger, current source-object projection, world revision, and dataset metadata in SQLite storage.
 - Source-change ledger contains only occurred changes. Normal advance and trigger append newly reached changes without rotating world revision.
+- Manual triggers record the selected instance's current simulation time as the event occurrence time. Initial source changes appear immediately, and later updates/deletions are relative to the trigger time.
 - Destructive scenario instance reset/delete, dataset generation, organization regeneration, and snapshot restore rotate world revision and atomically reconstruct scenario instance states, ledger, projection, and metadata.
 - Snapshot payloads include independent scenario instance states, organization config, dataset metadata, and world revision. Restoring a snapshot restores instance states, creates a new world revision, rebuilds the deterministic ledger/projection, and invalidates old cursors.
 - Modular adapters for Slack, Gmail, Calendar, Notion, Jira, Productboard, Amplitude, GitHub, PagerDuty, Salesforce, Gainsight, and Zendesk.
@@ -52,7 +53,7 @@ With the current deterministic implementation:
 Latest local verification in this working tree:
 
 - `pnpm run typecheck`: passed.
-- `pnpm run test`: passed, 45 tests.
+- `pnpm run test`: passed, 48 tests.
 - `pnpm run lint`: passed.
 - `pnpm run build`: passed.
 

@@ -33,6 +33,8 @@ The cursor is not an offset and does not contain consumed change IDs. It is a co
 
 The source-change ledger contains occurred changes only. Workforce One should not depend on admin/debug routes for future planned events.
 
+Manual trigger source changes are timestamped from the scenario instance's current simulation time. Connector consumers should treat them like any other occurred source change and continue from the returned cursor.
+
 ## Do Not Do
 
 - Do not import simulator code into Workforce One.

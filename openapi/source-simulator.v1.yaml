@@ -245,7 +245,7 @@ paths:
         '400': { description: Invalid JSON or time advancement bounds }
   /v1/admin/scenarios/{scenarioId}/trigger:
     post:
-      summary: Trigger named scenario event
+      summary: Trigger named default-instance event at current simulation time
       security:
         - adminKey: []
       responses:
@@ -341,7 +341,7 @@ paths:
         '404': { description: Unknown scenario instance }
   /v1/admin/scenario-instances/{instanceId}/trigger:
     post:
-      summary: Trigger one event for one scenario instance without rotating world revision
+      summary: Trigger one event at the instance current simulation time without rotating world revision
       security:
         - adminKey: []
       responses:

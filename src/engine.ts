@@ -413,10 +413,12 @@ export class SourceSimulator {
     const event = scenario.events.find((candidate) => candidate.id === eventId);
     if (!event) throw notFound(`Unknown event: ${eventId}`);
     if (state.triggeredEventIds.includes(event.id)) return this.scenarioInstance(instanceId);
+    const occurredAt = state.currentTime;
     const nextState = finalizeInstanceState(this.organization, scenario, {
       ...state,
       triggeredEventIds: [...state.triggeredEventIds, event.id],
-      eventLog: [...state.eventLog, logEntry(scenario.id, state.scenarioInstanceId, event, state.currentTime)],
+      eventOccurrenceTimes: { ...(state.eventOccurrenceTimes ?? {}), [event.id]: occurredAt },
+      eventLog: [...state.eventLog, logEntry(scenario.id, state.scenarioInstanceId, event, occurredAt)],
     });
     this.commitInstanceStateWithAppends(nextState);
     return this.scenarioInstance(instanceId);
@@ -844,6 +846,7 @@ function createScenarioInstanceState(
     currentTime,
     paused: false,
     triggeredEventIds: input.completed ? scenario.events.map((event) => event.id) : [],
+    eventOccurrenceTimes: {},
     eventLog: [],
     completionState: "active",
     account,
@@ -867,20 +870,26 @@ function finalizeInstanceState(
 ): ScenarioInstanceState {
   validateParticipantOverrides(organization, state.participantPersonIds);
   const eventIds = new Set(state.triggeredEventIds);
-  const eventLog = [...state.eventLog];
+  const eventOccurrenceTimes: Record<string, string> = {};
+  for (const entry of state.eventLog) eventOccurrenceTimes[entry.eventId] = entry.occurredAt;
+  Object.assign(eventOccurrenceTimes, state.eventOccurrenceTimes ?? {});
   for (const event of scenario.events) {
-    if (!event.manual && Date.parse(addHours(state.startedAt, event.atHour)) <= Date.parse(state.currentTime)) {
+    const scheduledAt = addHours(state.startedAt, event.atHour);
+    if (!event.manual && Date.parse(scheduledAt) <= Date.parse(state.currentTime)) {
       eventIds.add(event.id);
     }
-    if (eventIds.has(event.id) && !eventLog.some((entry) => entry.eventId === event.id)) {
-      const occurredAt = addHours(state.startedAt, event.atHour);
-      eventLog.push(logEntry(scenario.id, state.scenarioInstanceId, event, occurredAt));
+    if (eventIds.has(event.id) && !eventOccurrenceTimes[event.id]) {
+      eventOccurrenceTimes[event.id] = scheduledAt;
     }
   }
   const allEventsOccurred = scenario.events.every((event) => eventIds.has(event.id));
+  const eventLog = scenario.events
+    .filter((event) => eventIds.has(event.id))
+    .map((event) => logEntry(scenario.id, state.scenarioInstanceId, event, eventOccurrenceTimes[event.id] ?? addHours(state.startedAt, event.atHour)));
   return {
     ...state,
     triggeredEventIds: [...eventIds],
+    eventOccurrenceTimes,
     eventLog: eventLog.sort((left, right) => Date.parse(left.occurredAt) - Date.parse(right.occurredAt) || left.eventId.localeCompare(right.eventId)),
     completionState: allEventsOccurred ? "completed" : "active",
   };
@@ -1131,7 +1140,7 @@ function hasEventOccurred(state: ScenarioInstanceState, event: ScenarioEventTemp
 }
 
 function eventOccurredAt(state: ScenarioInstanceState, event: ScenarioEventTemplate): string {
-  return state.eventLog.find((entry) => entry.eventId === event.id)?.occurredAt ?? addHours(state.startedAt, event.atHour);
+  return state.eventOccurrenceTimes?.[event.id] ?? state.eventLog.find((entry) => entry.eventId === event.id)?.occurredAt ?? addHours(state.startedAt, event.atHour);
 }
 
 function resolveParticipants(organization: GeneratedOrganization, scenario: ScenarioDefinition, seed: string): Record<string, string> {

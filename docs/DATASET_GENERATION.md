@@ -20,7 +20,9 @@ The ranges match Milestone 2 targets:
 
 Each scenario pack has deterministic instances with account, product, project, service, workstream, seed, and time offset. Source IDs include scenario instance ID so instances do not collide.
 
-Scenario packs are templates. Instances are persisted runtime entities with their own current time, pause state, triggered events, event log, completion state, participants, and context. Advancing one instance does not advance any other instance from the same pack.
+Scenario packs are templates. Instances are persisted runtime entities with their own current time, pause state, event occurrence times, triggered events, event log, completion state, participants, and context. Advancing one instance does not advance any other instance from the same pack.
+
+Automatically scheduled events use `startedAt + atHour`. Manual triggers use the instance `currentTime` at trigger time, and delayed updates/deletions are calculated from that persisted occurrence time.
 
 The source-change ledger is occurred-only. Dataset generation creates completed instances and reconstructs the current world from changes that have occurred by each instance clock; ordinary instance advancement appends newly reached changes.
 

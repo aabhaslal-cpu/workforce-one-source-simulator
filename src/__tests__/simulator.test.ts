@@ -118,6 +118,12 @@ function normalizeSql(sql: string): string {
   return sql.replace(/\s+/g, " ").trim();
 }
 
+function addHoursIso(start: string, hours: number): string {
+  const date = new Date(start);
+  date.setUTCHours(date.getUTCHours() + hours);
+  return date.toISOString();
+}
+
 function storageWorldSnapshot(simulator: SourceSimulator) {
   return {
     worldRevision: simulator.datasetMetadata().worldRevision,
@@ -333,6 +339,86 @@ describe("SourceSimulator", () => {
     const updatedDependency = updatedPage.records.find((record) => record.sourceId === createdDependency?.sourceId);
     expect(updatedDependency?.changeType).toBe("updated");
     expect(updatedDependency?.sourceId).toBe(createdDependency?.sourceId);
+  });
+
+  it("uses current instance time for early manual triggers and delays updates from that occurrence time", () => {
+    const simulator = new SourceSimulator({ seed: "manual-trigger-seed", baseUrl: "http://sim.test" });
+    simulator.createScenarioInstance({
+      scenarioPackId: "product-launch-readiness",
+      scenarioInstanceId: "manual-trigger-a",
+      seed: "manual-trigger-a-seed",
+    });
+    simulator.createScenarioInstance({
+      scenarioPackId: "product-launch-readiness",
+      scenarioInstanceId: "manual-trigger-b",
+      seed: "manual-trigger-b-seed",
+    });
+    const beforeTrigger = simulator.scenarioInstance("manual-trigger-a").state;
+    const triggerTime = beforeTrigger.currentTime;
+    expect(triggerTime).not.toBe(addHoursIso(beforeTrigger.startedAt, 36));
+
+    const savedCursor = simulator.feed("conn-product-vp", undefined, 100).nextCursor;
+    simulator.triggerScenarioInstanceEvent("manual-trigger-a", "exec-pressure");
+    const triggered = simulator.scenarioInstance("manual-trigger-a").state;
+    const triggeredEvent = triggered.eventLog.find((entry) => entry.eventId === "exec-pressure");
+    expect(triggered.eventOccurrenceTimes["exec-pressure"]).toBe(triggerTime);
+    expect(triggeredEvent?.occurredAt).toBe(triggerTime);
+
+    const triggeredPage = simulator.feed("conn-product-vp", savedCursor, 100);
+    expect(triggeredPage.records.some((record) => record.title === "Launch date question for staff" && record.changeType === "created")).toBe(true);
+    expect(triggeredPage.records.some((record) => record.title === "Launch decision update" && record.changeType === "created")).toBe(true);
+    expect(triggeredPage.records.some((record) => record.title === "Launch decision update" && record.changeType === "updated")).toBe(false);
+    expect(
+      simulator.sourceChanges().some((change) => change.scenarioInstanceId === "manual-trigger-a" && change.record.title === "Launch decision update" && change.changeType === "updated"),
+    ).toBe(false);
+
+    simulator.advanceScenarioInstance("manual-trigger-a", { hours: 7 });
+    expect(
+      simulator.sourceChanges().some((change) => change.scenarioInstanceId === "manual-trigger-a" && change.record.title === "Launch decision update" && change.changeType === "updated"),
+    ).toBe(false);
+
+    simulator.advanceScenarioInstance("manual-trigger-a", { hours: 1 });
+    const updatedChange = simulator.sourceChanges().find((change) => change.scenarioInstanceId === "manual-trigger-a" && change.record.title === "Launch decision update" && change.changeType === "updated");
+    expect(updatedChange?.changeOccurredAt).toBe(addHoursIso(triggerTime, 8));
+    expect(updatedChange?.record.updatedAt).toBe(addHoursIso(triggerTime, 8));
+
+    const changeCountBeforeRetry = simulator.sourceChanges().length;
+    simulator.triggerScenarioInstanceEvent("manual-trigger-a", "exec-pressure");
+    const afterRetry = simulator.scenarioInstance("manual-trigger-a").state;
+    expect(afterRetry.eventOccurrenceTimes["exec-pressure"]).toBe(triggerTime);
+    expect(afterRetry.eventLog.filter((entry) => entry.eventId === "exec-pressure")).toHaveLength(1);
+    expect(simulator.sourceChanges()).toHaveLength(changeCountBeforeRetry);
+
+    const peer = simulator.scenarioInstance("manual-trigger-b").state;
+    expect(peer.triggeredEventIds).not.toContain("exec-pressure");
+    expect(peer.eventOccurrenceTimes["exec-pressure"]).toBeUndefined();
+    expect(peer.eventLog.some((entry) => entry.eventId === "exec-pressure")).toBe(false);
+
+    simulator.advanceScenarioInstance("manual-trigger-b", { hours: 30 });
+    const peerAfterAdvance = simulator.scenarioInstance("manual-trigger-b").state;
+    expect(peerAfterAdvance.eventLog.find((entry) => entry.eventId === "dependency-risk")?.occurredAt).toBe(addHoursIso(peer.startedAt, 24));
+    expect(peerAfterAdvance.currentTime).toBe(addHoursIso(peer.startedAt, 30));
+  });
+
+  it("calculates manual-trigger deletions from actual trigger time", () => {
+    const simulator = new SourceSimulator({ seed: "manual-delete-seed", baseUrl: "http://sim.test" });
+    const beforeTrigger = simulator.state("technical-debt-staffing-risk");
+    const triggerTime = beforeTrigger.currentTime;
+    expect(triggerTime).not.toBe(addHoursIso(beforeTrigger.startedAt, 80));
+
+    simulator.triggerScenarioEvent("technical-debt-staffing-risk", "vp-investment");
+    const created = simulator.sourceChanges().find((change) => change.record.title === "Deferred retry remediation item" && change.changeType === "created");
+    expect(created?.changeOccurredAt).toBe(triggerTime);
+    expect(simulator.sourceChanges().some((change) => change.record.title === "Deferred retry remediation item" && change.changeType === "deleted")).toBe(false);
+
+    simulator.advanceScenario("technical-debt-staffing-risk", { hours: 35 });
+    expect(simulator.sourceChanges().some((change) => change.record.title === "Deferred retry remediation item" && change.changeType === "deleted")).toBe(false);
+
+    simulator.advanceScenario("technical-debt-staffing-risk", { hours: 1 });
+    const deleted = simulator.sourceChanges().find((change) => change.record.title === "Deferred retry remediation item" && change.changeType === "deleted");
+    expect(deleted?.sourceId).toBe(created?.sourceId);
+    expect(deleted?.changeOccurredAt).toBe(addHoursIso(triggerTime, 36));
+    expect(deleted?.record.updatedAt).toBe(addHoursIso(triggerTime, 36));
   });
 
   it("filters executive-only records away from IC, Manager, and Director connections", () => {
@@ -1042,6 +1128,27 @@ describe("SQLite storage", () => {
     expect(second.datasetMetadata()).toEqual(metadataBefore);
     expect(second.feed("conn-product-manager", firstCursor, 10).worldRevision).toBe(metadataBefore.worldRevision);
     expect(second.sourceChanges().length).toBe(metadataBefore.totalSourceChanges);
+    secondStorage.close();
+  });
+
+  it("persists manual trigger occurrence time across engine recreation", () => {
+    const databasePath = join(mkdtempSync(join(tmpdir(), "source-sim-manual-trigger-")), "simulator.sqlite");
+    const firstStorage = new SQLiteSimulatorStorage(databasePath);
+    const first = new SourceSimulator({ seed: "sqlite-manual-trigger-seed", storage: firstStorage, baseUrl: "http://sim.test" });
+    const triggerTime = first.state("product-launch-readiness").currentTime;
+    first.triggerScenarioEvent("product-launch-readiness", "exec-pressure");
+    const beforeRestart = first.state("product-launch-readiness");
+    expect(beforeRestart.eventOccurrenceTimes["exec-pressure"]).toBe(triggerTime);
+    firstStorage.close();
+
+    const secondStorage = new SQLiteSimulatorStorage(databasePath);
+    const second = new SourceSimulator({ seed: "ignored-seed", storage: secondStorage, baseUrl: "http://sim.test" });
+    const afterRestart = second.state("product-launch-readiness");
+    expect(afterRestart.eventOccurrenceTimes["exec-pressure"]).toBe(triggerTime);
+    expect(afterRestart.eventLog.find((entry) => entry.eventId === "exec-pressure")?.occurredAt).toBe(triggerTime);
+    expect(
+      second.sourceChanges().some((change) => change.record.title === "Launch date question for staff" && change.changeOccurredAt === triggerTime),
+    ).toBe(true);
     secondStorage.close();
   });
 });

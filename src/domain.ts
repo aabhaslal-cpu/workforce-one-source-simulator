@@ -277,6 +277,7 @@ export interface ScenarioInstanceState extends ScenarioInstanceContext {
   currentTime: string;
   paused: boolean;
   triggeredEventIds: string[];
+  eventOccurrenceTimes: Record<string, string>;
   eventLog: ScenarioEventLogEntry[];
   completionState: ScenarioCompletionState;
   participantPersonIds: Record<string, string>;

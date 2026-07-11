@@ -5,7 +5,7 @@
 ### Added
 
 - Compact v3 feed cursor over a deterministic source-change ledger.
-- Independent persisted scenario instance states. Packs are templates; instances own clocks, pause state, triggered events, event logs, participants, completion state, and contextual account/product/project/service/workstream values.
+- Independent persisted scenario instance states. Packs are templates; instances own clocks, pause state, event occurrence times, triggered events, event logs, participants, completion state, and contextual account/product/project/service/workstream values.
 - Durable SQLite tables for `scenario_instance_states`, `world_state`, `source_change_ledger`, `source_objects`, and `dataset_metadata`.
 - Dataset metadata and deterministic small, medium, and large dataset generation.
 - Modular source adapter registry with Slack, Gmail, Calendar, Notion, Jira, Productboard, Amplitude, GitHub, PagerDuty, Salesforce, Gainsight, and Zendesk adapters.
@@ -16,13 +16,14 @@
 - Cross-functional project, account, launch, and incident memberships.
 - Operator console controls for datasets, scenario packs/instances, source objects, source changes, and source history.
 - Tests for compact cursor behavior, stale world revisions, adapter coverage, scenario-pack coverage, dataset size ranges, source history, explicit relationships, new admin APIs, and SQLite ledger/metadata persistence.
-- Tests for instance independence, real POST creation, occurred-only ledger behavior, atomic SQLite rollback, snapshot restore, and migration/runtime schema drift.
+- Tests for instance independence, real POST creation, occurred-only ledger behavior, manual trigger occurrence timing, atomic SQLite rollback, snapshot restore, and migration/runtime schema drift.
 
 ### Changed
 
 - `SourceFeedBatchV1` now includes `cursorVersion: 3` and `worldRevision`.
 - Feed cursors now contain only connection ID, world revision, and `afterSequence`; they do not contain consumed change IDs.
 - The durable ledger now stores only occurred source changes. Normal advance and manual trigger append new changes without rotating world revision.
+- Manual triggers now persist the selected instance's current simulation time as the event occurrence time, so initial changes appear immediately and delayed updates/deletions are relative to the actual trigger.
 - Scenario instance reset/delete, dataset generation, organization regeneration, and snapshot restore are destructive world replacements that rotate world revision.
 - Source materialization now uses provider adapters to shape raw payloads.
 - Source IDs include scenario instance identity so medium and large datasets do not duplicate source identities.

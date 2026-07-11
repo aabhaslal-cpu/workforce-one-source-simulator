@@ -43,6 +43,8 @@ The cursor is connection-bound, world-bound, retry-safe, and compact regardless 
 
 Normal time advancement and manual triggers append new changes with increasing `ledgerSequence` values and do not rotate `worldRevision`. A saved cursor can be reused after those operations and returns only newly visible authorized changes after its `afterSequence`.
 
+Manual triggers use the selected scenario instance's current simulation time as the business event occurrence time. Initial source changes become eligible immediately. `updatedAfterHours` and `deletedAfterHours` are calculated from the actual trigger time, not from the template's original `atHour`.
+
 ## World Revision
 
 World revision changes on destructive scenario instance reset/delete, organization regeneration, dataset generation, and snapshot restore. Old cursors fail with a stale-checkpoint 400 after the revision changes.

@@ -55,7 +55,7 @@ Updates and deletions preserve source identity. Deleted provider semantics are r
 
 ## Scenario Packs And Instances
 
-There are 10 scenario packs. Packs are reusable templates; they do not hold runtime clock or completion state. Each scenario instance is a persisted runtime entity with its own ID, pack ID, seed, dataset size, started time, current time, pause state, triggered event IDs, event log, completion state, concrete participants, and account/product/project/service/workstream context.
+There are 10 scenario packs. Packs are reusable templates; they do not hold runtime clock or completion state. Each scenario instance is a persisted runtime entity with its own ID, pack ID, seed, dataset size, started time, current time, pause state, event occurrence-time map, triggered event IDs, event log, completion state, concrete participants, and account/product/project/service/workstream context.
 
 Dataset size controls deterministic instance count:
 
@@ -64,6 +64,8 @@ Dataset size controls deterministic instance count:
 - Large: 40 instances per pack.
 
 Scenario instances advance, pause, reset, delete, and trigger events independently. Reset/delete are destructive world replacements and invalidate previous cursors; ordinary advance/trigger append to the current world and preserve cursor continuity.
+
+Automatically scheduled events occur at `startedAt + atHour`. Manual triggers occur at the selected instance's `currentTime`, even when that is earlier than the template's `atHour`. The persisted event occurrence time is the source of truth for created, updated, and deleted source timestamps.
 
 ## Organization
 

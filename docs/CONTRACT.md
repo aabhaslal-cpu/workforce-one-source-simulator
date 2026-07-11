@@ -29,6 +29,8 @@ The cursor does not contain all consumed change IDs. It is bound to one connecti
 
 Normal scenario instance advance and manual trigger append source changes to the same world revision, so a saved cursor continues from its `afterSequence`. Scenario instance reset/delete, dataset generation, organization regeneration, and snapshot restore are destructive world replacements; reusing an old cursor after those operations returns a clear stale-checkpoint 400.
 
+For manually triggered events, the event occurrence time is the scenario instance's `currentTime` at trigger time. Delayed source updates and deletions are relative to that persisted occurrence time. Automatically scheduled events continue to use `startedAt + atHour`.
+
 The server returns `nextCursor` even when `hasMore` is false so later polling can continue from the checkpoint.
 
 ## Source Records

@@ -19,9 +19,10 @@ Built:
 - Safe public catalog metadata only.
 - Modular source adapters for Slack, Gmail, Calendar, Notion, Jira, Productboard, Amplitude-style analytics, GitHub, PagerDuty-style incidents, Salesforce, Gainsight-style customer success, and Zendesk-style support.
 - Ten scenario packs covering launch readiness, adoption lag, roadmap tradeoff, incident response, delivery slip, technical debt/staffing risk, renewal risk, implementation blocker, expansion opportunity, and major cross-functional release.
-- Persisted scenario instance state. Packs are reusable templates; instances hold their own seed, dataset size, clock, pause state, events, completion state, participants, and account/project/product/service/workstream context.
+- Persisted scenario instance state. Packs are reusable templates; instances hold their own seed, dataset size, clock, pause state, event occurrence times, event log, completion state, participants, and account/project/product/service/workstream context.
 - Compact v3 source feed cursor over a deterministic source-change ledger: connection ID, world revision, and `afterSequence`.
 - Occurred-only durable source-change ledger. Normal time advancement appends newly reached changes without rotating world revision.
+- Manual triggers occur at the selected instance's current simulation time; updates and deletions are calculated relative to that actual trigger time.
 - Destructive scenario instance reset/delete, dataset generation, organization regeneration, and snapshot restore atomically reconstruct the world and rotate world revision.
 - Source updates, late arrivals, corrected analytics, reschedules, archived/deleted objects, and conflicting partial evidence.
 - Small, medium, and large deterministic datasets.
