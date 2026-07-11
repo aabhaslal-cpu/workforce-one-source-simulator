@@ -1159,8 +1159,13 @@ function parseJson<T>(value: string): T {
 
 function safeStorageError(operation: string, error: unknown): Error {
   if (error instanceof WorldConflictError || error instanceof StorageError) return error;
+  if (isSimulatorDomainError(error)) return error;
   if (error instanceof Error && error.message === "Injected world replacement failure") return error;
   return new StorageError(`${operation} failed`);
+}
+
+function isSimulatorDomainError(error: unknown): error is Error {
+  return error instanceof Error && "status" in error && "classification" in error;
 }
 
 function sanitizeIdentifier(value: string): string {
