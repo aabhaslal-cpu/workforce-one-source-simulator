@@ -18,6 +18,10 @@ export const SourceRecordSchema = z.object({
   actorRef: z.string().optional(),
   acl: AclSchema,
   rawPayload: z.record(z.unknown()),
+  changeId: z.string().min(1),
+  changeType: z.enum(["created", "updated", "deleted"]),
+  changeSequence: z.number().int().min(1),
+  changeOccurredAt: z.string().datetime(),
   correlation: z.object({
     scenarioId: z.string(),
     eventId: z.string(),
@@ -32,7 +36,7 @@ export const SourceFeedBatchV1Schema = z.object({
   batchId: z.string().min(1),
   generatedAt: z.string().datetime(),
   records: z.array(SourceRecordSchema),
-  nextCursor: z.string().nullable(),
+  nextCursor: z.string().min(1),
   hasMore: z.boolean(),
 });
 
