@@ -67,6 +67,8 @@ Organization generation is validated before replacement:
 
 These caps protect the operator API from accidental oversized generations. They can be revisited in a later performance/load milestone.
 
+Organization replacement also checks compatibility with enabled Milestone 1 scenarios. Configurations that remove every generated person for a required role template return 400 instead of being accepted and failing later during scenario materialization.
+
 ## Reporting Rules
 
 - ICs may report to Managers.
@@ -102,6 +104,8 @@ Admin:
 - `GET /v1/admin/people/{personId}/compare/{otherPersonId}`
 
 The public catalog exposes only safe metadata such as source systems, contract version, scenario names, role-template count, and aggregate organization counts.
+
+Person-specific connection IDs are derived from organizational stable keys so current generated people have predictable bindings after regeneration. Role alias connections such as `conn-product-manager` remain predictable. Credential material is never returned by catalog or admin APIs.
 
 ## Operator UI
 

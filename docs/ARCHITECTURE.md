@@ -4,7 +4,7 @@
 
 ```text
 Source Simulator
-  -> authenticated incremental source feed
+  -> authenticated source-change feed
   -> Workforce One connector
   -> connector-ingress gateway
   -> evidence and provenance
@@ -16,7 +16,7 @@ The simulator owns fictional source data only. Workforce One owns interpretation
 ## Runtime Components
 
 - `src/app.ts`: HTTP API, connection-bound auth, admin auth, request validation, operator console, source deep links.
-- `src/engine.ts`: deterministic scenario engine, records, cursors, snapshots, temporal source mutations, organization-aware visibility.
+- `src/engine.ts`: deterministic scenario engine, source-change stream, checkpoint cursors, snapshots, temporal source mutations, organization-aware visibility.
 - `src/domain.ts`: shared domain types.
 - `src/organization.ts`: deterministic organization generator, role templates, reporting tree, and person-level connections.
 - `src/data.ts`: fictional tenant and M1 scenario templates.
@@ -28,6 +28,8 @@ The simulator owns fictional source data only. Workforce One owns interpretation
 Record identity is derived from seed, organization seed, scenario, event, source system, object type, and template ID. The same seed, organization configuration, scenario state, and trigger sequence produce the same organization and records. Different seeds produce different stable people and source IDs while preserving valid structure.
 
 Source updates are deterministic timeline mutations. A record with an update time keeps the same source ID and initial payload until the simulation clock reaches the update time; only then does `updatedAt` and the updated simulator payload metadata appear.
+
+Connection feeds are built from deterministic source changes, not offset pagination over a mutable record list. A v2 cursor is bound to one connection and records consumed change IDs so later creates or updates cannot cause skipped or duplicated feed items. The server returns a checkpoint cursor even when `hasMore` is false.
 
 ## Organization
 
@@ -75,3 +77,5 @@ The engine talks to a storage interface. Milestone 1 includes:
 - `SQLiteSimulatorStorage` for durable local scenario state, organization configuration, and snapshots.
 
 Production-like runtimes must fail closed when durable storage is unavailable. This draft does not claim proven production Postgres readiness.
+
+Preview, production, and Vercel-like runtimes reject memory and SQLite storage, including injected `AppOptions.storage` or `AppOptions.simulator` instances. Until a proven Postgres adapter exists, production-like startup fails closed instead of silently falling back to local storage.

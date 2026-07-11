@@ -15,6 +15,10 @@
       "actorRef": "person-engineering-manager",
       "acl": { "visibility": "group", "groups": ["engineering-platform"], "users": [] },
       "rawPayload": { "key": "ENG-1842", "status": "In Progress", "priority": "High" },
+      "changeId": "change-jira-reliability-incident-example-created",
+      "changeType": "created",
+      "changeSequence": 1,
+      "changeOccurredAt": "2026-07-10T19:00:00.000Z",
       "correlation": {
         "scenarioId": "reliability-incident",
         "eventId": "incident-opened",
@@ -23,6 +27,6 @@
       }
     }
   ],
-  "nextCursor": null,
+  "nextCursor": "opaque-v2-checkpoint-example",
   "hasMore": false
 }

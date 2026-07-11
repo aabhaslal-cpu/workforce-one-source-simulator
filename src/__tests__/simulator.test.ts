@@ -6,7 +6,8 @@ import { describe, expect, it } from "vitest";
 import { SourceFeedBatchV1Schema } from "../contracts.js";
 import { SourceSimulator } from "../engine.js";
 import { createApp } from "../app.js";
-import { SQLiteSimulatorStorage } from "../storage.js";
+import { defaultOrganizationConfig, personConnectionId } from "../organization.js";
+import { MemorySimulatorStorage, SQLiteSimulatorStorage } from "../storage.js";
 
 function advancedSimulator(seed = "test-seed") {
   const simulator = new SourceSimulator({ seed, baseUrl: "http://sim.test" });
@@ -41,6 +42,31 @@ function adminHeaders() {
 
 function connectionHeaders(secret: string) {
   return { "x-connection-secret": secret };
+}
+
+function developmentConnectionHeaders(connectionId: string) {
+  return connectionHeaders(`dev-connection-secret:${connectionId}`);
+}
+
+function cloneDefaultOrganizationConfig() {
+  return JSON.parse(JSON.stringify(defaultOrganizationConfig));
+}
+
+function withEnv<T>(overrides: Record<string, string | undefined>, callback: () => T): T {
+  const previous = new Map<string, string | undefined>();
+  for (const key of Object.keys(overrides)) previous.set(key, process.env[key]);
+  try {
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    return callback();
+  } finally {
+    for (const [key, value] of previous.entries()) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 }
 
 describe("organization generation", () => {
@@ -107,14 +133,40 @@ describe("SourceSimulator", () => {
   it("paginates connection feeds with an opaque idempotent cursor", () => {
     const simulator = advancedSimulator();
     const first = simulator.feed("conn-product-manager", undefined, 2);
-    const second = simulator.feed("conn-product-manager", first.nextCursor ?? undefined, 2);
-    const retry = simulator.feed("conn-product-manager", first.nextCursor ?? undefined, 2);
+    const second = simulator.feed("conn-product-manager", first.nextCursor, 2);
+    const retry = simulator.feed("conn-product-manager", first.nextCursor, 2);
 
     expect(SourceFeedBatchV1Schema.parse(first)).toEqual(first);
     expect(first.records).toHaveLength(2);
     expect(first.nextCursor).toEqual(expect.any(String));
-    expect(second.records.map((record) => record.sourceId)).toEqual(retry.records.map((record) => record.sourceId));
-    expect(new Set([...first.records, ...second.records].map((record) => record.sourceId)).size).toBe(4);
+    expect(second.records.map((record) => record.changeId)).toEqual(retry.records.map((record) => record.changeId));
+    expect(new Set([...first.records, ...second.records].map((record) => record.changeId)).size).toBe(4);
+  });
+
+  it("continues from a saved change checkpoint after new creates and updates", () => {
+    const simulator = new SourceSimulator({ seed: "checkpoint-seed", baseUrl: "http://sim.test" });
+    const initial = simulator.feed("conn-product-manager", undefined, 100);
+    const initialCheckpoint = initial.nextCursor;
+    const initiallyConsumed = new Set(initial.records.map((record) => record.changeId));
+
+    simulator.advanceScenario("product-launch-readiness", { hours: 24 });
+    const createdPage = simulator.feed("conn-product-manager", initialCheckpoint, 100);
+    const retryCreatedPage = simulator.feed("conn-product-manager", initialCheckpoint, 100);
+    expect(createdPage.records.map((record) => record.changeId)).toEqual(retryCreatedPage.records.map((record) => record.changeId));
+    expect(createdPage.records.every((record) => !initiallyConsumed.has(record.changeId))).toBe(true);
+
+    const createdDependency = createdPage.records.find((record) => record.title === "Workflow export API dependency");
+    expect(createdDependency?.changeType).toBe("created");
+
+    simulator.advanceScenario("product-launch-readiness", { hours: 6 });
+    const updatedPage = simulator.feed("conn-product-manager", createdPage.nextCursor, 100);
+    const updatedDependency = updatedPage.records.find((record) => record.sourceId === createdDependency?.sourceId);
+    expect(updatedDependency?.changeType).toBe("updated");
+    expect(updatedDependency?.sourceId).toBe(createdDependency?.sourceId);
+
+    const allChangeIds = [...initial.records, ...createdPage.records, ...updatedPage.records].map((record) => record.changeId);
+    expect(new Set(allChangeIds).size).toBe(allChangeIds.length);
+    expect(simulator.feed("conn-product-manager", updatedPage.nextCursor, 100).records).toEqual([]);
   });
 
   it("filters executive-only records away from IC, Manager, and Director connections", () => {
@@ -169,32 +221,35 @@ describe("SourceSimulator", () => {
     expect(simulator.feed("conn-product-manager", undefined, 100).records.some((record) => record.title === "Workflow export API dependency")).toBe(false);
 
     simulator.advanceScenario("product-launch-readiness", { hours: 24 });
-    const created = simulator.feed("conn-product-manager", undefined, 100).records.find((record) => record.title === "Workflow export API dependency");
+    const created = simulator.allRecords().find((record) => record.title === "Workflow export API dependency");
     expect(created).toBeDefined();
     expect(created?.updatedAt).toBeUndefined();
     expect(created?.rawPayload.simulatorVersion).toBe("initial");
 
     simulator.advanceScenario("product-launch-readiness", { hours: 5 });
-    const beforeUpdate = simulator.feed("conn-product-manager", undefined, 100).records.find((record) => record.sourceId === created?.sourceId);
+    const beforeUpdate = simulator.allRecords().find((record) => record.sourceId === created?.sourceId);
     expect(beforeUpdate?.updatedAt).toBeUndefined();
 
     simulator.advanceScenario("product-launch-readiness", { hours: 1 });
-    const updated = simulator.feed("conn-product-manager", undefined, 100).records.find((record) => record.sourceId === created?.sourceId);
+    const updated = simulator.allRecords().find((record) => record.sourceId === created?.sourceId);
     expect(updated?.sourceId).toBe(created?.sourceId);
     expect(updated?.updatedAt).toBe("2026-07-11T22:00:00.000Z");
     expect(updated?.rawPayload.simulatorVersion).toBe("updated");
   });
 
-  it("exposes timeline mutations through incremental feeds with stable source identity", () => {
+  it("emits timeline mutations as source-object versions with stable identity", () => {
     const simulator = new SourceSimulator({ seed: "feed-update-seed", baseUrl: "http://sim.test" });
     simulator.advanceScenario("reliability-incident", { hours: 5 });
-    const initial = simulator.feed("conn-engineering-manager", undefined, 100).records.find((record) => record.title === "Throttle connector retries under queue pressure");
+    const initialPage = simulator.feed("conn-engineering-manager", undefined, 100);
+    const initial = initialPage.records.find((record) => record.title === "Throttle connector retries under queue pressure");
     expect(initial?.updatedAt).toBeUndefined();
+    expect(initial?.changeType).toBe("created");
 
     simulator.advanceScenario("reliability-incident", { hours: 3 });
-    const afterUpdate = simulator.feed("conn-engineering-manager", undefined, 100).records.find((record) => record.sourceId === initial?.sourceId);
+    const afterUpdate = simulator.feed("conn-engineering-manager", initialPage.nextCursor, 100).records.find((record) => record.sourceId === initial?.sourceId);
     expect(afterUpdate?.sourceId).toBe(initial?.sourceId);
     expect(afterUpdate?.updatedAt).toBe("2026-07-11T00:00:00.000Z");
+    expect(afterUpdate?.changeType).toBe("updated");
   });
 });
 
@@ -248,30 +303,100 @@ describe("HTTP API authorization", () => {
     expect((await people.json()).people.length).toBeGreaterThan(0);
   });
 
-  it("rejects unsafe production credential configuration", () => {
-    const simulator = advancedSimulator();
-    expect(() => createApp({ simulator, runtimeEnv: "production", connectionCredentials: { prod: "conn-product-manager" } })).toThrow(
-      /ADMIN_API_KEY/,
-    );
-    expect(() => createApp({ simulator, runtimeEnv: "production", adminKey: "prod-admin" })).toThrow(/Connection-bound credentials/);
+  it("rejects memory and SQLite storage in production-like runtimes, including injected options", () => {
+    const productionCredentials = { "prod-product-manager": "conn-product-manager" };
     expect(() =>
-      createApp({ simulator, runtimeEnv: "production", adminKey: DEV_ADMIN_FOR_TEST, connectionCredentials: { prod: "conn-product-manager" } }),
-    ).toThrow(/development admin/);
+      withEnv(
+        { SIMULATOR_STORAGE_DRIVER: "sqlite", SIMULATOR_ALLOW_EPHEMERAL_MEMORY: undefined, DATABASE_URL: undefined },
+        () => createApp({ runtimeEnv: "preview", adminKey: "prod-admin", connectionCredentials: productionCredentials }),
+      ),
+    ).toThrow(/SQLite storage is forbidden/);
+    expect(() =>
+      withEnv(
+        { SIMULATOR_STORAGE_DRIVER: "memory", SIMULATOR_ALLOW_EPHEMERAL_MEMORY: "true", DATABASE_URL: undefined },
+        () => createApp({ runtimeEnv: "production", adminKey: "prod-admin", connectionCredentials: productionCredentials }),
+      ),
+    ).toThrow(/memory storage.*forbidden/i);
     expect(() =>
       createApp({
-        simulator,
-        runtimeEnv: "production",
+        storage: new MemorySimulatorStorage(),
+        runtimeEnv: "preview",
         adminKey: "prod-admin",
-        connectionCredentials: { "dev-connection-secret:conn-product-manager": "conn-product-manager" },
+        connectionCredentials: productionCredentials,
       }),
-    ).toThrow(/development connection/);
+    ).toThrow(/Injected storage uses memory storage/);
+
+    const sqlitePath = join(mkdtempSync(join(tmpdir(), "source-sim-prod-")), "simulator.sqlite");
+    const sqliteStorage = new SQLiteSimulatorStorage(sqlitePath);
+    try {
+      expect(() =>
+        createApp({
+          storage: sqliteStorage,
+          runtimeEnv: "production",
+          adminKey: "prod-admin",
+          connectionCredentials: productionCredentials,
+        }),
+      ).toThrow(/Injected storage uses SQLite storage/);
+    } finally {
+      sqliteStorage.close();
+    }
+
+    const injectedSimulator = new SourceSimulator({ storage: new MemorySimulatorStorage() });
     expect(() =>
-      createApp({ simulator, runtimeEnv: "production", adminKey: "same-secret", connectionCredentials: { "same-secret": "conn-product-manager" } }),
-    ).toThrow(/must be different/);
+      createApp({
+        simulator: injectedSimulator,
+        runtimeEnv: "preview",
+        adminKey: "prod-admin",
+        connectionCredentials: productionCredentials,
+      }),
+    ).toThrow(/Injected simulator storage uses memory storage/);
+  });
+
+  it("keeps connection authentication consistent after organization regeneration", async () => {
+    const simulator = new SourceSimulator({ seed: "regen-auth-seed", baseUrl: "http://sim.test" });
+    const app = createApp({ simulator, runtimeEnv: "test", adminKey: "admin-test" });
+    const removedPerson = simulator.people().find((person) => person.stableKey === "product:ic:v1:d1:m1:i4");
+    expect(removedPerson).toBeDefined();
+    const removedConnectionId = personConnectionId(removedPerson!);
+
+    const before = await app.request(`/v1/connections/${removedConnectionId}/manifest`, {
+      headers: developmentConnectionHeaders(removedConnectionId),
+    });
+    expect(before.status).toBe(200);
+
+    const nextConfig = cloneDefaultOrganizationConfig();
+    nextConfig.seed = "regen-auth-new-seed";
+    nextConfig.departments.product = { vpCount: 1, directorsPerVp: 1, managersPerDirector: 1, icsPerManager: 1 };
+    const regenerated = await app.request("/v1/admin/organization/generate", {
+      method: "POST",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ config: nextConfig }),
+    });
+    expect(regenerated.status).toBe(200);
+
+    const oldCredential = await app.request(`/v1/connections/${removedConnectionId}/manifest`, {
+      headers: developmentConnectionHeaders(removedConnectionId),
+    });
+    expect(oldCredential.status).toBe(401);
+
+    for (const person of simulator.people()) {
+      const connectionId = personConnectionId(person);
+      const response = await app.request(`/v1/connections/${connectionId}/manifest`, {
+        headers: developmentConnectionHeaders(connectionId),
+      });
+      expect(response.status).toBe(200);
+    }
+
+    const roleAlias = await app.request("/v1/connections/conn-product-ic/manifest", {
+      headers: developmentConnectionHeaders("conn-product-ic"),
+    });
+    expect(roleAlias.status).toBe(200);
+    expect((await roleAlias.json()).connectionId).toBe("conn-product-ic");
+
+    const publicCatalog = await app.request("/v1/catalog");
+    expect(JSON.stringify(await publicCatalog.json())).not.toContain("dev-connection-secret");
   });
 });
-
-const DEV_ADMIN_FOR_TEST = "dev-admin-key";
 
 describe("HTTP API validation", () => {
   it("returns 400 for malformed JSON instead of treating it as empty", async () => {
@@ -307,6 +432,41 @@ describe("HTTP API validation", () => {
       headers: connectionHeaders("secret-product-manager"),
     });
     expect(tooLargePage.status).toBe(400);
+  });
+
+  it("rejects organization configs that leave enabled scenarios without required roles", async () => {
+    const { app } = credentialedApp();
+    const requestConfig = (config: ReturnType<typeof cloneDefaultOrganizationConfig>) =>
+      app.request("/v1/admin/organization/generate", {
+        method: "POST",
+        headers: { ...adminHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ config }),
+      });
+    let incompatibleIndex = 0;
+    const incompatible = async (mutate: (config: ReturnType<typeof cloneDefaultOrganizationConfig>) => void) => {
+      const config = cloneDefaultOrganizationConfig();
+      config.seed = `incompatible-${incompatibleIndex++}`;
+      mutate(config);
+      const response = await requestConfig(config);
+      expect(response.status).toBe(400);
+      expect((await response.json()).error).toMatch(/incompatible with enabled scenarios|missing required role/);
+    };
+
+    await incompatible((config) => {
+      config.departments.product.vpCount = 0;
+    });
+    await incompatible((config) => {
+      config.departments.product.directorsPerVp = 0;
+    });
+    await incompatible((config) => {
+      config.departments.product.managersPerDirector = 0;
+    });
+    await incompatible((config) => {
+      config.departments.product.icsPerManager = 0;
+    });
+    await incompatible((config) => {
+      config.departments.product.customIcsPerManager = { "product:v1:d1:m1": 0 };
+    });
   });
 
   it("fails closed on cursor tampering and cross-connection cursors", async () => {

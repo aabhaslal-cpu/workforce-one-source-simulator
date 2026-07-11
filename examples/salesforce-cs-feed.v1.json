@@ -15,6 +15,10 @@
       "actorRef": "person-cs-manager",
       "acl": { "visibility": "group", "groups": ["cs-leadership"], "users": [] },
       "rawPayload": { "account": "Northstar Medical", "stage": "Renewal Risk", "closeDate": "2026-08-15" },
+      "changeId": "change-salesforce-renewal-risk-example-created",
+      "changeType": "created",
+      "changeSequence": 1,
+      "changeOccurredAt": "2026-07-10T17:30:00.000Z",
       "correlation": {
         "scenarioId": "renewal-risk",
         "eventId": "vp-risk",
@@ -23,6 +27,6 @@
       }
     }
   ],
-  "nextCursor": null,
+  "nextCursor": "opaque-v2-checkpoint-example",
   "hasMore": false
 }

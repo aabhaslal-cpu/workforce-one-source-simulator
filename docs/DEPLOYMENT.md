@@ -25,7 +25,7 @@ pnpm run verify
 - `SIMULATOR_PUBLIC_BASE_URL`: base URL used in generated source links.
 - `SIMULATOR_DEFAULT_SEED`: default deterministic seed.
 - `SIMULATOR_DEFAULT_DATASET_SIZE`: `small`, `medium`, or `large`.
-- `SIMULATOR_STORAGE_DRIVER`: `sqlite` or `memory`.
+- `SIMULATOR_STORAGE_DRIVER`: `sqlite` or `memory` for development/test only.
 - `SIMULATOR_SQLITE_PATH`: SQLite file path for local durable state.
 - `SIMULATOR_ALLOW_EPHEMERAL_MEMORY`: must be `true` before local memory storage can be selected.
 - `DATABASE_URL`: reserved for future production durable adapters.
@@ -49,7 +49,11 @@ Preview, Vercel-like, and production runtimes refuse to start when:
 - A known development admin or connection credential is configured.
 - An admin credential and connection credential are identical.
 - Memory storage is selected.
-- Durable storage is unavailable.
+- SQLite storage is selected or injected.
+- An injected simulator uses memory or SQLite storage.
+- Durable Postgres storage is unavailable or unproven.
+
+`DATABASE_URL` is reserved for a future Postgres adapter. In this milestone, setting a Postgres URL in a production-like runtime still fails closed because the adapter is not yet proven.
 
 ## Vercel
 

@@ -12,9 +12,12 @@ The simulator returns source records. Workforce One derives evidence, provenance
 2. The connector calls `/v1/connections/{connectionId}/manifest` with the connection-bound credential.
 3. The simulator resolves the credential server-side to one connection ID and rejects mismatched URL connection IDs with 403.
 4. The connector calls `/v1/connections/{connectionId}/records` with the same connection-bound credential.
-5. Workforce One maps the returned source ACL, raw payload, and source URL into normal connector-ingress.
-6. Workforce One may fetch `sourceUrl` for a readable simulator-owned source view using the same connection credential.
-7. Workforce One owns all downstream interpretation.
+5. Workforce One stores the returned opaque `nextCursor` checkpoint and uses it on later polls.
+6. Workforce One maps the returned source ACL, raw payload, change metadata, and source URL into normal connector-ingress.
+7. Workforce One may fetch `sourceUrl` for a readable simulator-owned source view using the same connection credential.
+8. Workforce One owns all downstream interpretation.
+
+The cursor is not an offset. It is a connection-bound checkpoint over consumed source changes, so polling from an earlier checkpoint after simulation time advances returns only newly visible creates and updates without duplicate or skipped changes.
 
 ## Example Request
 

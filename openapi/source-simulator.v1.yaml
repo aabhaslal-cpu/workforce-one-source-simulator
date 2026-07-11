@@ -117,13 +117,19 @@ paths:
         - name: cursor
           in: query
           required: false
-          schema: { type: string, maxLength: 4096 }
+          description: Opaque v2 checkpoint cursor bound to this connection and representing consumed change IDs.
+          schema: { type: string, maxLength: 65536 }
         - name: limit
           in: query
           required: false
           schema: { type: integer, minimum: 1, maximum: 100 }
       responses:
-        '200': { description: SourceFeedBatchV1 }
+        '200':
+          description: SourceFeedBatchV1 with an always-present checkpoint cursor
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceFeedBatchV1'
         '400': { description: Malformed pagination or cursor }
         '401': { description: Missing, unknown, revoked, or wrong credential type }
         '403': { description: Credential is valid for a different connection ID }
@@ -298,3 +304,72 @@ components:
       type: apiKey
       in: header
       name: x-connection-secret
+  schemas:
+    SourceFeedBatchV1:
+      type: object
+      required: [schemaVersion, connectionId, batchId, generatedAt, records, nextCursor, hasMore]
+      properties:
+        schemaVersion: { const: source-feed.v1 }
+        connectionId: { type: string }
+        batchId: { type: string }
+        generatedAt: { type: string, format: date-time }
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/SourceRecord'
+        nextCursor:
+          type: string
+          minLength: 1
+          description: Opaque checkpoint cursor returned even when hasMore is false.
+        hasMore: { type: boolean }
+    SourceRecord:
+      type: object
+      required:
+        - schemaVersion
+        - sourceSystem
+        - sourceId
+        - objectType
+        - occurredAt
+        - title
+        - sourceUrl
+        - acl
+        - rawPayload
+        - changeId
+        - changeType
+        - changeSequence
+        - changeOccurredAt
+        - correlation
+      properties:
+        schemaVersion: { const: source-record.v1 }
+        sourceSystem: { type: string }
+        sourceId: { type: string }
+        objectType: { type: string }
+        occurredAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        title: { type: string }
+        sourceUrl: { type: string, format: uri-reference }
+        actorRef: { type: string }
+        acl:
+          type: object
+          required: [visibility, groups, users]
+          properties:
+            visibility: { enum: [public, group, restricted, private] }
+            groups:
+              type: array
+              items: { type: string }
+            users:
+              type: array
+              items: { type: string }
+        rawPayload: { type: object }
+        changeId: { type: string }
+        changeType: { enum: [created, updated, deleted] }
+        changeSequence: { type: integer, minimum: 1 }
+        changeOccurredAt: { type: string, format: date-time }
+        correlation:
+          type: object
+          required: [scenarioId, eventId, templateId, seedFingerprint]
+          properties:
+            scenarioId: { type: string }
+            eventId: { type: string }
+            templateId: { type: string }
+            seedFingerprint: { type: string }

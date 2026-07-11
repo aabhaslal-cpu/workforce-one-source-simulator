@@ -14,7 +14,8 @@ The simulator contains fictional data, but it models production-like boundaries.
 - Detailed people, teams, organization tree, source identities, assignments, and visibility comparison require admin authentication.
 - The unauthenticated catalog exposes only safe high-level metadata.
 - Known local development credentials are rejected in production-like environments.
-- Missing admin credentials, missing connection credentials, identical admin/connection credentials, and in-memory storage fallback are rejected in production-like environments.
+- Missing admin credentials, missing connection credentials, identical admin/connection credentials, memory storage, SQLite storage, and local-storage fallback are rejected in production-like environments.
+- Injected app storage and injected simulator instances cannot bypass production-like storage enforcement.
 - No real credentials or routable emails appear in scenario data.
 - Source URLs are simulator links and contain no secrets.
 - Source deep links require connection authentication and enforce source-object visibility.
@@ -44,7 +45,7 @@ Preview, Vercel-like, and production runtimes must set:
 - `SIMULATOR_ADMIN_API_KEY` to a strong non-development secret.
 - `SIMULATOR_CONNECTION_CREDENTIALS` to a JSON object mapping each credential to the one connection ID it authenticates.
 - `SIMULATOR_PUBLIC_BASE_URL` to the deployed origin.
-- Durable storage. Memory storage is forbidden.
+- Proven durable Postgres storage. Memory and SQLite storage are forbidden.
 
 Do not set `dev-admin-key`, `dev-connection-secret`, or `dev-connection-secret:<connectionId>` in production-like environments.
 

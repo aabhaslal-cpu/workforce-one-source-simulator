@@ -17,12 +17,12 @@ Milestone 1 is implemented on `milestone-1/core-simulator-platform` as a hardene
 - Connection-bound authentication: each credential resolves server-side to exactly one connection ID.
 - Admin-gated organization, people, team, source identity, assignment, and visibility inspection routes.
 - Safe unauthenticated catalog metadata only.
-- `SourceFeedBatchV1` Zod contract, JSON Schema, OpenAPI, and examples.
+- `SourceFeedBatchV1` Zod contract, JSON Schema, OpenAPI, and examples with v2 connection-bound checkpoint cursors.
 - Strict Zod request validation with bounded request body, pagination, time advancement, and organization sizes.
 - Temporal source-object updates that appear only when the simulation clock reaches the update time.
 - Simulator-owned source deep links at `/sim/{sourceSystem}/{sourceId}`.
 - Durable local SQLite storage for scenario states, organization configuration, and snapshots.
-- Fail-closed production-like startup when required credentials or durable storage are unavailable.
+- Fail-closed production-like startup when required credentials are unsafe or durable Postgres storage is unavailable/unproven.
 - Internal operator console at `/console`, including organization tree and person visibility inspection.
 - Automated tests for determinism, organization generation, pagination, permissions, auth boundaries, temporal updates, deep links, SQLite persistence, snapshots, and contract artifacts.
 
@@ -64,7 +64,7 @@ pnpm run verify
 
 ## Deployment Honesty
 
-Local durable storage is implemented through SQLite. Production, preview, and Vercel-like environments reject missing credentials, known development credentials, identical admin/connection credentials, and in-memory storage fallback. A production Postgres adapter is not yet proven in this milestone, so this PR must not be described as durable deployment-ready.
+Local durable storage is implemented through SQLite. Production, preview, and Vercel-like environments reject missing credentials, known development credentials, identical admin/connection credentials, memory storage, SQLite storage, and injected local-storage simulators. A production Postgres adapter is not yet proven in this milestone, so production-like startup fails closed and this PR must not be described as durable deployment-ready.
 
 ## Documentation Map
 

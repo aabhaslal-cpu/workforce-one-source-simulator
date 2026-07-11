@@ -10,7 +10,7 @@
 - Cycle-free reporting hierarchy, manager assignments, direct reports, teams, work ownership, source identities, and permission group memberships.
 - Organization catalog APIs and admin generation/configuration APIs.
 - Person-level record visibility and visibility comparison inspection.
-- Permission-scoped connection feed with opaque cursor pagination.
+- Permission-scoped connection feed with opaque v2 checkpoint cursors.
 - `SourceFeedBatchV1` Zod contract, JSON Schema, OpenAPI spec, and example payloads.
 - One fictional tenant, three departments, four role levels, and twelve role templates.
 - Product launch readiness, reliability incident, and renewal risk scenarios.
@@ -28,6 +28,10 @@
 - Added strict Zod request validation, malformed JSON handling, cursor validation, bounded page size, bounded body size, bounded time advancement, and bounded organization generation.
 - Added durable local SQLite storage for scenario states, organization configuration, and snapshots.
 - Added fail-closed production-like behavior when durable storage is unavailable instead of using process memory.
+- Closed the production-like storage loophole by rejecting memory and SQLite storage, including injected storage and injected simulator instances backed by local storage.
+- Replaced offset pagination with a deterministic source-change checkpoint cursor that is connection-bound and returned even when `hasMore` is false.
+- Stabilized regenerated organization connection bindings with person-specific connection IDs derived from organizational stable keys.
+- Added validation that rejects organization configs incompatible with enabled scenarios before replacement.
 - Corrected temporal source updates so `updatedAt` and updated payload metadata appear only after the simulation clock reaches the update time.
 - Added simulator-owned source deep links at `/sim/{sourceSystem}/{sourceId}` with connection visibility enforcement.
 - Expanded tests across auth boundaries, production fail-closed behavior, public-route exposure, malformed payloads, organization bounds, hierarchy integrity, visibility, cross-department access, temporal updates, cursor tampering, deep links, SQLite persistence, snapshots, replay, and contract artifacts.

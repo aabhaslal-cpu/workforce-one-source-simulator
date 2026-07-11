@@ -24,6 +24,7 @@ const DEV_ADMIN_KEY = "dev-admin-key";
 const DEV_CONNECTION_PREFIX = "dev-connection-secret";
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_PAGE_SIZE = 100;
+const MAX_CURSOR_BYTES = 64 * 1024;
 const MAX_VPS = 3;
 const MAX_DIRECTORS_PER_VP = 8;
 const MAX_MANAGERS_PER_DIRECTOR = 10;
@@ -50,7 +51,7 @@ const TriggerSchema = z.object({ eventId: z.string().min(1).max(100) }).strict()
 const EmptyBodySchema = z.object({}).strict();
 const PaginationSchema = z
   .object({
-    cursor: z.string().min(1).max(4096).optional(),
+    cursor: z.string().min(1).max(MAX_CURSOR_BYTES).optional(),
     limit: z.coerce.number().int().min(1).max(MAX_PAGE_SIZE).optional(),
   })
   .strict();

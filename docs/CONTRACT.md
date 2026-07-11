@@ -9,7 +9,7 @@ The external feed contract is `SourceFeedBatchV1`.
   "batchId": "batch-example",
   "generatedAt": "2026-07-10T20:00:00.000Z",
   "records": [],
-  "nextCursor": null,
+  "nextCursor": "opaque-v2-checkpoint",
   "hasMore": false
 }
 ```
@@ -18,12 +18,16 @@ The external feed contract is `SourceFeedBatchV1`.
 
 - The simulator must not send a trusted Workforce One tenant ID.
 - Workforce One derives tenant from its configured connection.
-- Every record has a stable source system, source ID, object type, timestamp, raw provider payload, source URL, ACL, correlation metadata, and schema version.
+- Every record has a stable source system, source ID, object type, timestamp, raw provider payload, source URL, ACL, change metadata, correlation metadata, and schema version.
+- Each emitted change has `changeId`, `changeType`, `changeSequence`, and `changeOccurredAt`.
 - `updatedAt` appears only after the simulation clock reaches the deterministic source-object update time.
 - Updated source-object versions preserve the same `sourceSystem` and `sourceId`.
-- Cursors are opaque to clients and are validated server-side.
+- Cursors are opaque v2 checkpoints bound to one connection and are validated server-side.
+- A checkpoint represents consumed change IDs, not an offset in a dynamically sorted list.
+- The API returns a checkpoint cursor even when `hasMore` is false so a later poll can continue from it.
 - Re-requesting the same cursor returns the same page while scenario and organization state are unchanged.
 - A cursor issued for one connection cannot be used for another connection.
+- Continuing from a saved cursor after the simulation clock advances returns newly visible creates and updates without duplicates or skips.
 - Page size is bounded to 100 records.
 - The feed validates through Zod and the JSON Schema in `schemas/source-feed-batch.v1.json`.
 - Breaking changes require a new contract version.

@@ -27,14 +27,16 @@ Draft PR: https://github.com/aabhaslal-cpu/workforce-one-source-simulator/pull/1
 - Admin-gated detailed catalog, organization tree, teams, source identities, assignments, and visibility comparison.
 - Safe unauthenticated catalog metadata only.
 - Permission-aware connection feeds and manifests.
-- Cursor pagination with opaque Zod-validated base64url cursors and bounded page size.
+- Incremental source-change feed with opaque Zod-validated v2 checkpoint cursors and bounded page size.
 - Admin scenario and organization APIs with strict Zod request validation.
 - Snapshot and restore controls that preserve organization configuration.
-- Durable local SQLite storage for scenario state, organization configuration, and snapshots.
-- Temporal source updates represented as timeline mutations that do not appear before their update time.
+- Durable local SQLite storage for scenario state, organization configuration, and snapshots in development/test.
+- Temporal source updates represented as deterministic source-change mutations that do not appear before their update time.
+- Production-like runtime storage enforcement rejects memory, SQLite, injected memory storage, and injected simulators backed by local storage.
+- Organization replacement rejects configs that remove all generated people for role templates required by enabled scenarios.
 - Simulator-owned deep links at `/sim/{sourceSystem}/{sourceId}`.
 - Operator console organization section with tree, people filtering, person records, regeneration, and visibility comparison.
-- Tests for determinism, organization generation, hierarchy validation, cursor retry/tampering, permissions, snapshots, authentication, production secret validation, public-route exposure, temporal updates, source deep links, SQLite persistence, and contract artifacts.
+- Tests for determinism, organization generation, hierarchy validation, saved checkpoint cursors, cursor retry/tampering, permissions, snapshots, authentication, production-like storage fail-closed behavior, public-route exposure, temporal updates, source deep links, SQLite persistence, and contract artifacts.
 
 ## Milestone 1 Scenarios
 
@@ -60,8 +62,8 @@ This hardening update expands the suite and triggers a new CI run. Future sessio
 
 ## Known Limitations
 
-- Local durable storage is implemented with SQLite; production Postgres storage is not yet proven.
-- Production-like environments fail closed rather than silently using memory when durable storage is unavailable.
+- Local durable storage is implemented with SQLite for development/test; production Postgres storage is not yet proven.
+- Production-like environments fail closed rather than silently using memory or SQLite when durable Postgres storage is unavailable/unproven.
 - Failure-mode controls, rate limiting, structured logging, and load testing remain Milestone 3 work.
 - Medium and large dataset expansion is deferred to Milestone 2.
 - Dotted-line relationships are modeled in the type system and docs but not yet richly generated.

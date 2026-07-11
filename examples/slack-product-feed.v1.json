@@ -16,6 +16,10 @@
       "actorRef": "person-product-manager",
       "acl": { "visibility": "group", "groups": ["product-launch-team"], "users": [] },
       "rawPayload": { "channel": "#launch-readiness", "threadTs": "1720634400.000", "text": "Launch readiness has a dependency risk." },
+      "changeId": "change-slack-product-launch-readiness-example-updated",
+      "changeType": "updated",
+      "changeSequence": 2,
+      "changeOccurredAt": "2026-07-10T18:20:00.000Z",
       "correlation": {
         "scenarioId": "product-launch-readiness",
         "eventId": "baseline",
@@ -24,6 +28,6 @@
       }
     }
   ],
-  "nextCursor": null,
+  "nextCursor": "opaque-v2-checkpoint-example",
   "hasMore": false
 }
