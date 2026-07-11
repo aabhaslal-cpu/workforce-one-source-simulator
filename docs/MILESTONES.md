@@ -19,6 +19,10 @@ Required proof:
 9. Select an IC, Manager, Director and VP.
 10. Prove each person has the correct manager, direct reports and source visibility.
 11. Prove the same seed and configuration reproduce the same organization.
+12. Prove connection credentials are bound to one server-side connection ID.
+13. Prove detailed organization/person/team APIs require admin authentication.
+14. Prove temporal source updates do not appear before their update time.
+15. Prove local SQLite state persists across engine recreation.
 
 Implemented in this draft:
 
@@ -28,9 +32,10 @@ Implemented in this draft:
 - Deterministic clock and stable IDs.
 - SourceFeedBatchV1.
 - JSON Schema and OpenAPI.
-- Credential separation.
-- Cursor-based feed.
-- Pagination.
+- Connection-bound credential authentication.
+- Production-like secret validation and fail-closed startup behavior.
+- Cursor-based feed with Zod-validated cursor structure.
+- Pagination with bounded page size.
 - One tenant.
 - Twelve role templates.
 - Configurable organization generator.
@@ -40,15 +45,19 @@ Implemented in this draft:
 - Generated fictional identities under `@example.test`.
 - Manager and direct-report relationships.
 - Team and work ownership assignments.
-- Organization catalog APIs.
+- Admin-gated organization catalog APIs.
+- Safe public catalog metadata.
 - Organization tree in the operator console.
 - Person-level source visibility inspection.
 - Permission model independent from reporting hierarchy.
-- Admin scenario and organization APIs.
+- Admin scenario and organization APIs with strict request validation.
 - Snapshot and restore.
+- Durable local SQLite storage for scenario states, organization configuration, and snapshots.
+- Temporal source update gating.
+- Simulator-owned source deep links.
 - Minimal operator console.
 - One scenario per department.
-- Tests for determinism, organization generation, hierarchy validation, cursors, permissions, snapshots, and security.
+- Tests for determinism, organization generation, hierarchy validation, cursors, permissions, snapshots, auth, production fail-closed behavior, public-route exposure, temporal updates, deep links, SQLite persistence, and contract artifacts.
 
 ## Milestone 2: Complete Department, Level, Source and Scenario Coverage
 
@@ -83,14 +92,14 @@ Purpose: make the simulator deployable and safe for future connector consumption
 Deliver:
 
 - Failure simulation controls.
-- Auth failure behavior.
+- Auth failure behavior beyond M1's credential binding tests.
 - Rate limiting behavior.
 - Stale and invalid cursor behavior.
 - Partial sync behavior.
 - Load and performance tests.
 - Safe logging and error handling.
-- Durable Postgres verification and SQLite local adapter if not pulled forward.
-- Vercel deployment configuration.
+- Proven production Postgres storage adapter and deployment verification.
+- Vercel deployment configuration and runbook capture.
 - CI workflow hardening.
 - Health checks.
 - Migration verification.
