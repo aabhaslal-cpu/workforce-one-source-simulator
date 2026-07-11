@@ -55,6 +55,18 @@ The default organization uses uneven spans of control. Four ICs per manager is a
 
 Overrides are available through `customDirectorsPerVp`, `customManagersPerDirector`, and `customIcsPerManager` maps.
 
+## Bounds
+
+Organization generation is validated before replacement:
+
+- VPs per department: maximum 3.
+- Directors per VP: maximum 8.
+- Managers per Director: maximum 10.
+- ICs per Manager: maximum 25.
+- Total generated people: maximum 500.
+
+These caps protect the operator API from accidental oversized generations. They can be revisited in a later performance/load milestone.
+
 ## Reporting Rules
 
 - ICs may report to Managers.
@@ -68,6 +80,8 @@ Overrides are available through `customDirectorsPerVp`, `customManagersPerDirect
 - Dotted-line relationships may be added separately and must not silently replace the primary manager.
 
 ## APIs
+
+Detailed organization APIs require admin authentication because they expose source identities, assignments, reporting lines, and visibility-related metadata.
 
 Catalog:
 
@@ -87,6 +101,8 @@ Admin:
 - `GET /v1/admin/people/{personId}/records`
 - `GET /v1/admin/people/{personId}/compare/{otherPersonId}`
 
+The public catalog exposes only safe metadata such as source systems, contract version, scenario names, role-template count, and aggregate organization counts.
+
 ## Operator UI
 
-The console includes an Organization section for tree inspection, filters, search, person detail, source visibility, person-to-person visibility comparison, seed-based regeneration, and reset.
+The console includes an Organization section for tree inspection, filters, search, person detail, source visibility, person-to-person visibility comparison, seed-based regeneration, and reset. It uses admin authentication for detailed organization reads.
