@@ -7,7 +7,7 @@
 - Production Postgres storage adapter with migrations and transaction-backed world replacement.
 - CI Postgres service and conditional local Postgres parity tests.
 - Persisted simulation clock and continuous orchestration state in memory, SQLite, and Postgres.
-- Admin clock APIs and Vercel cron tick endpoint backed by one canonical reconciliation operation.
+- Admin clock APIs and a protected cron-compatible tick endpoint backed by one canonical reconciliation operation.
 - Feed-triggered realtime reconciliation so source feeds can advance the company world after cold starts or missed cron delivery.
 - Deterministic continuous successor activity using the existing 10 scenario packs while preserving manual-trigger-only story beats.
 - Postgres-backed distributed production rate limiting for admin, cron, and connection identities.

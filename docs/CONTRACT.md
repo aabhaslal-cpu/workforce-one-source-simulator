@@ -89,7 +89,7 @@ Destructive world operations rotate `worldRevision`. Connectors must treat stale
 
 Real service protection can also return `429` with `Retry-After` and `rate_limit` classification. That protection is configured separately from deterministic failure modes.
 
-The Vercel cron endpoint `GET /api/cron/tick` is not part of the connector feed contract. It is an operational endpoint protected by `Authorization: Bearer <CRON_SECRET>` and calls the same clock reconciliation operation as feed-triggered catch-up.
+The cron-compatible endpoint `GET /api/cron/tick` is not part of the connector feed contract. It is an operational endpoint protected by `Authorization: Bearer <CRON_SECRET>` and calls the same clock reconciliation operation as feed-triggered catch-up. Vercel does not configure a scheduled cron job in `vercel.json`; operators may invoke the endpoint from their chosen scheduler.
 
 ## Artifacts
 

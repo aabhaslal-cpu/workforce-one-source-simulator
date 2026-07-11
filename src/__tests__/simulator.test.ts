@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,7 +7,7 @@ import pg from "pg";
 import { describe, expect, it } from "vitest";
 import { SourceFeedBatchV1Schema } from "../contracts.js";
 import { SourceSimulator } from "../engine.js";
-import { createApp } from "../app.js";
+import { createApp } from "../simulator-app.js";
 import { sourceAdapters } from "../adapters/registry.js";
 import { defaultOrganizationConfig, personConnectionId } from "../organization.js";
 import { MemorySimulatorStorage, PostgresSimulatorStorage, SQLiteSimulatorStorage } from "../storage.js";
@@ -1503,7 +1503,7 @@ describe("Milestone 3 operations", () => {
     await simulator.close();
   });
 
-  it("authorizes Vercel cron ticks and rejects missing or incorrect cron secrets", async () => {
+  it("authorizes cron-compatible ticks and rejects missing or incorrect cron secrets", async () => {
     const simulator = await SourceSimulator.create({ seed: "cron-seed" });
     await withEnv({ CRON_SECRET: "cron-secret" }, async () => {
       const app = await createApp({ simulator, runtimeEnv: "test", adminKey: "admin-test" });
@@ -1564,14 +1564,22 @@ describe("Milestone 3 operations", () => {
 
   it("validates Vercel deployment config and standard route surface", async () => {
     const config = JSON.parse(await readFile(new URL("../../vercel.json", import.meta.url), "utf8"));
-    const apiEntrypoint = await readFile(new URL("../../api/index.ts", import.meta.url), "utf8");
+    const packageJson = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
+    const vercelEntrypoint = await readFile(new URL("../app.ts", import.meta.url), "utf8");
     expect(config.installCommand).toBe("pnpm install --frozen-lockfile");
     expect(config.buildCommand).toBeUndefined();
-    expect(config.functions["api/index.ts"]).toEqual({ maxDuration: 30 });
+    expect(config.outputDirectory).toBeUndefined();
+    expect(config.framework).toBeUndefined();
+    expect(Object.keys(config.functions)).toEqual(["src/app.ts"]);
+    expect(config.functions["src/app.ts"]).toEqual({ maxDuration: 30, includeFiles: ["migrations/*.sql"] });
+    expect(config.functions["src/app.ts"].runtime).toBeUndefined();
     expect(config.crons).toBeUndefined();
-    expect(config.rewrites).toContainEqual({ source: "/(.*)", destination: "/api/index" });
-    expect(apiEntrypoint).toContain("const app = await createApp();");
-    expect(apiEntrypoint).toContain("export default app;");
+    expect(config.rewrites).toBeUndefined();
+    expect(existsSync(new URL("../../api/index.ts", import.meta.url))).toBe(false);
+    expect(existsSync(new URL("../server.ts", import.meta.url))).toBe(false);
+    expect(vercelEntrypoint.trim()).toBe('import { createApp } from "./simulator-app.js";\n\nconst app = await createApp();\n\nexport default app;');
+    expect(packageJson.engines.node).toBe("22.x");
+    expect(packageJson.packageManager).toBe("pnpm@9.15.9");
 
     const { app } = await credentialedApp();
     expect((await app.request("/")).status).toBe(302);

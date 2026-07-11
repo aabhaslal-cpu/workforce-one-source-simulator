@@ -3,15 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@9.15.9",
   "engines": {
-    "node": ">=22.0.0",
-    "pnpm": ">=9.0.0"
+    "node": "22.x",
+    "pnpm": "9.15.9"
   },
   "scripts": {
-    "dev": "tsx src/server.ts",
-    "start": "node dist/server.js",
+    "dev": "tsx src/local-server.ts",
+    "start": "node dist/local-server.js",
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.api.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "lint": "eslint .",
     "format:check": "prettier --check .",

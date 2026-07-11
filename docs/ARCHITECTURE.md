@@ -10,7 +10,9 @@ The simulator owns fictional source data only. Workforce One owns interpretation
 
 ## Runtime Components
 
-- `src/app.ts`: HTTP API, admin auth, connection-bound auth, request validation, operator console, source deep links, admin inspection routes, health, metrics, failure controls, benchmark, and connector-kit routes.
+- `src/app.ts`: canonical Hono-native Vercel entrypoint that creates and default-exports the app.
+- `src/simulator-app.ts`: HTTP API, admin auth, connection-bound auth, request validation, operator console, source deep links, admin inspection routes, health, metrics, failure controls, benchmark, and connector-kit routes.
+- `src/local-server.ts`: standalone local/container Node server for the same Hono app.
 - `src/engine.ts`: deterministic organization-aware scenario engine, scenario instances, persisted simulation clock, continuous activity orchestration, source-change ledger, v3 cursor feed, world revision, snapshots, dataset metadata, and visibility filtering.
 - `src/adapters/*`: provider-shaped payload adapters and adapter registry.
 - `src/data.ts`: fictional tenant and 10 scenario-pack definitions.
@@ -163,7 +165,9 @@ Real service rate limits are separate from failure simulation. They are keyed by
 
 ## Vercel And Warm Processes
 
-The Vercel path uses the same Hono fetch handler in `api/index.ts` as the service contract. `vercel.json` rewrites all service routes to that handler and configures `/api/cron/tick`.
+The Vercel path uses one Hono-native entrypoint: `src/app.ts` imports `createApp()` from `src/simulator-app.ts`, awaits the app, and default-exports it. `vercel.json` configures only that function with bounded duration and includes `migrations/*.sql` so Postgres migrations are available at runtime.
+
+The repository intentionally has no `api/index.ts` wrapper, no Vercel route rewrite to a second entrypoint, no explicit function runtime override, no static output directory, no Vercel build command, and no configured Vercel cron block.
 
 Warm Vercel Function instances cannot trust cached organization or connection definitions. Before connection-sensitive authorization and admin detailed catalog reads, the app refreshes persisted organization config and rebuilds people, teams, role-alias connections, person-specific connections, and permission mappings when the stored organization changes.
 

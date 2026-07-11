@@ -8,7 +8,7 @@ These reviews were completed before runtime implementation. Their purpose is to 
 
 ### Verified
 
-- Layering is mostly clean: `app.ts` owns HTTP/auth/validation, `engine.ts` owns deterministic simulation, `organization.ts` owns org generation, `storage.ts` owns persistence, and `src/adapters/*` owns provider payload shaping.
+- Layering is mostly clean: the simulator app layer owns HTTP/auth/validation, `engine.ts` owns deterministic simulation, `organization.ts` owns org generation, `storage.ts` owns persistence, and `src/adapters/*` owns provider payload shaping.
 - Adapter boundaries are usable: provider-specific payload logic is isolated behind the adapter registry and the core engine calls `create`, `update`, `remove`, and validation methods.
 - Storage boundary exists and is the right extension point for Postgres: `SimulatorStorage` already includes scenario instance state, world revision, ledger, projection, metadata, snapshots, and atomic `replaceWorld`.
 - API boundaries are explicit and admin routes are grouped under `/v1/admin/*`.
@@ -17,10 +17,10 @@ These reviews were completed before runtime implementation. Their purpose is to 
 
 ### Technical Debt And Cleanup
 
-- `src/app.ts` is doing too much: routing, auth config, storage selection, console HTML, request validation, and error formatting live in one file.
+- The simulator app layer is doing a lot: routing, auth config, storage selection, console HTML, request validation, and error formatting live together in the Hono app implementation.
 - `src/storage.ts` duplicates SQLite statement patterns. Postgres should not copy those line-by-line without shared schema/migration constants and parity tests.
 - The storage interface still has legacy pack-level `ScenarioState` methods. They are retained for compatibility, but runtime behavior now depends on `ScenarioInstanceState`.
-- The operator console is embedded HTML/JS in `app.ts`; Milestone 3 can improve usefulness but should avoid a frontend rewrite.
+- The operator console is embedded HTML/JS in the Hono app implementation; Milestone 3 can improve usefulness but should avoid a frontend rewrite.
 - Request observability is absent; there is no request ID, duration, operation classification, or safe error correlation.
 - Configuration validation is split across ad hoc environment reads. Milestone 3 should centralize config parsing and fail fast.
 - There is no dedicated connector test kit. Existing tests cover feed mechanics but not a reference connector lifecycle.
@@ -121,7 +121,9 @@ Proceed with implementation only after this review artifact exists. Milestone 3 
 
 ## Final Hardening Notes
 
-The final Milestone 3 pass added the persisted company clock, canonical reconciliation, deterministic continuous successor activity, Vercel cron path, Vercel rewrites, route smoke tests, and Postgres-backed distributed rate limits without adding new scenario packs.
+The final Milestone 3 pass added the persisted company clock, canonical reconciliation, deterministic continuous successor activity, a protected cron-compatible tick endpoint, route smoke tests, and Postgres-backed distributed rate limits without adding new scenario packs.
+
+The deployment repair then split the Hono implementation into `src/simulator-app.ts`, made `src/app.ts` the single Hono-native Vercel default export, renamed the local Node server to `src/local-server.ts`, removed the old `api/index.ts` function wrapper, and bundled Postgres migration SQL through `vercel.json`.
 
 The final merge-readiness hardening then tightened realtime semantics: manual events are never auto-triggered by reconciliation, catch-up backlog is retained until consumed, clock configuration transitions fail closed while backlog remains, Postgres limiter buckets use an atomic upsert, reconciliation materializes records from the locked snapshot organization, and successor due times are enforced.
 

@@ -20,7 +20,7 @@ Built:
 - Modular source adapters for Slack, Gmail, Calendar, Notion, Jira, Productboard, Amplitude-style analytics, GitHub, PagerDuty-style incidents, Salesforce, Gainsight-style customer success, and Zendesk-style support.
 - Ten scenario packs covering launch readiness, adoption lag, roadmap tradeoff, incident response, delivery slip, technical debt/staffing risk, renewal risk, implementation blocker, expansion opportunity, and major cross-functional release.
 - Persisted scenario instance state. Packs are reusable templates; instances hold their own seed, dataset size, clock, pause state, event occurrence times, event log, completion state, participants, and account/project/product/service/workstream context.
-- Persisted company clock with manual mode, realtime mode, bounded catch-up, speed multiplier, pause/resume, restart persistence, feed-triggered reconciliation, and Vercel cron reconciliation.
+- Persisted company clock with manual mode, realtime mode, bounded catch-up, speed multiplier, pause/resume, restart persistence, feed-triggered reconciliation, and a protected cron-compatible reconciliation endpoint.
 - Clock configuration updates fail closed with `clock_backlog_conflict` when bounded realtime catch-up still has wall-clock backlog and the request changes time-affecting settings; operators must drain backlog with `POST /v1/admin/clock/reconcile` first.
 - Deterministic continuous activity orchestrator. Completed instances can create successor instances from the existing 10 packs, preserving one shared Product/Engineering/Customer Success company world.
 - Compact v3 source feed cursor over a deterministic source-change ledger: connection ID, world revision, and `afterSequence`.

@@ -41,6 +41,6 @@ Milestone 3 should prove:
 5. Deterministic failure simulation is configurable and admin-gated.
 6. Connector lifecycle testing covers initial sync, incremental sync, late arrivals, updates/deletes, reset, stale cursor, new cursor, permission differences, and connection regeneration.
 7. Benchmarks document small, medium, and large performance.
-8. A persisted company clock supports manual and realtime modes, Vercel-safe catch-up, feed-triggered reconciliation, cron ticks, and deterministic continuous successor activity.
+8. A persisted company clock supports manual and realtime modes, Vercel-safe catch-up, feed-triggered reconciliation, protected cron-compatible ticks, and deterministic continuous successor activity.
 9. OpenAPI, JSON Schema, migrations, examples, and docs match runtime behavior.
 10. CI is green with Postgres parity, Vercel validation, route smoke, and Docker smoke tests.

@@ -16,7 +16,7 @@ Milestone 3: Production Hardening and Workforce One Integration Readiness.
 - Production Postgres storage adapter behind the async storage interface.
 - Postgres support for scenario states, scenario instance states, organization config, world revision, source-change ledger, source-object projection, dataset metadata, snapshots, simulation clock, continuous orchestration state, restart persistence, and transaction-backed world replacement.
 - SQLite/Postgres parity tests and CI Postgres service.
-- Persisted company clock with manual/realtime modes, bounded catch-up, speed multiplier, pause/resume, restart persistence, feed-triggered reconciliation, admin reconciliation, and Vercel cron tick.
+- Persisted company clock with manual/realtime modes, bounded catch-up, speed multiplier, pause/resume, restart persistence, feed-triggered reconciliation, admin reconciliation, and a protected cron-compatible tick endpoint.
 - Fail-closed clock transition guard: time-affecting clock/orchestration updates are rejected with `clock_backlog_conflict` while bounded realtime catch-up still has wall-clock backlog, and the evaluation reconciliation rolls back with the rejected transaction.
 - Deterministic continuous activity orchestrator that creates bounded successor instances from the existing 10 scenario packs while preserving one shared company world and preserving manual-event semantics.
 - Structured request telemetry with sanitized logs, request IDs, connection IDs, cursor position, world revision, operation, duration, status, and safe error classification.
@@ -25,7 +25,7 @@ Milestone 3: Production Hardening and Workforce One Integration Readiness.
 - Real request rate limiting keyed by authenticated admin identity, cron identity, or resolved connection ID. Preview/production use Postgres-backed distributed buckets.
 - Deterministic failure simulation for connector testing. Failures are configured rules, never random.
 - Connector lifecycle test kit covering initial sync, incremental sync, late arrivals, updates/deletes, destructive reset, stale cursor handling, new cursor acquisition, permission differences, and connection regeneration behavior.
-- Vercel configuration with Web Standard fetch export, rewrites, cron path, bounded max duration, frozen install, config validation, optional token-backed Vercel CLI build, and CI route smoke tests.
+- Vercel configuration with one canonical Hono entrypoint at `src/app.ts`, bounded max duration, explicit migration SQL bundling, frozen install, config validation, optional token-backed Vercel CLI build, and CI route smoke tests.
 - Container build and CI readiness smoke test against Postgres.
 - Internal operator console controls for clock, metrics, storage, ledger, snapshots, failure toggles, benchmarks, and connector kit.
 - Updated OpenAPI, migrations, examples, and docs for production deployment and integration.

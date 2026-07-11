@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 9.15.9
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -71,7 +71,7 @@ jobs:
           SIMULATOR_RATE_LIMITS: '{"windowMs":60000,"adminLimit":600,"connectionLimit":600,"cronLimit":120}'
           CRON_SECRET: ci-cron-secret
         run: |
-          node dist/server.js &
+          node dist/local-server.js &
           server_pid=$!
           trap 'kill "$server_pid" || true' EXIT
           for attempt in $(seq 1 30); do

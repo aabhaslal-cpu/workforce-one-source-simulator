@@ -58,7 +58,7 @@ Clock tests cover:
 
 Vercel/deployment tests cover:
 
-- `vercel.json` frozen install, rewrite, cron, runtime, and max-duration configuration
+- `vercel.json` frozen install, single `src/app.ts` Hono entrypoint, migration SQL bundling, absence of stale build/static-output/runtime/rewrite/cron configuration, and max-duration configuration
 - `/`, `/console`, `/healthz`, `/readyz`, and `/v1/catalog`
 - cron route missing, incorrect, and correct bearer secret handling
 - warm-process organization refresh before connection authorization

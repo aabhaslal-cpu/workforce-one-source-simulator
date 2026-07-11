@@ -1,6 +1,6 @@
 import { serve } from "@hono/node-server";
 import type { Server } from "node:http";
-import { createApp } from "./app.js";
+import { createApp } from "./simulator-app.js";
 
 const port = Number(process.env.PORT ?? 3000);
 const shutdownGraceMs = Number(process.env.SIMULATOR_SHUTDOWN_GRACE_MS ?? 10_000);

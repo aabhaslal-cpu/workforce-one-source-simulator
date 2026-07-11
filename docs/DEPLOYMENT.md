@@ -85,14 +85,16 @@ Postgres is implemented and CI-proven for the simulator storage, clock, orchestr
 
 ## Vercel
 
-`api/index.ts` exports a Web Standard function object with `fetch(request, env, executionContext)`. `vercel.json` uses one canonical execution model:
+`src/app.ts` is the single Hono-native Vercel entrypoint. It imports the simulator factory from `src/simulator-app.ts`, creates the Hono app, and default-exports it. `src/local-server.ts` is only for local/container Node execution.
+
+`vercel.json` uses one canonical execution model:
 
 - frozen pnpm install
-- `pnpm run build`
-- Node.js 22 function runtime
+- `src/app.ts` function configuration
 - bounded `maxDuration`
-- rewrite of `/(.*)` to `/api/index`
-- cron path `/api/cron/tick`
+- explicit bundling of `migrations/*.sql`
+
+It intentionally does not configure `buildCommand`, `outputDirectory`, `runtime`, `framework`, `rewrites`, `crons`, or an `api/index.ts` function.
 
 Required Vercel environment variables:
 
@@ -108,7 +110,7 @@ Required Vercel environment variables:
 - `SIMULATOR_RATE_LIMITS`
 - `CRON_SECRET`
 
-Vercel correctness does not depend on a warm function. Feed polling and cron both call the same persisted clock reconciliation path, and canonical reconciliation reads the organization config from the locked world snapshot before materializing records.
+Vercel correctness does not depend on a warm function. Feed polling and the protected `/api/cron/tick` endpoint both call the same persisted clock reconciliation path, and canonical reconciliation reads the organization config from the locked world snapshot before materializing records. Vercel does not schedule `/api/cron/tick` itself; deployment owners may wire an external scheduler if they want warm reconciliation.
 
 When `VERCEL_TOKEN` is not available to CI, run the owner verification before marking Vercel deployment fully proven:
 
