@@ -10,12 +10,13 @@ import {
 } from "./engine.js";
 import { scenarios } from "./data.js";
 import { previewOrganizationCounts, roleTemplates } from "./organization.js";
-import { MemorySimulatorStorage, PostgresSimulatorStorage, SQLiteSimulatorStorage, type SimulatorStorage } from "./storage.js";
+import { MemorySimulatorStorage, PostgresSimulatorStorage, SQLiteSimulatorStorage, StorageError, WorldConflictError, type SimulatorStorage } from "./storage.js";
 import { datasetSizes, sourceSystems, type DatasetSize, type OrganizationConfig } from "./domain.js";
 import { applyFeedFailure, FailureController, FailureModeConfigSchema, parseFailureConfig, type FailureDecision } from "./failures.js";
 import { OperationalTelemetry, type RequestTelemetryInput } from "./observability.js";
 import { BenchmarkRequestSchema, runPerformanceBenchmark } from "./performance.js";
 import { runConnectorTestKit } from "./connector-kit.js";
+import { buildRateLimitConfig, RateLimiter } from "./rate-limit.js";
 
 export interface AppOptions {
   simulator?: SourceSimulator;
@@ -24,6 +25,7 @@ export interface AppOptions {
   revokedConnectionCredentials?: string[];
   runtimeEnv?: RuntimeEnv;
   storage?: SimulatorStorage;
+  rateLimitConfigJson?: string;
 }
 
 type RuntimeEnv = "development" | "test" | "preview" | "production";
@@ -139,7 +141,7 @@ type AuthConfig = {
 
 type ConnectionAuthResult = { ok: true; connectionId: string } | { ok: false; response: Response };
 
-export function createApp(options: AppOptions = {}) {
+export async function createApp(options: AppOptions = {}) {
   const runtimeEnv = options.runtimeEnv ?? resolveRuntimeEnv(process.env);
   enforceProductionStorageOptions(runtimeEnv, options);
   const simulatorOptions: SimulatorOptions = {};
@@ -150,10 +152,11 @@ export function createApp(options: AppOptions = {}) {
   if (options.storage) simulatorOptions.storage = options.storage;
   if (!options.simulator && !options.storage) simulatorOptions.storage = createStorageForRuntime(runtimeEnv);
 
-  const simulator = options.simulator ?? new SourceSimulator(simulatorOptions);
+  const simulator = options.simulator ?? (await SourceSimulator.create(simulatorOptions));
   enforceProductionSimulatorStorage(runtimeEnv, simulator);
   const auth = buildAuthConfig(simulator, options, runtimeEnv);
   const telemetry = new OperationalTelemetry(process.env.SIMULATOR_STRUCTURED_LOGS === "true" || isProductionLike(runtimeEnv));
+  const rateLimiter = new RateLimiter(buildRateLimitConfig(runtimeEnv, options.rateLimitConfigJson));
   const failureController = new FailureController();
   failureController.setConfig(parseFailureConfig(process.env.SIMULATOR_FAILURE_MODES));
   const requestIds = new WeakMap<Request, string>();
@@ -162,7 +165,13 @@ export function createApp(options: AppOptions = {}) {
   app.onError((error, c) => {
     const correlationId = requestIds.get(c.req.raw) ?? "unknown";
     if (error instanceof HttpError) {
-      return jsonError(error.status, { error: error.message, classification: "request_error", correlationId });
+      return jsonError(error.status, { error: error.message, classification: error.classification, correlationId });
+    }
+    if (error instanceof WorldConflictError) {
+      return jsonError(409, { error: error.message, classification: "world_conflict", correlationId });
+    }
+    if (error instanceof StorageError) {
+      return jsonError(503, { error: error.message, classification: "storage_error", correlationId });
     }
     return jsonError(500, { error: "Internal simulator error", classification: "internal_error", correlationId });
   });
@@ -190,8 +199,17 @@ export function createApp(options: AppOptions = {}) {
         durationMs: Date.now() - started,
       };
       const connectionId = connectionIdFromPath(c.req.path);
-      const worldRevision = safeWorldRevision(simulator);
-      const errorClassification = thrown ? (thrown instanceof HttpError ? "request_error" : "internal_error") : undefined;
+      const worldRevision = await safeWorldRevision(simulator);
+      const responseClassification = c.res.headers.get("x-simulator-error-classification") ?? undefined;
+      const errorClassification = thrown
+        ? thrown instanceof HttpError
+          ? thrown.classification
+          : thrown instanceof StorageError
+            ? "storage_error"
+            : thrown instanceof WorldConflictError
+              ? "world_conflict"
+              : "internal_error"
+        : responseClassification;
       if (connectionId) telemetryInput.connectionId = connectionId;
       if (worldRevision) telemetryInput.worldRevision = worldRevision;
       if (cursor?.version !== undefined) telemetryInput.cursorVersion = cursor.version;
@@ -202,7 +220,11 @@ export function createApp(options: AppOptions = {}) {
   });
 
   app.get("/", (c) => c.redirect("/console"));
-  app.get("/healthz", (c) => c.json(buildHealth(simulator, telemetry)));
+  app.get("/healthz", (c) => c.json(buildLiveness(telemetry)));
+  app.get("/readyz", async (c) => {
+    const readiness = await buildReadiness(simulator, telemetry, requestIds.get(c.req.raw) ?? "unknown");
+    return c.json(readiness.body, readiness.status);
+  });
   app.get("/console", (c) => c.html(consoleHtml));
 
   app.get("/v1/catalog", (c) => c.json(simulator.publicCatalog()));
@@ -217,44 +239,50 @@ export function createApp(options: AppOptions = {}) {
     }),
   );
   app.get("/v1/catalog/scenario-packs", (c) => c.json({ scenarioPacks: simulator.scenarioPacks() }));
-  app.get("/v1/catalog/scenario-instances", (c) => withAdmin(c, auth, () => c.json({ scenarioInstances: simulator.scenarioInstances() })));
+  app.get("/v1/catalog/scenario-instances", (c) => withAdmin(c, auth, rateLimiter, requestIds, async () => c.json({ scenarioInstances: await simulator.scenarioInstances() })));
   app.get("/v1/catalog/seats", (c) => c.json({ roleTemplates }));
-  app.get("/v1/catalog/people", (c) => withAdmin(c, auth, () => c.json({ people: simulator.people() })));
-  app.get("/v1/catalog/people/:personId", (c) => withAdmin(c, auth, () => c.json(simulator.person(c.req.param("personId")))));
-  app.get("/v1/catalog/organization", (c) => withAdmin(c, auth, () => c.json(simulator.organizationSummary())));
-  app.get("/v1/catalog/organization/tree", (c) => withAdmin(c, auth, () => c.json(simulator.organizationTree())));
-  app.get("/v1/catalog/teams", (c) => withAdmin(c, auth, () => c.json({ teams: simulator.teams() })));
-  app.get("/v1/catalog/teams/:teamId", (c) => withAdmin(c, auth, () => c.json(simulator.team(c.req.param("teamId")))));
+  app.get("/v1/catalog/people", (c) => withAdmin(c, auth, rateLimiter, requestIds, () => c.json({ people: simulator.people() })));
+  app.get("/v1/catalog/people/:personId", (c) => withAdmin(c, auth, rateLimiter, requestIds, () => c.json(simulator.person(c.req.param("personId")))));
+  app.get("/v1/catalog/organization", (c) => withAdmin(c, auth, rateLimiter, requestIds, () => c.json(simulator.organizationSummary())));
+  app.get("/v1/catalog/organization/tree", (c) => withAdmin(c, auth, rateLimiter, requestIds, () => c.json(simulator.organizationTree())));
+  app.get("/v1/catalog/teams", (c) => withAdmin(c, auth, rateLimiter, requestIds, () => c.json({ teams: simulator.teams() })));
+  app.get("/v1/catalog/teams/:teamId", (c) => withAdmin(c, auth, rateLimiter, requestIds, () => c.json(simulator.team(c.req.param("teamId")))));
 
   app.get("/v1/connections/:connectionId/manifest", async (c) => {
-    const authenticated = authenticateConnection(c, auth, simulator, c.req.param("connectionId"));
+    const authenticated = authenticateConnection(c, auth, simulator, requestIds, c.req.param("connectionId"));
     if (!authenticated.ok) return authenticated.response;
+    const rateLimited = rateLimitConnection(c, rateLimiter, requestIds, authenticated.connectionId);
+    if (rateLimited) return rateLimited;
     const failure = await failureResponse(c, failureController.evaluate({ operation: "manifest", connectionId: authenticated.connectionId }), requestIds);
     if (failure) return failure;
     return c.json(simulator.manifest(authenticated.connectionId));
   });
 
   app.get("/v1/connections/:connectionId/records", async (c) => {
-    const authenticated = authenticateConnection(c, auth, simulator, c.req.param("connectionId"));
+    const authenticated = authenticateConnection(c, auth, simulator, requestIds, c.req.param("connectionId"));
     if (!authenticated.ok) return authenticated.response;
+    const rateLimited = rateLimitConnection(c, rateLimiter, requestIds, authenticated.connectionId);
+    if (rateLimited) return rateLimited;
     const pagination = parseSchema(PaginationSchema, { cursor: c.req.query("cursor"), limit: c.req.query("limit") });
     const decision = failureController.evaluate({ operation: "feed", connectionId: authenticated.connectionId });
     const failure = await failureResponse(c, decision, requestIds);
     if (failure) return failure;
     const boundedLimit = decision.pageSize ? Math.min(pagination.limit ?? MAX_PAGE_SIZE, decision.pageSize) : pagination.limit;
-    return c.json(applyFeedFailure(simulator.feed(authenticated.connectionId, pagination.cursor, boundedLimit), decision));
+    return c.json(applyFeedFailure(await simulator.feed(authenticated.connectionId, pagination.cursor, boundedLimit), decision));
   });
 
   app.get("/sim/:sourceSystem/:sourceId", async (c) => {
-    const authenticated = authenticateConnection(c, auth, simulator);
+    const authenticated = authenticateConnection(c, auth, simulator, requestIds);
     if (!authenticated.ok) return authenticated.response;
+    const rateLimited = rateLimitConnection(c, rateLimiter, requestIds, authenticated.connectionId);
+    if (rateLimited) return rateLimited;
     const failure = await failureResponse(
       c,
       failureController.evaluate({ operation: "deep_link", connectionId: authenticated.connectionId, sourceSystem: c.req.param("sourceSystem") }),
       requestIds,
     );
     if (failure) return failure;
-    const record = simulator.findRecordForConnection(authenticated.connectionId, c.req.param("sourceSystem"), c.req.param("sourceId"));
+    const record = await simulator.findRecordForConnection(authenticated.connectionId, c.req.param("sourceSystem"), c.req.param("sourceId"));
     const accept = c.req.header("accept") ?? "";
     if (accept.includes("text/html")) {
       return c.html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${escapeHtml(record.title)}</title></head><body><main><h1>${escapeHtml(record.title)}</h1><pre>${escapeHtml(JSON.stringify(record, null, 2))}</pre></main></body></html>`);
@@ -263,102 +291,104 @@ export function createApp(options: AppOptions = {}) {
   });
 
   app.use("/v1/admin/*", async (c, next) => {
-    const response = authenticateAdmin(c, auth);
+    const response = authenticateAdmin(c, auth, requestIds);
     if (response) return response;
+    const rateLimited = rateLimitAdmin(c, rateLimiter, requestIds);
+    if (rateLimited) return rateLimited;
     await next();
   });
 
   app.post("/v1/admin/scenarios/:scenarioId/reset", async (c) => {
     const body = compactOptional(await readJsonBody(c.req.raw, ScenarioResetSchema)) as ScenarioResetInput;
-    return c.json(simulator.resetScenario(c.req.param("scenarioId"), body));
+    return c.json(await simulator.resetScenario(c.req.param("scenarioId"), body));
   });
   app.post("/v1/admin/scenarios/:scenarioId/advance", async (c) => {
     const body = compactOptional(await readJsonBody(c.req.raw, ScenarioAdvanceSchema)) as ScenarioAdvanceInput;
-    return c.json(simulator.advanceScenario(c.req.param("scenarioId"), body));
+    return c.json(await simulator.advanceScenario(c.req.param("scenarioId"), body));
   });
   app.post("/v1/admin/scenarios/:scenarioId/trigger", async (c) => {
     const body = await readJsonBody(c.req.raw, TriggerSchema);
-    return c.json(simulator.triggerScenarioEvent(c.req.param("scenarioId"), body.eventId));
+    return c.json(await simulator.triggerScenarioEvent(c.req.param("scenarioId"), body.eventId));
   });
   app.post("/v1/admin/scenarios/:scenarioId/pause", async (c) => {
     await readJsonBody(c.req.raw, EmptyBodySchema);
-    return c.json(simulator.pauseScenario(c.req.param("scenarioId")));
+    return c.json(await simulator.pauseScenario(c.req.param("scenarioId")));
   });
   app.post("/v1/admin/scenarios/:scenarioId/resume", async (c) => {
     await readJsonBody(c.req.raw, EmptyBodySchema);
-    return c.json(simulator.resumeScenario(c.req.param("scenarioId")));
+    return c.json(await simulator.resumeScenario(c.req.param("scenarioId")));
   });
-  app.get("/v1/admin/scenarios/:scenarioId/state", (c) => c.json(simulator.state(c.req.param("scenarioId"))));
-  app.get("/v1/admin/scenarios/:scenarioId/events", (c) => c.json({ events: simulator.eventLog(c.req.param("scenarioId")) }));
-  app.get("/v1/admin/records", (c) => c.json({ records: simulator.allRecords() }));
+  app.get("/v1/admin/scenarios/:scenarioId/state", async (c) => c.json(await simulator.state(c.req.param("scenarioId"))));
+  app.get("/v1/admin/scenarios/:scenarioId/events", async (c) => c.json({ events: await simulator.eventLog(c.req.param("scenarioId")) }));
+  app.get("/v1/admin/records", async (c) => c.json({ records: await simulator.allRecords() }));
   app.get("/v1/admin/connections", (c) => c.json({ connections: simulator.connectionsForAdmin() }));
   app.post("/v1/admin/scenario-instances", async (c) => {
     const body = compactOptional(await readJsonBody(c.req.raw, ScenarioInstanceCreateSchema)) as unknown as ScenarioInstanceCreateInput;
-    return c.json(simulator.createScenarioInstance(body));
+    return c.json(await simulator.createScenarioInstance(body));
   });
   app.post("/v1/admin/scenario-instances/:instanceId/reset", async (c) => {
     const body = compactOptional(await readJsonBody(c.req.raw, ScenarioResetSchema)) as ScenarioResetInput;
-    return c.json(simulator.resetScenarioInstance(c.req.param("instanceId"), body));
+    return c.json(await simulator.resetScenarioInstance(c.req.param("instanceId"), body));
   });
   app.post("/v1/admin/scenario-instances/:instanceId/advance", async (c) => {
     const body = compactOptional(await readJsonBody(c.req.raw, ScenarioAdvanceSchema)) as ScenarioAdvanceInput;
-    return c.json(simulator.advanceScenarioInstance(c.req.param("instanceId"), body));
+    return c.json(await simulator.advanceScenarioInstance(c.req.param("instanceId"), body));
   });
   app.post("/v1/admin/scenario-instances/:instanceId/trigger", async (c) => {
     const body = await readJsonBody(c.req.raw, TriggerSchema);
-    return c.json(simulator.triggerScenarioInstanceEvent(c.req.param("instanceId"), body.eventId));
+    return c.json(await simulator.triggerScenarioInstanceEvent(c.req.param("instanceId"), body.eventId));
   });
   app.post("/v1/admin/scenario-instances/:instanceId/pause", async (c) => {
     await readJsonBody(c.req.raw, EmptyBodySchema);
-    return c.json(simulator.pauseScenarioInstance(c.req.param("instanceId")));
+    return c.json(await simulator.pauseScenarioInstance(c.req.param("instanceId")));
   });
   app.post("/v1/admin/scenario-instances/:instanceId/resume", async (c) => {
     await readJsonBody(c.req.raw, EmptyBodySchema);
-    return c.json(simulator.resumeScenarioInstance(c.req.param("instanceId")));
+    return c.json(await simulator.resumeScenarioInstance(c.req.param("instanceId")));
   });
-  app.get("/v1/admin/scenario-instances/:instanceId", (c) => c.json(simulator.scenarioInstance(c.req.param("instanceId"))));
-  app.delete("/v1/admin/scenario-instances/:instanceId", (c) => c.json(simulator.deleteScenarioInstance(c.req.param("instanceId"))));
-  app.get("/v1/admin/scenario-instances/:instanceId/events", (c) => c.json({ events: simulator.scenarioInstance(c.req.param("instanceId")).events }));
-  app.get("/v1/admin/scenario-instances/:instanceId/changes", (c) => c.json({ changes: simulator.scenarioInstance(c.req.param("instanceId")).changes }));
-  app.get("/v1/admin/snapshots", (c) => c.json({ snapshots: simulator.listSnapshots() }));
+  app.get("/v1/admin/scenario-instances/:instanceId", async (c) => c.json(await simulator.scenarioInstance(c.req.param("instanceId"))));
+  app.delete("/v1/admin/scenario-instances/:instanceId", async (c) => c.json(await simulator.deleteScenarioInstance(c.req.param("instanceId"))));
+  app.get("/v1/admin/scenario-instances/:instanceId/events", async (c) => c.json({ events: (await simulator.scenarioInstance(c.req.param("instanceId"))).events }));
+  app.get("/v1/admin/scenario-instances/:instanceId/changes", async (c) => c.json({ changes: (await simulator.scenarioInstance(c.req.param("instanceId"))).changes }));
+  app.get("/v1/admin/snapshots", async (c) => c.json({ snapshots: await simulator.listSnapshots() }));
   app.post("/v1/admin/snapshots", async (c) => {
     await readJsonBody(c.req.raw, EmptyBodySchema);
-    return c.json(simulator.createSnapshot());
+    return c.json(await simulator.createSnapshot());
   });
   app.post("/v1/admin/snapshots/:snapshotId/restore", async (c) => {
     await readJsonBody(c.req.raw, EmptyBodySchema);
     const params = parseSchema(SnapshotParamsSchema, { snapshotId: c.req.param("snapshotId") });
-    return c.json(simulator.restoreSnapshot(params.snapshotId));
+    return c.json(await simulator.restoreSnapshot(params.snapshotId));
   });
   app.post("/v1/admin/organization/generate", async (c) => {
     const body = compactOptional(await readJsonBody(c.req.raw, OrganizationGenerateSchema)) as OrganizationGenerateInput;
-    return c.json(simulator.regenerateOrganization(body));
+    return c.json(await simulator.regenerateOrganization(body));
   });
   app.post("/v1/admin/organization/reset", async (c) => {
     await readJsonBody(c.req.raw, EmptyBodySchema);
-    return c.json(simulator.resetOrganization());
+    return c.json(await simulator.resetOrganization());
   });
   app.get("/v1/admin/organization/relationships", (c) => c.json(simulator.organizationRelationships()));
   app.get("/v1/admin/organization/preview", (c) => c.json(simulator.previewOrganization()));
   app.get("/v1/admin/organization/config", (c) => c.json(simulator.getOrganizationConfig()));
   app.put("/v1/admin/organization/config", async (c) =>
-    c.json(simulator.putOrganizationConfig((await readJsonBody(c.req.raw, OrganizationConfigSchema)) as OrganizationConfig)),
+    c.json(await simulator.putOrganizationConfig((await readJsonBody(c.req.raw, OrganizationConfigSchema)) as OrganizationConfig)),
   );
-  app.get("/v1/admin/people/:personId/records", (c) => c.json(simulator.recordsForPerson(c.req.param("personId"))));
-  app.get("/v1/admin/people/:personId/compare/:otherPersonId", (c) =>
-    c.json(simulator.comparePersonVisibility(c.req.param("personId"), c.req.param("otherPersonId"))),
+  app.get("/v1/admin/people/:personId/records", async (c) => c.json(await simulator.recordsForPerson(c.req.param("personId"))));
+  app.get("/v1/admin/people/:personId/compare/:otherPersonId", async (c) =>
+    c.json(await simulator.comparePersonVisibility(c.req.param("personId"), c.req.param("otherPersonId"))),
   );
-  app.get("/v1/admin/source-objects", (c) => c.json({ sourceObjects: simulator.sourceObjects() }));
-  app.get("/v1/admin/source-objects/:sourceSystem/:sourceId", (c) =>
-    c.json({ sourceObject: simulator.sourceObject(c.req.param("sourceSystem"), c.req.param("sourceId")) }),
+  app.get("/v1/admin/source-objects", async (c) => c.json({ sourceObjects: await simulator.sourceObjects() }));
+  app.get("/v1/admin/source-objects/:sourceSystem/:sourceId", async (c) =>
+    c.json({ sourceObject: await simulator.sourceObject(c.req.param("sourceSystem"), c.req.param("sourceId")) }),
   );
-  app.get("/v1/admin/source-objects/:sourceSystem/:sourceId/history", (c) =>
-    c.json({ history: simulator.sourceObjectHistory(c.req.param("sourceSystem"), c.req.param("sourceId")) }),
+  app.get("/v1/admin/source-objects/:sourceSystem/:sourceId/history", async (c) =>
+    c.json({ history: await simulator.sourceObjectHistory(c.req.param("sourceSystem"), c.req.param("sourceId")) }),
   );
-  app.get("/v1/admin/source-changes", (c) => c.json({ sourceChanges: simulator.sourceChanges() }));
-  app.get("/v1/admin/metrics", (c) => c.json(buildMetrics(simulator, telemetry, failureController)));
+  app.get("/v1/admin/source-changes", async (c) => c.json({ sourceChanges: await simulator.sourceChanges() }));
+  app.get("/v1/admin/metrics", async (c) => c.json(await buildMetrics(simulator, telemetry, failureController, rateLimiter)));
   app.get("/v1/admin/requests", (c) => c.json({ requests: telemetry.snapshot().requests.recent }));
-  app.get("/v1/admin/storage", (c) => c.json(buildStorageInspector(simulator)));
+  app.get("/v1/admin/storage", async (c) => c.json(await buildStorageInspector(simulator)));
   app.get("/v1/admin/failure-modes", (c) => c.json(failureController.getConfig()));
   app.put("/v1/admin/failure-modes", async (c) => c.json(failureController.setConfig(await readJsonBody(c.req.raw, FailureModeConfigSchema))));
   app.post("/v1/admin/failure-modes/reset", async (c) => {
@@ -367,82 +397,145 @@ export function createApp(options: AppOptions = {}) {
   });
   app.post("/v1/admin/performance/benchmark", async (c) => {
     const body = await readJsonBody(c.req.raw, BenchmarkRequestSchema);
-    return c.json(runPerformanceBenchmark(body));
+    return c.json(
+      await runPerformanceBenchmark(body, {
+        ...(process.env.DATABASE_URL ? { applicationDatabaseUrl: process.env.DATABASE_URL } : {}),
+        ...(process.env.SIMULATOR_BENCHMARK_DATABASE_URL ? { benchmarkDatabaseUrl: process.env.SIMULATOR_BENCHMARK_DATABASE_URL } : {}),
+        runtimeEnv,
+      }),
+    );
   });
   app.post("/v1/admin/connector-test-kit/run", async (c) => {
     await readJsonBody(c.req.raw, EmptyBodySchema);
-    return c.json(runConnectorTestKit());
+    return c.json(await runConnectorTestKit());
   });
   app.post("/v1/admin/datasets/generate", async (c) => {
     const body = compactOptional(await readJsonBody(c.req.raw, DatasetGenerateSchema)) as DatasetGenerateInput;
-    return c.json(simulator.generateDataset(body));
+    return c.json(await simulator.generateDataset(body));
   });
-  app.get("/v1/admin/datasets/current", (c) => c.json(simulator.datasetMetadata()));
+  app.get("/v1/admin/datasets/current", async (c) => c.json(await simulator.datasetMetadata()));
   app.post("/v1/admin/datasets/reset", async (c) => {
     await readJsonBody(c.req.raw, EmptyBodySchema);
-    return c.json(simulator.resetDataset());
+    return c.json(await simulator.resetDataset());
   });
 
+  (app as Hono & { close?: () => Promise<void> }).close = () => simulator.close();
   return app;
 }
 
-function buildHealth(simulator: SourceSimulator, telemetry: OperationalTelemetry) {
-  const storage = simulator.storageHealth();
-  const metadata = simulator.datasetMetadata();
-  const organization = simulator.organizationSummary();
+function buildLiveness(telemetry: OperationalTelemetry) {
   return {
-    ok: storage.ok,
-    schemaVersion: "simulator-health.v1",
+    ok: true,
+    schemaVersion: "simulator-liveness.v1",
     uptimeMs: telemetry.snapshot().uptimeMs,
     build: {
       version: process.env.npm_package_version ?? "0.1.0",
       commit: process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.GITHUB_SHA ?? "local",
     },
     contractVersion: "source-feed.v1",
-    schemaVersionStorage: "simulator-storage.v1",
-    storage,
-    worldRevision: metadata.worldRevision,
-    datasetMetadata: metadata,
-    organization: {
-      seed: organization.seed,
-      counts: organization.counts,
-      validationOk: organization.validation.ok,
-    },
   };
 }
 
-function buildMetrics(simulator: SourceSimulator, telemetry: OperationalTelemetry, failureController: FailureController) {
+async function buildReadiness(simulator: SourceSimulator, telemetry: OperationalTelemetry, correlationId: string): Promise<{ status: 200 | 503; body: Record<string, unknown> }> {
+  const storage = await simulator.storageHealth();
+  try {
+    if (!storage.ok) {
+      return {
+        status: 503,
+        body: {
+          ok: false,
+          schemaVersion: "simulator-readiness.v1",
+          uptimeMs: telemetry.snapshot().uptimeMs,
+          storage,
+          classification: "storage_error",
+          correlationId,
+        },
+      };
+    }
+    const metadata = await simulator.datasetMetadata();
+    const organization = simulator.organizationSummary();
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        schemaVersion: "simulator-readiness.v1",
+        uptimeMs: telemetry.snapshot().uptimeMs,
+        build: {
+          version: process.env.npm_package_version ?? "0.1.0",
+          commit: process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.GITHUB_SHA ?? "local",
+        },
+        contractVersion: "source-feed.v1",
+        schemaVersionStorage: "simulator-storage.v1",
+        storage,
+        worldRevision: metadata.worldRevision,
+        datasetMetadata: metadata,
+        organization: {
+          seed: organization.seed,
+          counts: organization.counts,
+          validationOk: organization.validation.ok,
+        },
+      },
+    };
+  } catch {
+    return {
+      status: 503,
+      body: {
+        ok: false,
+        schemaVersion: "simulator-readiness.v1",
+        uptimeMs: telemetry.snapshot().uptimeMs,
+        storage,
+        classification: "storage_error",
+        correlationId,
+      },
+    };
+  }
+}
+
+async function buildMetrics(
+  simulator: SourceSimulator,
+  telemetry: OperationalTelemetry,
+  failureController: FailureController,
+  rateLimiter: RateLimiter,
+) {
   const snapshot = telemetry.snapshot();
-  const metadata = simulator.datasetMetadata();
+  const metadata = await simulator.datasetMetadata();
+  const states = await simulator.states();
+  const sourceChanges = await simulator.sourceChanges();
   return {
     ...snapshot,
     simulator: {
-      activeScenarioInstances: simulator.states().filter((state) => state.completionState === "active").length,
+      activeScenarioInstances: states.filter((state) => state.completionState === "active").length,
       scenarioInstances: metadata.scenarioInstanceCount,
       sourceChanges: metadata.totalSourceChanges,
       sourceObjects: metadata.totalSourceObjects,
       datasetSize: metadata.datasetSize,
       organizationSize: simulator.organizationSummary().counts.totalPeople,
-      ledgerSize: simulator.sourceChanges().length,
+      ledgerSize: sourceChanges.length,
       worldRevision: metadata.worldRevision,
-      storage: simulator.storageHealth(),
+      storage: await simulator.storageHealth(),
       failureRules: failureController.getConfig().rules.filter((rule) => rule.enabled).length,
+      rateLimits: rateLimiter.snapshot(),
     },
   };
 }
 
-function buildStorageInspector(simulator: SourceSimulator) {
-  const metadata = simulator.datasetMetadata();
+async function buildStorageInspector(simulator: SourceSimulator) {
+  const metadata = await simulator.datasetMetadata();
   return {
     schemaVersion: "simulator-storage-inspector.v1",
-    storage: simulator.storageHealth(),
+    storage: await simulator.storageHealth(),
     datasetMetadata: metadata,
     worldRevision: metadata.worldRevision,
+    organization: {
+      seed: simulator.organizationSummary().seed,
+      counts: simulator.organizationSummary().counts,
+      validationOk: simulator.organizationSummary().validation.ok,
+    },
     counts: {
-      scenarioInstances: simulator.states().length,
-      snapshots: simulator.listSnapshots().length,
-      sourceChanges: simulator.sourceChanges().length,
-      sourceObjects: simulator.sourceObjects().length,
+      scenarioInstances: (await simulator.states()).length,
+      snapshots: (await simulator.listSnapshots()).length,
+      sourceChanges: (await simulator.sourceChanges()).length,
+      sourceObjects: (await simulator.sourceObjects()).length,
     },
   };
 }
@@ -457,10 +550,11 @@ async function failureResponse(c: Context, decision: FailureDecision, requestIds
   });
 }
 
-function jsonError(status: number, body: Record<string, unknown>): Response {
+function jsonError(status: number, body: Record<string, unknown>, headers: Record<string, string> = {}): Response {
+  const classification = typeof body.classification === "string" ? body.classification : "error";
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "x-simulator-error-classification": classification, ...headers },
   });
 }
 
@@ -500,9 +594,9 @@ function readCursorTelemetry(cursor: string | undefined): { version?: number; af
   }
 }
 
-function safeWorldRevision(simulator: SourceSimulator): string | undefined {
+async function safeWorldRevision(simulator: SourceSimulator): Promise<string | undefined> {
   try {
-    return simulator.datasetMetadata().worldRevision;
+    return (await simulator.datasetMetadata()).worldRevision;
   } catch {
     return undefined;
   }
@@ -535,33 +629,75 @@ function compactOptional(value: Record<string, unknown>): Record<string, unknown
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
 }
 
-function withAdmin(c: Context, auth: AuthConfig, handler: () => Response): Response {
-  const response = authenticateAdmin(c, auth);
-  return response ?? handler();
+async function withAdmin(
+  c: Context,
+  auth: AuthConfig,
+  rateLimiter: RateLimiter,
+  requestIds: WeakMap<Request, string>,
+  handler: () => Response | Promise<Response>,
+): Promise<Response> {
+  const response = authenticateAdmin(c, auth, requestIds);
+  if (response) return response;
+  const rateLimited = rateLimitAdmin(c, rateLimiter, requestIds);
+  if (rateLimited) return rateLimited;
+  return handler();
 }
 
-function authenticateAdmin(c: Context, auth: AuthConfig): Response | null {
-  return hasSecret(c.req.header(), auth.adminKey, "x-admin-api-key") ? null : new Response(JSON.stringify({ error: "Unauthorized" }), {
-    status: 401,
-    headers: { "content-type": "application/json" },
-  });
+function authenticateAdmin(c: Context, auth: AuthConfig, requestIds: WeakMap<Request, string>): Response | null {
+  return hasSecret(c.req.header(), auth.adminKey, "x-admin-api-key")
+    ? null
+    : jsonError(401, { error: "Unauthorized", classification: "authentication_error", correlationId: requestIds.get(c.req.raw) ?? "unknown" });
 }
 
-function authenticateConnection(c: Context, auth: AuthConfig, simulator: SourceSimulator, requestedConnectionId?: string): ConnectionAuthResult {
+function authenticateConnection(
+  c: Context,
+  auth: AuthConfig,
+  simulator: SourceSimulator,
+  requestIds: WeakMap<Request, string>,
+  requestedConnectionId?: string,
+): ConnectionAuthResult {
   const credential = extractSecret(c.req.header(), "x-connection-secret");
-  if (!credential || auth.revokedConnectionCredentials.has(credential)) return authFailure(401, "Unauthorized");
+  if (!credential || auth.revokedConnectionCredentials.has(credential)) return authFailure(c, requestIds, 401, "Unauthorized");
   let authenticatedConnectionId = auth.connectionCredentialToConnectionId.get(credential);
   if (!authenticatedConnectionId && auth.dynamicDevelopmentCredentials && credential.startsWith(`${DEV_CONNECTION_PREFIX}:`)) {
     authenticatedConnectionId = credential.slice(`${DEV_CONNECTION_PREFIX}:`.length);
   }
-  if (!authenticatedConnectionId) return authFailure(401, "Unauthorized");
-  if (!simulator.hasConnection(authenticatedConnectionId)) return authFailure(401, "Unauthorized");
-  if (requestedConnectionId && requestedConnectionId !== authenticatedConnectionId) return authFailure(403, "Forbidden");
+  if (!authenticatedConnectionId) return authFailure(c, requestIds, 401, "Unauthorized");
+  if (!simulator.hasConnection(authenticatedConnectionId)) return authFailure(c, requestIds, 401, "Unauthorized");
+  if (requestedConnectionId && requestedConnectionId !== authenticatedConnectionId) return authFailure(c, requestIds, 403, "Forbidden");
   return { ok: true, connectionId: authenticatedConnectionId };
 }
 
-function authFailure(status: 401 | 403, message: string): ConnectionAuthResult {
-  return { ok: false, response: new Response(JSON.stringify({ error: message }), { status, headers: { "content-type": "application/json" } }) };
+function authFailure(c: Context, requestIds: WeakMap<Request, string>, status: 401 | 403, message: string): ConnectionAuthResult {
+  return {
+    ok: false,
+    response: jsonError(status, {
+      error: message,
+      classification: status === 401 ? "authentication_error" : "authorization_error",
+      correlationId: requestIds.get(c.req.raw) ?? "unknown",
+    }),
+  };
+}
+
+function rateLimitAdmin(c: Context, rateLimiter: RateLimiter, requestIds: WeakMap<Request, string>): Response | null {
+  return rateLimitResponse(c, rateLimiter.check("admin", "admin"), requestIds);
+}
+
+function rateLimitConnection(c: Context, rateLimiter: RateLimiter, requestIds: WeakMap<Request, string>, connectionId: string): Response | null {
+  return rateLimitResponse(c, rateLimiter.check("connection", connectionId), requestIds);
+}
+
+function rateLimitResponse(c: Context, decision: { allowed: boolean; retryAfterSeconds?: number }, requestIds: WeakMap<Request, string>): Response | null {
+  if (decision.allowed) return null;
+  return jsonError(
+    429,
+    {
+      error: "Rate limit exceeded",
+      classification: "rate_limit",
+      correlationId: requestIds.get(c.req.raw) ?? "unknown",
+    },
+    { "Retry-After": String(decision.retryAfterSeconds ?? 1) },
+  );
 }
 
 function hasSecret(headers: Record<string, string | undefined>, expected: string, headerName: string): boolean {

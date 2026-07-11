@@ -7,7 +7,7 @@ pnpm install --frozen-lockfile
 pnpm run verify
 ```
 
-Local verification without Postgres runs 51 tests and skips 2 Postgres tests.
+Local verification without Postgres runs 55 tests and skips 2 Postgres tests.
 
 ## Postgres Parity
 
@@ -17,7 +17,7 @@ Set `SIMULATOR_POSTGRES_TEST_URL` to run Postgres tests locally:
 SIMULATOR_POSTGRES_TEST_URL=postgres://postgres:postgres@localhost:5432/source_simulator_test pnpm run test
 ```
 
-GitHub Actions provisions Postgres 16 and runs all 53 tests.
+GitHub Actions provisions Postgres 16, runs all 57 tests, builds the Docker image, and runs a container `/readyz` smoke test against Postgres.
 
 Postgres tests cover:
 
@@ -39,6 +39,8 @@ curl -X POST -H "x-admin-api-key: dev-admin-key" \
 
 The kit covers initial sync, incremental sync, late arrivals, updates/deletes, destructive reset, stale cursor rejection, new cursor acquisition, permission differences, and connection regeneration behavior.
 
+The Vitest suite also exercises the same connector lifecycle through real HTTP routes, including invalid/revoked credentials, stale world cursor rejection, permission differences, and deterministic simulated `429`/`503` responses.
+
 ## Performance Sanity
 
 Run:
@@ -51,3 +53,5 @@ curl -X POST -H "x-admin-api-key: dev-admin-key" \
 ```
 
 This is a deterministic sanity benchmark, not a full load-test suite.
+
+Postgres benchmark runs require `SIMULATOR_BENCHMARK_DATABASE_URL`. The runner rejects a benchmark URL that normalizes to the live `DATABASE_URL` and cleans up only benchmark-owned `sim_benchmark_*` schemas.

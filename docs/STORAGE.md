@@ -29,7 +29,7 @@ Scenario packs are code templates. Scenario instances are persisted runtime stat
 
 World replacement commits the scenario instance states, world revision, source-change ledger, source-object projection, dataset metadata, and organization config when applicable as one unit.
 
-SQLite uses one database transaction. Postgres uses one database transaction through the Postgres worker adapter.
+SQLite uses one database transaction. Postgres uses one async `pg.Pool` transaction and a transaction-scoped advisory lock for world mutations.
 
 Rollback tests inject a failure during world replacement and assert the previous world remains intact.
 
@@ -38,13 +38,15 @@ Rollback tests inject a failure during world replacement and assert the previous
 - SQLite: `migrations/001_initial.sql`
 - Postgres: `migrations/postgres_001_initial.sql`
 
-The runtime adapters create the same schema if it does not exist. Tests verify SQLite migration drift and Postgres durable table coverage.
+The SQLite adapter creates the same schema if it does not exist. The Postgres adapter applies versioned migration files through `schema_migrations` and verifies migration checksums at runtime. Tests verify SQLite migration drift and Postgres durable table coverage.
 
 ## Postgres Adapter
 
-The Postgres adapter uses `pg.Pool` inside a worker-thread bridge so the existing synchronous engine/storage interface remains stable. This avoids an API-breaking async storage rewrite in Milestone 3.
+The Postgres adapter uses async `pg.Pool` queries with bounded timeouts. It does not use worker threads, shared memory, synchronous temp files, or destructive runtime resets.
 
 The adapter supports restart persistence, source ledger persistence, source-object projection persistence, snapshots, health checks, and atomic world replacement.
+
+Production runtime code does not expose `resetForTesting`. Tests and benchmarks isolate Postgres state with `sim_test_*` or `sim_benchmark_*` schemas and cleanup refuses to drop any other schema.
 
 ## Cursor Impact
 

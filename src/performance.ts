@@ -25,6 +25,7 @@ export interface BenchmarkOperationResult {
 export interface BenchmarkDatasetResult {
   datasetSize: DatasetSize;
   storage: StorageKind;
+  storageTarget: "ephemeral-memory" | "temporary-sqlite" | "benchmark-postgres-schema";
   counts: {
     scenarioInstances: number;
     sourceChanges: number;
@@ -50,9 +51,18 @@ export interface BenchmarkReport {
   results: BenchmarkDatasetResult[];
 }
 
-export function runPerformanceBenchmark(input: BenchmarkRequest, databaseUrl = process.env.DATABASE_URL): BenchmarkReport {
+export interface BenchmarkRuntimeOptions {
+  applicationDatabaseUrl?: string;
+  benchmarkDatabaseUrl?: string;
+  runtimeEnv?: "development" | "test" | "preview" | "production";
+}
+
+export async function runPerformanceBenchmark(input: BenchmarkRequest, options: BenchmarkRuntimeOptions = {}): Promise<BenchmarkReport> {
   const request = BenchmarkRequestSchema.parse(input);
-  const results = request.datasetSizes.map((datasetSize) => runDatasetBenchmark(request.storage, request.seed, datasetSize, databaseUrl));
+  const results: BenchmarkDatasetResult[] = [];
+  for (const datasetSize of request.datasetSizes) {
+    results.push(await runDatasetBenchmark(request.storage, request.seed, datasetSize, options));
+  }
   return {
     schemaVersion: "simulator-performance-benchmark.v1",
     generatedAt: new Date().toISOString(),
@@ -62,32 +72,37 @@ export function runPerformanceBenchmark(input: BenchmarkRequest, databaseUrl = p
   };
 }
 
-function runDatasetBenchmark(storageKind: StorageKind, seed: string, datasetSize: DatasetSize, databaseUrl: string | undefined): BenchmarkDatasetResult {
-  const storage = createBenchmarkStorage(storageKind, databaseUrl);
+async function runDatasetBenchmark(
+  storageKind: StorageKind,
+  seed: string,
+  datasetSize: DatasetSize,
+  options: BenchmarkRuntimeOptions,
+): Promise<BenchmarkDatasetResult> {
+  const { storage, storageTarget, cleanup } = createBenchmarkStorage(storageKind, datasetSize, options);
   try {
-    const simulator = new SourceSimulator({ seed, datasetSize, storage, baseUrl: "http://sim.test" });
-    const generate = measure(() => simulator.generateDataset({ seed: `${seed}-${datasetSize}`, datasetSize }));
-    const targetInstance = simulator.states()[0]!;
-    const advance = measure(() => simulator.advanceScenarioInstance(targetInstance.scenarioInstanceId, { hours: 6 }));
+    const simulator = await SourceSimulator.create({ seed, datasetSize, storage, baseUrl: "http://sim.test" });
+    const generate = await measure(() => simulator.generateDataset({ seed: `${seed}-${datasetSize}`, datasetSize }));
+    const targetInstance = (await simulator.states())[0]!;
+    const advance = await measure(() => simulator.advanceScenarioInstance(targetInstance.scenarioInstanceId, { hours: 6 }));
     const triggerInstanceId = `benchmark-${datasetSize}-manual-trigger`;
     const triggerPack = scenarios.find((scenario) => scenario.events.some((event) => event.manual))!;
-    simulator.createScenarioInstance({
+    await simulator.createScenarioInstance({
       scenarioPackId: triggerPack.id,
       scenarioInstanceId: triggerInstanceId,
       seed: `${seed}-${datasetSize}-trigger`,
       datasetSize,
     });
     const manualEvent = triggerPack.events.find((event) => event.manual)!;
-    const trigger = measure(() => simulator.triggerScenarioInstanceEvent(triggerInstanceId, manualEvent.id));
-    const feed = measure(() => simulator.feed("conn-product-manager", undefined, 100));
-    const snapshot = measure(() => simulator.createSnapshot());
-    const snapshotId = snapshot.value.snapshotId;
-    const restore = measure(() => simulator.restoreSnapshot(snapshotId));
-    const organizationRegeneration = measure(() => simulator.regenerateOrganization({ seed: `${seed}-${datasetSize}-org` }));
-    const metadata = simulator.datasetMetadata();
+    const trigger = await measure(() => simulator.triggerScenarioInstanceEvent(triggerInstanceId, manualEvent.id));
+    const feed = await measure(() => simulator.feed("conn-product-manager", undefined, 100));
+    const snapshot = await measure(() => simulator.createSnapshot());
+    const restore = await measure(() => simulator.restoreSnapshot(snapshot.value.snapshotId));
+    const organizationRegeneration = await measure(() => simulator.regenerateOrganization({ seed: `${seed}-${datasetSize}-org` }));
+    const metadata = await simulator.datasetMetadata();
     return {
       datasetSize,
       storage: storageKind,
+      storageTarget,
       counts: {
         scenarioInstances: metadata.scenarioInstanceCount,
         sourceChanges: metadata.totalSourceChanges,
@@ -105,23 +120,52 @@ function runDatasetBenchmark(storageKind: StorageKind, seed: string, datasetSize
       },
     };
   } finally {
-    storage.close?.();
+    await cleanup?.();
+    await storage.close?.();
   }
 }
 
-function createBenchmarkStorage(storageKind: StorageKind, databaseUrl: string | undefined): SimulatorStorage {
-  if (storageKind === "memory") return new MemorySimulatorStorage();
+function createBenchmarkStorage(
+  storageKind: StorageKind,
+  datasetSize: DatasetSize,
+  options: BenchmarkRuntimeOptions,
+): { storage: SimulatorStorage; storageTarget: BenchmarkDatasetResult["storageTarget"]; cleanup?: () => Promise<void> } {
+  if (storageKind === "memory") return { storage: new MemorySimulatorStorage(), storageTarget: "ephemeral-memory" };
   if (storageKind === "sqlite") {
-    return new SQLiteSimulatorStorage(join(mkdtempSync(join(tmpdir(), "source-sim-benchmark-")), "benchmark.sqlite"));
+    return {
+      storage: new SQLiteSimulatorStorage(join(mkdtempSync(join(tmpdir(), "source-sim-benchmark-")), "benchmark.sqlite")),
+      storageTarget: "temporary-sqlite",
+    };
   }
-  if (!databaseUrl?.startsWith("postgres")) {
-    throw new Error("Postgres benchmark requires DATABASE_URL");
+  if (!options.benchmarkDatabaseUrl?.startsWith("postgres")) {
+    throw new Error("Postgres benchmark requires SIMULATOR_BENCHMARK_DATABASE_URL");
   }
-  return new PostgresSimulatorStorage({ connectionString: databaseUrl, resetForTesting: true });
+  assertBenchmarkDatabaseIsIsolated(options.applicationDatabaseUrl, options.benchmarkDatabaseUrl);
+  const schema = `sim_benchmark_${process.pid}_${Date.now()}_${datasetSize}`.replaceAll(/[^A-Za-z0-9_]/g, "_");
+  const storage = new PostgresSimulatorStorage({ connectionString: options.benchmarkDatabaseUrl, schema });
+  return {
+    storage,
+    storageTarget: "benchmark-postgres-schema",
+    cleanup: () => storage.dropOwnedSchemaForTesting(),
+  };
 }
 
-function measure<T>(callback: () => T): { durationMs: number; value: T } {
+export function assertBenchmarkDatabaseIsIsolated(applicationDatabaseUrl: string | undefined, benchmarkDatabaseUrl: string): void {
+  if (!applicationDatabaseUrl?.trim()) return;
+  if (normalizeDatabaseUrl(applicationDatabaseUrl) === normalizeDatabaseUrl(benchmarkDatabaseUrl)) {
+    throw new Error("Postgres benchmark database must be separate from DATABASE_URL");
+  }
+}
+
+function normalizeDatabaseUrl(value: string): string {
+  const url = new URL(value);
+  url.searchParams.sort();
+  url.hash = "";
+  return url.toString();
+}
+
+async function measure<T>(callback: () => T | Promise<T>): Promise<{ durationMs: number; value: T }> {
   const started = performance.now();
-  const value = callback();
+  const value = await callback();
   return { durationMs: Math.round((performance.now() - started) * 100) / 100, value };
 }

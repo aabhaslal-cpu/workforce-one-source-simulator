@@ -83,6 +83,8 @@ Deterministic failure modes are simulator-owned test controls. They can alter fe
 
 Destructive world operations rotate `worldRevision`. Connectors must treat stale-checkpoint 400 responses as an intentional reset boundary and acquire a fresh cursor.
 
+Real service protection can also return `429` with `Retry-After` and `rate_limit` classification. That protection is configured separately from deterministic failure modes.
+
 ## Artifacts
 
 - Zod runtime schema: `src/contracts.ts`

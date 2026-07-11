@@ -23,7 +23,14 @@ import {
   type SourceRecord,
   type Team,
 } from "./domain.js";
-import { MemorySimulatorStorage, type SimulatorStorage, type StorageHealth, type StorageKind } from "./storage.js";
+import {
+  MemorySimulatorStorage,
+  type SimulatorStorage,
+  type StorageHealth,
+  type StorageKind,
+  type WorldReplacement,
+  type WorldSnapshot,
+} from "./storage.js";
 import {
   createConnections,
   defaultOrganizationConfig,
@@ -92,22 +99,34 @@ export class SourceSimulator {
   private organizationConfig: OrganizationConfig;
   private organization: GeneratedOrganization;
   private connections: SourceConnection[];
+  private knownWorldRevision: string | undefined;
 
   constructor(options: SimulatorOptions = {}) {
     this.storage = options.storage ?? new MemorySimulatorStorage();
     this.defaultSeed = options.seed ?? "wfo-m1-seed";
     this.defaultDatasetSize = options.datasetSize ?? "small";
     this.baseUrl = options.baseUrl ?? "http://localhost:3000";
+    this.organizationConfig = cloneOrganizationConfig(options.organizationConfig ?? { ...defaultOrganizationConfig, seed: options.seed ?? defaultOrganizationConfig.seed });
+    this.organization = buildCompatibleOrganization(this.organizationConfig);
+    this.connections = createConnections(this.organization);
+  }
 
-    const storedOrganizationConfig = this.storage.getOrganizationConfig();
+  static async create(options: SimulatorOptions = {}): Promise<SourceSimulator> {
+    const simulator = new SourceSimulator(options);
+    await simulator.initialize(options);
+    return simulator;
+  }
+
+  private async initialize(options: SimulatorOptions): Promise<void> {
+    const storedOrganizationConfig = await this.storage.getOrganizationConfig();
     this.organizationConfig = cloneOrganizationConfig(
       options.organizationConfig ?? storedOrganizationConfig ?? { ...defaultOrganizationConfig, seed: options.seed ?? defaultOrganizationConfig.seed },
     );
     this.organization = buildCompatibleOrganization(this.organizationConfig);
-    this.storage.saveOrganizationConfig(this.organizationConfig);
+    await this.storage.saveOrganizationConfig(this.organizationConfig);
     this.connections = createConnections(this.organization);
 
-    let instanceStates = this.storage.listScenarioInstanceStates();
+    let instanceStates = await this.storage.listScenarioInstanceStates();
     if (instanceStates.length === 0) {
       instanceStates = createDatasetInstanceStates(
         this.organization,
@@ -117,17 +136,23 @@ export class SourceSimulator {
         false,
       );
     }
-    const worldRevision = this.storage.getWorldRevision() ?? stableId("world", "initial", this.stateFingerprintFor(instanceStates, this.organizationConfig));
-    if (!this.storage.getWorldRevision() || this.storage.listSourceChanges().length === 0 || !this.storage.getDatasetMetadata()) {
-      this.replaceWorldFromInstances(instanceStates, worldRevision, { organizationConfig: this.organizationConfig });
+    const storedWorldRevision = await this.storage.getWorldRevision();
+    const worldRevision = storedWorldRevision ?? stableId("world", "initial", this.stateFingerprintFor(instanceStates, this.organizationConfig));
+    if (!storedWorldRevision || (await this.storage.listSourceChanges()).length === 0 || !(await this.storage.getDatasetMetadata())) {
+      await this.replaceWorldFromInstances(instanceStates, worldRevision, { organizationConfig: this.organizationConfig });
     }
+    this.knownWorldRevision = await this.storage.getWorldRevision();
   }
 
   storageKind(): StorageKind {
     return this.storage.kind;
   }
 
-  storageHealth(): StorageHealth {
+  async close(): Promise<void> {
+    await this.storage.close?.();
+  }
+
+  async storageHealth(): Promise<StorageHealth> {
     return this.storage.health();
   }
 
@@ -161,75 +186,77 @@ export class SourceSimulator {
     }));
   }
 
-  scenarioInstances() {
+  async scenarioInstances() {
     return this.storage.listScenarioInstanceStates();
   }
 
-  scenarioInstance(instanceId: string) {
-    const state = this.requireInstanceState(instanceId);
+  async scenarioInstance(instanceId: string) {
+    const state = await this.requireInstanceState(instanceId);
     return {
       instance: instanceContextFromState(state),
       state,
       events: state.eventLog,
-      changes: this.sourceChanges().filter((change) => change.scenarioInstanceId === instanceId),
+      changes: (await this.sourceChanges()).filter((change) => change.scenarioInstanceId === instanceId),
     };
   }
 
-  createScenarioInstance(input: ScenarioInstanceCreateInput) {
+  async createScenarioInstance(input: ScenarioInstanceCreateInput) {
     const scenario = scenarios.find((candidate) => candidate.id === input.scenarioPackId);
     if (!scenario) throw badRequest(`Unknown scenario pack: ${input.scenarioPackId}`);
-    const existing = this.storage.listScenarioInstanceStates();
-    const state = createScenarioInstanceState(this.organization, scenario, {
-      ...input,
-      instanceIndex: existing.filter((candidate) => candidate.scenarioPackId === scenario.id).length,
-      seed: input.seed ?? stableId("instance", this.defaultSeed, scenario.id, input.scenarioInstanceId ?? String(existing.length + 1)),
-      datasetSize: input.datasetSize ?? this.defaultDatasetSize,
-      startTime: input.startTime ?? DEFAULT_START_TIME,
-      completed: false,
+    const instanceId = await this.commitInstanceMutation((snapshot) => {
+      const existing = snapshot.scenarioInstanceStates;
+      const state = createScenarioInstanceState(this.organization, scenario, {
+        ...input,
+        instanceIndex: existing.filter((candidate) => candidate.scenarioPackId === scenario.id).length,
+        seed: input.seed ?? stableId("instance", this.defaultSeed, scenario.id, input.scenarioInstanceId ?? String(existing.length + 1)),
+        datasetSize: input.datasetSize ?? this.defaultDatasetSize,
+        startTime: input.startTime ?? DEFAULT_START_TIME,
+        completed: false,
+      });
+      if (existing.some((candidate) => candidate.scenarioInstanceId === state.scenarioInstanceId)) {
+        throw badRequest(`Scenario instance already exists: ${state.scenarioInstanceId}`);
+      }
+      return { instanceStates: [...existing, state], changedStates: [state], result: state.scenarioInstanceId };
     });
-    if (existing.some((candidate) => candidate.scenarioInstanceId === state.scenarioInstanceId)) {
-      throw badRequest(`Scenario instance already exists: ${state.scenarioInstanceId}`);
-    }
-    this.commitInstanceStatesWithAppends([...existing, state], [state]);
-    return this.scenarioInstance(state.scenarioInstanceId);
+    return this.scenarioInstance(instanceId);
   }
 
-  sourceChanges(): SourceChangeLedgerEntry[] {
+  async sourceChanges(): Promise<SourceChangeLedgerEntry[]> {
     return this.storage.listSourceChanges();
   }
 
-  sourceObjects(): SourceObjectProjection[] {
+  async sourceObjects(): Promise<SourceObjectProjection[]> {
     return this.storage.listSourceObjects();
   }
 
-  sourceObject(sourceSystem: string, sourceId: string): SourceObjectProjection {
-    const object = this.sourceObjects().find((candidate) => candidate.sourceSystem === sourceSystem && candidate.sourceId === sourceId);
+  async sourceObject(sourceSystem: string, sourceId: string): Promise<SourceObjectProjection> {
+    const object = (await this.sourceObjects()).find((candidate) => candidate.sourceSystem === sourceSystem && candidate.sourceId === sourceId);
     if (!object) throw notFound("Unknown source object");
     return object;
   }
 
-  sourceObjectHistory(sourceSystem: string, sourceId: string): SourceChangeLedgerEntry[] {
-    const history = this.sourceChanges().filter((change) => change.sourceSystem === sourceSystem && change.sourceId === sourceId).sort(compareChanges);
+  async sourceObjectHistory(sourceSystem: string, sourceId: string): Promise<SourceChangeLedgerEntry[]> {
+    const history = (await this.sourceChanges()).filter((change) => change.sourceSystem === sourceSystem && change.sourceId === sourceId).sort(compareChanges);
     if (history.length === 0) throw notFound("Unknown source object");
     return history;
   }
 
-  datasetMetadata(): DatasetMetadata {
-    const metadata = this.storage.getDatasetMetadata();
+  async datasetMetadata(): Promise<DatasetMetadata> {
+    const metadata = await this.storage.getDatasetMetadata();
     if (metadata) return metadata;
-    return this.buildDatasetMetadata();
+    return this.buildDatasetMetadata(await this.states(), await this.storage.listSourceChanges(), await this.storage.listSourceObjects(), await this.requireWorldRevision());
   }
 
-  generateDataset(input: { seed?: string; datasetSize?: DatasetSize; startTime?: string } = {}): DatasetMetadata {
+  async generateDataset(input: { seed?: string; datasetSize?: DatasetSize; startTime?: string } = {}): Promise<DatasetMetadata> {
     const nextSeed = input.seed ?? this.defaultSeed;
     const datasetSize = input.datasetSize ?? this.defaultDatasetSize;
     const startTime = input.startTime ?? DEFAULT_START_TIME;
     const instanceStates = createDatasetInstanceStates(this.organization, nextSeed, datasetSize, startTime, true);
-    this.rotateWorldRevisionFromInstances(`dataset-generate:${datasetSize}:${nextSeed}`, instanceStates);
+    await this.rotateWorldRevisionFromInstances(`dataset-generate:${datasetSize}:${nextSeed}`, instanceStates, {}, this.currentWorldMutationOptions());
     return this.datasetMetadata();
   }
 
-  resetDataset(): DatasetMetadata {
+  async resetDataset(): Promise<DatasetMetadata> {
     return this.generateDataset({ seed: this.defaultSeed, datasetSize: this.defaultDatasetSize, startTime: DEFAULT_START_TIME });
   }
 
@@ -304,12 +331,12 @@ export class SourceSimulator {
     return cloneOrganizationConfig(this.organization.config);
   }
 
-  putOrganizationConfig(config: OrganizationConfig) {
+  async putOrganizationConfig(config: OrganizationConfig) {
     this.organizationConfig = cloneOrganizationConfig({ ...config, seed: config.seed || this.organizationConfig.seed });
     return this.regenerateOrganization({ config: this.organizationConfig });
   }
 
-  regenerateOrganization(input: { seed?: string; config?: OrganizationConfig } = {}) {
+  async regenerateOrganization(input: { seed?: string; config?: OrganizationConfig } = {}) {
     const nextConfig = cloneOrganizationConfig(input.config ?? { ...this.organizationConfig, seed: input.seed ?? this.organizationConfig.seed });
     if (input.seed) nextConfig.seed = input.seed;
     const nextOrganization = buildCompatibleOrganization(nextConfig);
@@ -319,9 +346,17 @@ export class SourceSimulator {
     this.organization = nextOrganization;
     this.organizationConfig = nextConfig;
     this.connections = createConnections(this.organization);
-    const nextStates = rebindInstanceParticipants(this.organization, this.storage.listScenarioInstanceStates());
     try {
-      this.rotateWorldRevisionFromInstances("organization-regenerate", nextStates, { organizationConfig: nextConfig });
+      const worldRevision = await this.storage.mutateWorld<string>(
+        (snapshot) => {
+          const nextStates = rebindInstanceParticipants(this.organization, snapshot.scenarioInstanceStates);
+          const worldRevision = this.nextWorldRevision("organization-regenerate", snapshot, nextStates, nextConfig);
+          const replacement = this.buildWorldReplacement(nextStates, worldRevision, { organizationConfig: nextConfig });
+          return { replacement, result: worldRevision };
+        },
+        this.currentWorldMutationOptions(),
+      );
+      this.observeWorldRevision(worldRevision);
     } catch (error) {
       this.organization = previousOrganization;
       this.organizationConfig = previousConfig;
@@ -331,7 +366,7 @@ export class SourceSimulator {
     return { organization: this.organizationSummary(), previewCounts: previewOrganizationCounts(this.organizationConfig) };
   }
 
-  resetOrganization() {
+  async resetOrganization() {
     const nextConfig = cloneOrganizationConfig(defaultOrganizationConfig);
     const nextOrganization = buildCompatibleOrganization(nextConfig);
     const previousOrganization = this.organization;
@@ -340,9 +375,17 @@ export class SourceSimulator {
     this.organizationConfig = nextConfig;
     this.organization = nextOrganization;
     this.connections = createConnections(this.organization);
-    const nextStates = rebindInstanceParticipants(this.organization, this.storage.listScenarioInstanceStates());
     try {
-      this.rotateWorldRevisionFromInstances("organization-reset", nextStates, { organizationConfig: nextConfig });
+      const worldRevision = await this.storage.mutateWorld<string>(
+        (snapshot) => {
+          const nextStates = rebindInstanceParticipants(this.organization, snapshot.scenarioInstanceStates);
+          const worldRevision = this.nextWorldRevision("organization-reset", snapshot, nextStates, nextConfig);
+          const replacement = this.buildWorldReplacement(nextStates, worldRevision, { organizationConfig: nextConfig });
+          return { replacement, result: worldRevision };
+        },
+        this.currentWorldMutationOptions(),
+      );
+      this.observeWorldRevision(worldRevision);
     } catch (error) {
       this.organization = previousOrganization;
       this.organizationConfig = previousConfig;
@@ -352,16 +395,16 @@ export class SourceSimulator {
     return this.organizationSummary();
   }
 
-  recordsForPerson(personId: string) {
+  async recordsForPerson(personId: string) {
     const person = this.requirePerson(personId);
     const connection = this.connections.find((candidate) => candidate.id === personConnectionId(person)) ?? connectionForPerson(person);
-    const records = this.allRecords().filter((record) => canConnectionSee(record, connection));
+    const records = (await this.allRecords()).filter((record) => canConnectionSee(record, connection));
     return { person, connection, records };
   }
 
-  comparePersonVisibility(leftPersonId: string, rightPersonId: string) {
-    const left = this.recordsForPerson(leftPersonId);
-    const right = this.recordsForPerson(rightPersonId);
+  async comparePersonVisibility(leftPersonId: string, rightPersonId: string) {
+    const left = await this.recordsForPerson(leftPersonId);
+    const right = await this.recordsForPerson(rightPersonId);
     const leftIds = new Set(left.records.map((record) => record.sourceId));
     const rightIds = new Set(right.records.map((record) => record.sourceId));
     return {
@@ -388,146 +431,169 @@ export class SourceSimulator {
     };
   }
 
-  resetScenario(scenarioId: string, input: { seed?: string; datasetSize?: DatasetSize; startTime?: string } = {}): ScenarioInstanceState {
-    return this.resetScenarioInstance(defaultInstanceId(scenarioId), input).state;
+  async resetScenario(scenarioId: string, input: { seed?: string; datasetSize?: DatasetSize; startTime?: string } = {}): Promise<ScenarioInstanceState> {
+    return (await this.resetScenarioInstance(defaultInstanceId(scenarioId), input)).state;
   }
 
-  advanceScenario(scenarioId: string, input: { hours?: number; days?: number } = {}): ScenarioInstanceState {
-    return this.advanceScenarioInstance(defaultInstanceId(scenarioId), input).state;
+  async advanceScenario(scenarioId: string, input: { hours?: number; days?: number } = {}): Promise<ScenarioInstanceState> {
+    return (await this.advanceScenarioInstance(defaultInstanceId(scenarioId), input)).state;
   }
 
-  advanceScenarioInstance(instanceId: string, input: { hours?: number; days?: number } = {}) {
-    const state = this.requireInstanceState(instanceId);
-    if (state.paused) return this.scenarioInstance(instanceId);
+  async advanceScenarioInstance(instanceId: string, input: { hours?: number; days?: number } = {}) {
     const hours = clampNumber(input.hours ?? 0, 0, 24 * 365) + clampNumber(input.days ?? 0, 0, 365) * 24;
-    const current = new Date(state.currentTime);
-    current.setUTCHours(current.getUTCHours() + hours);
-    const nextState = finalizeInstanceState(this.organization, this.requireScenario(state.scenarioPackId), { ...state, currentTime: current.toISOString() });
-    this.commitInstanceStateWithAppends(nextState);
-    return this.scenarioInstance(instanceId);
-  }
-
-  triggerScenarioEvent(scenarioId: string, eventId: string): ScenarioInstanceState {
-    return this.triggerScenarioInstanceEvent(defaultInstanceId(scenarioId), eventId).state;
-  }
-
-  triggerScenarioInstanceEvent(instanceId: string, eventId: string) {
-    const state = this.requireInstanceState(instanceId);
-    const scenario = this.requireScenario(state.scenarioPackId);
-    const event = scenario.events.find((candidate) => candidate.id === eventId);
-    if (!event) throw notFound(`Unknown event: ${eventId}`);
-    if (state.triggeredEventIds.includes(event.id)) return this.scenarioInstance(instanceId);
-    const occurredAt = state.currentTime;
-    const nextState = finalizeInstanceState(this.organization, scenario, {
-      ...state,
-      triggeredEventIds: [...state.triggeredEventIds, event.id],
-      eventOccurrenceTimes: { ...(state.eventOccurrenceTimes ?? {}), [event.id]: occurredAt },
-      eventLog: [...state.eventLog, logEntry(scenario.id, state.scenarioInstanceId, event, occurredAt)],
+    await this.commitInstanceMutation((snapshot) => {
+      const state = requireInstanceStateFrom(snapshot, instanceId);
+      if (state.paused) return { instanceStates: snapshot.scenarioInstanceStates, changedStates: [], result: instanceId };
+      const current = new Date(state.currentTime);
+      current.setUTCHours(current.getUTCHours() + hours);
+      const nextState = finalizeInstanceState(this.organization, this.requireScenario(state.scenarioPackId), { ...state, currentTime: current.toISOString() });
+      return { instanceStates: replaceInstanceState(snapshot.scenarioInstanceStates, nextState), changedStates: [nextState], result: instanceId };
     });
-    this.commitInstanceStateWithAppends(nextState);
     return this.scenarioInstance(instanceId);
   }
 
-  triggerScenarioEventForPack(scenarioId: string, eventId: string): ScenarioInstanceState {
+  async triggerScenarioEvent(scenarioId: string, eventId: string): Promise<ScenarioInstanceState> {
+    return (await this.triggerScenarioInstanceEvent(defaultInstanceId(scenarioId), eventId)).state;
+  }
+
+  async triggerScenarioInstanceEvent(instanceId: string, eventId: string) {
+    await this.commitInstanceMutation((snapshot) => {
+      const state = requireInstanceStateFrom(snapshot, instanceId);
+      const scenario = this.requireScenario(state.scenarioPackId);
+      const event = scenario.events.find((candidate) => candidate.id === eventId);
+      if (!event) throw notFound(`Unknown event: ${eventId}`);
+      if (state.triggeredEventIds.includes(event.id)) return { instanceStates: snapshot.scenarioInstanceStates, changedStates: [], result: instanceId };
+      const occurredAt = state.currentTime;
+      const nextState = finalizeInstanceState(this.organization, scenario, {
+        ...state,
+        triggeredEventIds: [...state.triggeredEventIds, event.id],
+        eventOccurrenceTimes: { ...(state.eventOccurrenceTimes ?? {}), [event.id]: occurredAt },
+        eventLog: [...state.eventLog, logEntry(scenario.id, state.scenarioInstanceId, event, occurredAt)],
+      });
+      return { instanceStates: replaceInstanceState(snapshot.scenarioInstanceStates, nextState), changedStates: [nextState], result: instanceId };
+    });
+    return this.scenarioInstance(instanceId);
+  }
+
+  async triggerScenarioEventForPack(scenarioId: string, eventId: string): Promise<ScenarioInstanceState> {
     const scenario = this.requireScenario(scenarioId);
     const event = scenario.events.find((candidate) => candidate.id === eventId);
     if (!event) throw notFound(`Unknown event: ${eventId}`);
     return this.triggerScenarioEvent(scenarioId, eventId);
   }
 
-  pauseScenario(scenarioId: string): ScenarioInstanceState {
-    return this.pauseScenarioInstance(defaultInstanceId(scenarioId)).state;
+  async pauseScenario(scenarioId: string): Promise<ScenarioInstanceState> {
+    return (await this.pauseScenarioInstance(defaultInstanceId(scenarioId))).state;
   }
 
-  pauseScenarioInstance(instanceId: string) {
-    const state = { ...this.requireInstanceState(instanceId), paused: true };
-    this.commitInstanceStatesWithAppends(replaceInstanceState(this.storage.listScenarioInstanceStates(), state), []);
-    return this.scenarioInstance(instanceId);
-  }
-
-  resumeScenario(scenarioId: string): ScenarioInstanceState {
-    return this.resumeScenarioInstance(defaultInstanceId(scenarioId)).state;
-  }
-
-  resumeScenarioInstance(instanceId: string) {
-    const state = finalizeInstanceState(this.organization, this.requireScenario(this.requireInstanceState(instanceId).scenarioPackId), {
-      ...this.requireInstanceState(instanceId),
-      paused: false,
+  async pauseScenarioInstance(instanceId: string) {
+    await this.commitInstanceMutation((snapshot) => {
+      const state = { ...requireInstanceStateFrom(snapshot, instanceId), paused: true };
+      return { instanceStates: replaceInstanceState(snapshot.scenarioInstanceStates, state), changedStates: [], result: instanceId };
     });
-    this.commitInstanceStateWithAppends(state);
     return this.scenarioInstance(instanceId);
   }
 
-  resetScenarioInstance(instanceId: string, input: { seed?: string; datasetSize?: DatasetSize; startTime?: string } = {}) {
-    const existing = this.requireInstanceState(instanceId);
-    const scenario = this.requireScenario(existing.scenarioPackId);
-    const resetState = createScenarioInstanceState(this.organization, scenario, {
-      ...existing,
-      seed: input.seed ?? existing.seed,
-      datasetSize: input.datasetSize ?? existing.datasetSize,
-      startTime: input.startTime ?? existing.startedAt,
-      scenarioInstanceId: existing.scenarioInstanceId,
-      instanceIndex: existing.instanceIndex,
-      account: existing.account,
-      product: existing.product,
-      project: existing.project,
-      service: existing.service,
-      workstream: existing.workstream,
-      participantPersonIds: existing.participantPersonIds,
-      completed: false,
+  async resumeScenario(scenarioId: string): Promise<ScenarioInstanceState> {
+    return (await this.resumeScenarioInstance(defaultInstanceId(scenarioId))).state;
+  }
+
+  async resumeScenarioInstance(instanceId: string) {
+    await this.commitInstanceMutation((snapshot) => {
+      const existing = requireInstanceStateFrom(snapshot, instanceId);
+      const state = finalizeInstanceState(this.organization, this.requireScenario(existing.scenarioPackId), {
+        ...existing,
+        paused: false,
+      });
+      return { instanceStates: replaceInstanceState(snapshot.scenarioInstanceStates, state), changedStates: [state], result: instanceId };
     });
-    const nextStates = replaceInstanceState(this.storage.listScenarioInstanceStates(), resetState);
-    this.rotateWorldRevisionFromInstances(`scenario-instance-reset:${instanceId}`, nextStates);
     return this.scenarioInstance(instanceId);
   }
 
-  deleteScenarioInstance(instanceId: string) {
-    this.requireInstanceState(instanceId);
-    const nextStates = this.storage.listScenarioInstanceStates().filter((state) => state.scenarioInstanceId !== instanceId);
-    this.rotateWorldRevisionFromInstances(`scenario-instance-delete:${instanceId}`, nextStates);
+  async resetScenarioInstance(instanceId: string, input: { seed?: string; datasetSize?: DatasetSize; startTime?: string } = {}) {
+    const worldRevision = await this.storage.mutateWorld<string>(
+      (snapshot) => {
+        const existing = requireInstanceStateFrom(snapshot, instanceId);
+        const scenario = this.requireScenario(existing.scenarioPackId);
+        const resetState = createScenarioInstanceState(this.organization, scenario, {
+          ...existing,
+          seed: input.seed ?? existing.seed,
+          datasetSize: input.datasetSize ?? existing.datasetSize,
+          startTime: input.startTime ?? existing.startedAt,
+          scenarioInstanceId: existing.scenarioInstanceId,
+          instanceIndex: existing.instanceIndex,
+          account: existing.account,
+          product: existing.product,
+          project: existing.project,
+          service: existing.service,
+          workstream: existing.workstream,
+          participantPersonIds: existing.participantPersonIds,
+          completed: false,
+        });
+        const nextStates = replaceInstanceState(snapshot.scenarioInstanceStates, resetState);
+        const worldRevision = this.nextWorldRevision(`scenario-instance-reset:${instanceId}`, snapshot, nextStates);
+        return { replacement: this.buildWorldReplacement(nextStates, worldRevision), result: worldRevision };
+      },
+      this.currentWorldMutationOptions(),
+    );
+    this.observeWorldRevision(worldRevision);
+    return this.scenarioInstance(instanceId);
+  }
+
+  async deleteScenarioInstance(instanceId: string) {
+    const worldRevision = await this.storage.mutateWorld(
+      (snapshot) => {
+        requireInstanceStateFrom(snapshot, instanceId);
+        const nextStates = snapshot.scenarioInstanceStates.filter((state) => state.scenarioInstanceId !== instanceId);
+        const nextWorldRevision = this.nextWorldRevision(`scenario-instance-delete:${instanceId}`, snapshot, nextStates);
+        return { replacement: this.buildWorldReplacement(nextStates, nextWorldRevision), result: nextWorldRevision };
+      },
+      this.currentWorldMutationOptions(),
+    );
+    this.observeWorldRevision(worldRevision);
     return {
       deletedScenarioInstanceId: instanceId,
-      remainingScenarioInstanceCount: nextStates.length,
-      worldRevision: this.requireWorldRevision(),
+      remainingScenarioInstanceCount: (await this.states()).length,
+      worldRevision,
     };
   }
 
-  state(scenarioId: string): ScenarioInstanceState {
+  async state(scenarioId: string): Promise<ScenarioInstanceState> {
     return this.requireInstanceState(defaultInstanceId(scenarioId));
   }
 
-  states(): ScenarioInstanceState[] {
+  async states(): Promise<ScenarioInstanceState[]> {
     return this.storage.listScenarioInstanceStates();
   }
 
-  eventLog(scenarioId: string) {
-    return this.requireInstanceState(defaultInstanceId(scenarioId)).eventLog;
+  async eventLog(scenarioId: string) {
+    return (await this.requireInstanceState(defaultInstanceId(scenarioId))).eventLog;
   }
 
-  allRecords(): SourceRecord[] {
-    return this.currentSourceObjects().map((object) => object.record);
+  async allRecords(): Promise<SourceRecord[]> {
+    return (await this.currentSourceObjects()).map((object) => object.record);
   }
 
-  findRecordForConnection(connectionId: string, sourceSystem: string, sourceId: string): SourceRecord {
+  async findRecordForConnection(connectionId: string, sourceSystem: string, sourceId: string): Promise<SourceRecord> {
     const connection = this.requireConnection(connectionId);
-    const record = this.allRecords().find((candidate) => candidate.sourceSystem === sourceSystem && candidate.sourceId === sourceId);
+    const record = (await this.allRecords()).find((candidate) => candidate.sourceSystem === sourceSystem && candidate.sourceId === sourceId);
     if (!record) throw notFound("Unknown source object");
     if (!canConnectionSee(record, connection)) throw forbidden("Source object is not visible to this connection");
     return record;
   }
 
-  feed(connectionId: string, cursor: string | undefined, limitInput: number | undefined): SourceFeedBatchV1 {
+  async feed(connectionId: string, cursor: string | undefined, limitInput: number | undefined): Promise<SourceFeedBatchV1> {
     const connection = this.requireConnection(connectionId);
-    const worldRevision = this.requireWorldRevision();
+    const worldRevision = await this.requireWorldRevision();
     const cursorPayload = cursor ? decodeCursor(cursor) : { v: 3 as const, connectionId, worldRevision, afterSequence: 0 };
     if (cursorPayload.connectionId !== connectionId) {
-      throw badRequest("Cursor does not belong to this connection");
+      throw badRequest("Cursor does not belong to this connection", "cursor_error");
     }
     if (cursorPayload.worldRevision !== worldRevision) {
-      throw badRequest("Stale checkpoint: cursor world revision no longer matches the current simulator world");
+      throw badRequest("Stale checkpoint: cursor world revision no longer matches the current simulator world", "stale_cursor");
     }
     const limit = Math.min(Math.max(limitInput ?? 50, 1), MAX_PAGE_SIZE);
-    const visibleChanges = this.visibleLedgerEntries()
+    const visibleChanges = (await this.visibleLedgerEntries())
       .filter((change) => change.ledgerSequence > cursorPayload.afterSequence)
       .filter((change) => canConnectionSee(change.record, connection))
       .sort(compareChanges);
@@ -539,7 +605,7 @@ export class SourceSimulator {
       worldRevision,
       connectionId,
       batchId: stableId("batch", connectionId, cursor ?? "initial", String(limit), worldRevision, page.map((change) => change.changeId).join(",")),
-      generatedAt: maxCurrentTime(this.states()),
+      generatedAt: maxCurrentTime(await this.states()),
       records: page.map((change) => change.record),
       nextCursor: encodeCursor({ v: 3, connectionId, worldRevision, afterSequence }),
       hasMore: visibleChanges.length > page.length,
@@ -547,22 +613,23 @@ export class SourceSimulator {
     return SourceFeedBatchV1Schema.parse(batch);
   }
 
-  createSnapshot(): Snapshot {
+  async createSnapshot(): Promise<Snapshot> {
+    const states = await this.states();
     const snapshot: Snapshot = {
-      snapshotId: stableId("snapshot", this.stateFingerprint()),
-      createdAt: maxCurrentTime(this.states()),
-      instanceStates: this.states(),
+      snapshotId: stableId("snapshot", this.stateFingerprintFor(states, this.organization.config)),
+      createdAt: maxCurrentTime(states),
+      instanceStates: states,
       organizationSeed: this.organization.seed,
       organizationConfig: this.organization.config,
-      datasetMetadata: this.datasetMetadata(),
-      worldRevision: this.requireWorldRevision(),
+      datasetMetadata: await this.datasetMetadata(),
+      worldRevision: await this.requireWorldRevision(),
     };
-    this.storage.createSnapshot(snapshot);
+    await this.storage.createSnapshot(snapshot);
     return snapshot;
   }
 
-  restoreSnapshot(snapshotId: string): Snapshot {
-    const snapshot = this.storage.getSnapshot(snapshotId);
+  async restoreSnapshot(snapshotId: string): Promise<Snapshot> {
+    const snapshot = await this.storage.getSnapshot(snapshotId);
     if (!snapshot) throw notFound(`Unknown snapshot: ${snapshotId}`);
     const previousOrganization = this.organization;
     const previousConfig = this.organizationConfig;
@@ -571,7 +638,12 @@ export class SourceSimulator {
     this.organization = buildCompatibleOrganization(this.organizationConfig);
     this.connections = createConnections(this.organization);
     try {
-      this.rotateWorldRevisionFromInstances(`snapshot-restore:${snapshotId}`, snapshot.instanceStates, { organizationConfig: this.organizationConfig });
+      await this.rotateWorldRevisionFromInstances(
+        `snapshot-restore:${snapshotId}`,
+        snapshot.instanceStates,
+        { organizationConfig: this.organizationConfig },
+        this.currentWorldMutationOptions(),
+      );
     } catch (error) {
       this.organization = previousOrganization;
       this.organizationConfig = previousConfig;
@@ -581,55 +653,63 @@ export class SourceSimulator {
     return snapshot;
   }
 
-  listSnapshots(): Snapshot[] {
+  async listSnapshots(): Promise<Snapshot[]> {
     return this.storage.listSnapshots();
   }
 
-  private requireWorldRevision(): string {
-    const worldRevision = this.storage.getWorldRevision();
+  private async requireWorldRevision(): Promise<string> {
+    const worldRevision = await this.storage.getWorldRevision();
     if (!worldRevision) {
       throw new Error("Simulator world revision has not been initialized");
     }
+    this.observeWorldRevision(worldRevision);
     return worldRevision;
   }
 
-  private rotateWorldRevisionFromInstances(
+  private async rotateWorldRevisionFromInstances(
     reason: string,
     instanceStates: ScenarioInstanceState[],
     input: { organizationConfig?: OrganizationConfig } = {},
-  ): void {
-    const previous = this.storage.getWorldRevision() ?? "none";
-    const worldRevision = stableId("world", reason, previous, this.stateFingerprintFor(instanceStates, input.organizationConfig ?? this.organizationConfig));
-    this.replaceWorldFromInstances(instanceStates, worldRevision, input);
+    options: { expectedWorldRevision?: string } = {},
+  ): Promise<void> {
+    const worldRevision = await this.storage.mutateWorld(
+      (snapshot) => {
+        const nextWorldRevision = this.nextWorldRevision(reason, snapshot, instanceStates, input.organizationConfig ?? this.organizationConfig);
+        return { replacement: this.buildWorldReplacement(instanceStates, nextWorldRevision, input), result: nextWorldRevision };
+      },
+      options,
+    );
+    this.observeWorldRevision(worldRevision);
   }
 
-  private replaceWorldFromInstances(
+  private async replaceWorldFromInstances(
     instanceStates: ScenarioInstanceState[],
     worldRevision: string,
     input: { organizationConfig?: OrganizationConfig } = {},
-  ): void {
-    const changes = assignLedgerSequences(
-      instanceStates.flatMap((state) => this.changesForInstanceState(state, worldRevision)),
-      1,
-    );
-    const sourceObjects = this.projectCurrentSourceObjects(changes);
-    this.storage.replaceWorld({
-      scenarioInstanceStates: instanceStates,
-      ...(input.organizationConfig ? { organizationConfig: input.organizationConfig } : {}),
-      worldRevision,
-      sourceChanges: changes,
-      sourceObjects,
-      datasetMetadata: this.buildDatasetMetadata(instanceStates, changes, sourceObjects, worldRevision),
+  ): Promise<void> {
+    await this.storage.replaceWorld(this.buildWorldReplacement(instanceStates, worldRevision, input));
+    this.observeWorldRevision(worldRevision);
+  }
+
+  private async commitInstanceMutation<T>(mutation: (snapshot: WorldSnapshot) => { instanceStates: ScenarioInstanceState[]; changedStates: ScenarioInstanceState[]; result: T }): Promise<T> {
+    const output = await this.storage.mutateWorld((snapshot) => {
+      const worldRevision = snapshot.worldRevision;
+      if (!worldRevision) throw new Error("Simulator world revision has not been initialized");
+      const { instanceStates, changedStates, result } = mutation(snapshot);
+      const replacement = this.buildAppendReplacement(snapshot, instanceStates, changedStates, worldRevision);
+      return { replacement, result: { value: result, worldRevision } };
     });
+    this.observeWorldRevision(output.worldRevision);
+    return output.value;
   }
 
-  private commitInstanceStateWithAppends(state: ScenarioInstanceState): void {
-    this.commitInstanceStatesWithAppends(replaceInstanceState(this.storage.listScenarioInstanceStates(), state), [state]);
-  }
-
-  private commitInstanceStatesWithAppends(instanceStates: ScenarioInstanceState[], changedStates: ScenarioInstanceState[]): void {
-    const worldRevision = this.requireWorldRevision();
-    const existingChanges = this.storage.listSourceChanges();
+  private buildAppendReplacement(
+    snapshot: WorldSnapshot,
+    instanceStates: ScenarioInstanceState[],
+    changedStates: ScenarioInstanceState[],
+    worldRevision: string,
+  ): WorldReplacement {
+    const existingChanges = snapshot.sourceChanges;
     const existingChangeIds = new Set(existingChanges.map((change) => change.changeId));
     const newChanges = changedStates
       .flatMap((state) => this.changesForInstanceState(state, worldRevision))
@@ -641,21 +721,21 @@ export class SourceSimulator {
       ...assignLedgerSequences(newChanges, nextSequence),
     ].sort(compareChanges);
     const sourceObjects = this.projectCurrentSourceObjects(sourceChanges);
-    this.storage.replaceWorld({
+    return {
       scenarioInstanceStates: instanceStates,
       worldRevision,
       sourceChanges,
       sourceObjects,
       datasetMetadata: this.buildDatasetMetadata(instanceStates, sourceChanges, sourceObjects, worldRevision),
-    });
+    };
   }
 
-  private visibleLedgerEntries(): SourceChangeLedgerEntry[] {
-    return this.storage.listSourceChanges().sort(compareChanges);
+  private async visibleLedgerEntries(): Promise<SourceChangeLedgerEntry[]> {
+    return (await this.storage.listSourceChanges()).sort(compareChanges);
   }
 
-  private currentSourceObjects(): SourceObjectProjection[] {
-    return this.projectCurrentSourceObjects(this.visibleLedgerEntries());
+  private async currentSourceObjects(): Promise<SourceObjectProjection[]> {
+    return this.projectCurrentSourceObjects(await this.visibleLedgerEntries());
   }
 
   private projectCurrentSourceObjects(changes: SourceChangeLedgerEntry[]): SourceObjectProjection[] {
@@ -672,6 +752,43 @@ export class SourceSimulator {
       currentChangeType: change.changeType,
       record: change.record,
     }));
+  }
+
+  private buildWorldReplacement(
+    instanceStates: ScenarioInstanceState[],
+    worldRevision: string,
+    input: { organizationConfig?: OrganizationConfig } = {},
+  ): WorldReplacement {
+    const changes = assignLedgerSequences(
+      instanceStates.flatMap((state) => this.changesForInstanceState(state, worldRevision)),
+      1,
+    );
+    const sourceObjects = this.projectCurrentSourceObjects(changes);
+    return {
+      scenarioInstanceStates: instanceStates,
+      ...(input.organizationConfig ? { organizationConfig: input.organizationConfig } : {}),
+      worldRevision,
+      sourceChanges: changes,
+      sourceObjects,
+      datasetMetadata: this.buildDatasetMetadata(instanceStates, changes, sourceObjects, worldRevision),
+    };
+  }
+
+  private nextWorldRevision(
+    reason: string,
+    snapshot: WorldSnapshot,
+    instanceStates: ScenarioInstanceState[],
+    organizationConfig: OrganizationConfig = this.organizationConfig,
+  ): string {
+    return stableId("world", reason, snapshot.worldRevision ?? "none", this.stateFingerprintFor(instanceStates, organizationConfig));
+  }
+
+  private observeWorldRevision(worldRevision: string | undefined): void {
+    if (worldRevision) this.knownWorldRevision = worldRevision;
+  }
+
+  private currentWorldMutationOptions(): { expectedWorldRevision?: string } {
+    return this.knownWorldRevision ? { expectedWorldRevision: this.knownWorldRevision } : {};
   }
 
   private changesForInstanceState(state: ScenarioInstanceState, worldRevision: string): SourceChangeLedgerEntry[] {
@@ -694,10 +811,10 @@ export class SourceSimulator {
   }
 
   private buildDatasetMetadata(
-    instanceStates: ScenarioInstanceState[] = this.states(),
-    changes: SourceChangeLedgerEntry[] = this.storage.listSourceChanges(),
-    objects: SourceObjectProjection[] = this.storage.listSourceObjects(),
-    worldRevision: string = this.requireWorldRevision(),
+    instanceStates: ScenarioInstanceState[],
+    changes: SourceChangeLedgerEntry[],
+    objects: SourceObjectProjection[],
+    worldRevision: string,
   ): DatasetMetadata {
     const firstState = instanceStates[0];
     const countsBySourceSystem = Object.fromEntries(sourceSystems.map((source) => [source, 0])) as DatasetMetadata["countsBySourceSystem"];
@@ -723,8 +840,8 @@ export class SourceSimulator {
     return scenario;
   }
 
-  private requireInstanceState(instanceId: string): ScenarioInstanceState {
-    const state = this.storage.getScenarioInstanceState(instanceId);
+  private async requireInstanceState(instanceId: string): Promise<ScenarioInstanceState> {
+    const state = await this.storage.getScenarioInstanceState(instanceId);
     if (!state) throw notFound(`Unknown scenario instance: ${instanceId}`);
     return state;
   }
@@ -745,10 +862,6 @@ export class SourceSimulator {
     const team = this.organization.teams.find((candidate) => candidate.id === teamId);
     if (!team) throw notFound(`Unknown team: ${teamId}`);
     return team;
-  }
-
-  private stateFingerprint(): string {
-    return this.stateFingerprintFor(this.states(), this.organization.config);
   }
 
   private stateFingerprintFor(instanceStates: ScenarioInstanceState[], organizationConfig: OrganizationConfig): string {
@@ -1054,7 +1167,7 @@ function decodeCursor(cursor: string): CursorPayload {
   try {
     return CursorPayloadSchema.parse(JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")));
   } catch {
-    throw badRequest("Invalid cursor");
+    throw badRequest("Invalid cursor", "cursor_error");
   }
 }
 
@@ -1110,6 +1223,12 @@ function logEntry(scenarioId: string, scenarioInstanceId: string, event: Scenari
 
 function defaultInstanceId(scenarioId: string): string {
   return `${scenarioId}-default`;
+}
+
+function requireInstanceStateFrom(snapshot: WorldSnapshot, instanceId: string): ScenarioInstanceState {
+  const state = snapshot.scenarioInstanceStates.find((candidate) => candidate.scenarioInstanceId === instanceId);
+  if (!state) throw notFound(`Unknown scenario instance: ${instanceId}`);
+  return state;
 }
 
 function instanceContextFromState(state: ScenarioInstanceState): ScenarioInstanceContext {
@@ -1223,19 +1342,20 @@ export class HttpError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    public readonly classification = "request_error",
   ) {
     super(message);
   }
 }
 
-export function badRequest(message: string): HttpError {
-  return new HttpError(400, message);
+export function badRequest(message: string, classification = "request_validation_error"): HttpError {
+  return new HttpError(400, message, classification);
 }
 
-export function forbidden(message: string): HttpError {
-  return new HttpError(403, message);
+export function forbidden(message: string, classification = "authorization_error"): HttpError {
+  return new HttpError(403, message, classification);
 }
 
-export function notFound(message: string): HttpError {
-  return new HttpError(404, message);
+export function notFound(message: string, classification = "not_found"): HttpError {
+  return new HttpError(404, message, classification);
 }

@@ -104,19 +104,25 @@ SQLite and Postgres persist:
 
 Memory storage is for tests or explicitly selected local ephemeral development. SQLite is for local development and CI-level local durability. Preview, production, and Vercel-like environments reject memory and SQLite and require Postgres through `DATABASE_URL`.
 
-The Postgres adapter preserves the synchronous storage interface by delegating database work to a worker-thread bridge backed by `pg.Pool`. This keeps the engine API stable while still using real Postgres transactions for world replacement. A future async storage interface could remove that bridge, but it is not required for Milestone 3 correctness.
+The storage interface is async. Memory and SQLite expose async wrappers for local/test use; Postgres uses `pg.Pool` directly with bounded query timeouts. World mutations are serialized through adapter-level locking: memory uses an in-process mutation queue, SQLite uses one database transaction, and Postgres uses one database transaction plus an advisory lock.
+
+Postgres migrations are versioned files recorded in `schema_migrations` with checksums. Runtime code never performs destructive Postgres resets. Tests and benchmarks use owned `sim_test_*` or `sim_benchmark_*` schemas.
 
 ## Observability
 
 Every request receives a request ID and sanitized telemetry record. Logs and metrics include operation, path, status, duration, connection ID when present, cursor version/position when present, world revision, and safe error classification. Credentials, stack traces, and database connection strings are not logged by the simulator.
 
-`/healthz` reports storage health, world revision, dataset metadata, organization summary, uptime, build version, and schema version. Admin-only metrics and request-inspection routes expose recent sanitized request data for connector debugging.
+`/healthz` is storage-independent liveness; `/readyz` reports storage health, world revision, dataset metadata, organization summary, uptime, build version, and schema version. Admin-only metrics and request-inspection routes expose recent sanitized request data for connector debugging.
 
 ## Failure Simulation
 
 Failure simulation is rule-based and deterministic. Rules can target operation, connection, source system, and every-Nth invocation. Supported modes include rate limits, timeouts, service outages, latency, partial pages, cursor corruption, auth failures, expired credentials, malformed payloads, permission changes, deletes, edits, late arrivals, duplicates, and stale objects.
 
 Failure controls are disabled by default and require admin authentication at runtime.
+
+## Rate Limits
+
+Real service rate limits are separate from failure simulation. They are keyed by authenticated admin identity or resolved connection ID and return safe `429` envelopes with `Retry-After`, correlation ID, and `rate_limit` classification.
 
 ## Public Vs Admin
 

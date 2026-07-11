@@ -37,7 +37,9 @@ pnpm run verify
 - `SIMULATOR_SQLITE_PATH`: SQLite file path for local durable state.
 - `SIMULATOR_ALLOW_EPHEMERAL_MEMORY`: must be `true` before local memory storage can be selected.
 - `DATABASE_URL`: Postgres connection string. Required in preview and production.
+- `SIMULATOR_BENCHMARK_DATABASE_URL`: separate Postgres connection string for benchmark runs. It must not equal `DATABASE_URL`.
 - `SIMULATOR_FAILURE_MODES`: optional JSON failure-mode configuration.
+- `SIMULATOR_RATE_LIMITS`: optional JSON real request-rate-limit configuration.
 - `SIMULATOR_STRUCTURED_LOGS`: `true` emits sanitized JSON request logs.
 - `SIMULATOR_POSTGRES_TEST_URL`: CI/local test-only Postgres URL for parity tests.
 
@@ -73,7 +75,21 @@ Postgres is implemented and CI-proven for the simulator storage contract. Produc
 
 ## CI
 
-GitHub Actions runs `pnpm install --frozen-lockfile` and `pnpm run verify` with a Postgres 16 service. The workflow sets `SIMULATOR_POSTGRES_TEST_URL`, so Postgres parity and rollback tests run in CI.
+GitHub Actions runs `pnpm install --frozen-lockfile` and `pnpm run verify` with a Postgres 16 service. The workflow sets `SIMULATOR_POSTGRES_TEST_URL`, so Postgres parity and rollback tests run in CI. It also builds the Docker image and starts the container against the CI Postgres service, then checks `/readyz`.
+
+## Container
+
+The included `Dockerfile` builds the TypeScript service, installs production dependencies with frozen pnpm lockfile semantics, and runs as the non-root `node` user.
+
+Required production container environment:
+
+- `SIMULATOR_RUNTIME_ENV=production`
+- `DATABASE_URL`
+- `SIMULATOR_ADMIN_API_KEY`
+- `SIMULATOR_CONNECTION_CREDENTIALS`
+- `PORT` when the platform does not default to `3000`
+
+The container `HEALTHCHECK` calls `/healthz`. Deployment readiness checks should call `/readyz`.
 
 ## Smoke Test
 
@@ -81,9 +97,10 @@ After deployment:
 
 ```bash
 curl "$BASE_URL/healthz"
+curl "$BASE_URL/readyz"
 curl -H "x-admin-api-key: $SIMULATOR_ADMIN_API_KEY" "$BASE_URL/v1/admin/metrics"
 curl -H "x-admin-api-key: $SIMULATOR_ADMIN_API_KEY" "$BASE_URL/v1/admin/storage"
 curl -H "x-connection-secret: $PRODUCT_MANAGER_SECRET" "$BASE_URL/v1/connections/conn-product-manager/records?limit=5"
 ```
 
-`/healthz` should report `storage.kind: postgres` in preview and production.
+`/readyz` should report `storage.kind: postgres` in preview and production.

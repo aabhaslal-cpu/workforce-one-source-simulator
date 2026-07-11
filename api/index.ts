@@ -1,5 +1,5 @@
 import { createApp } from "../src/app.js";
 
-const app = createApp();
+const app = await createApp();
 
 export default app.fetch;

@@ -54,7 +54,7 @@ The connector test kit demonstrates:
 
 ## Operations
 
-Workforce One integration environments should poll `/healthz` for deployment health and use admin metrics/request inspection during connector development. Production Workforce One code should consume only manifest, records, and simulator-owned source deep links.
+Workforce One integration environments should poll `/healthz` for liveness and `/readyz` for deployment readiness and use admin metrics/request inspection during connector development. Production Workforce One code should consume only manifest, records, and simulator-owned source deep links.
 
 ## Do Not Do
 

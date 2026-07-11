@@ -13,14 +13,16 @@ Milestone 3: Production Hardening and Workforce One Integration Readiness.
 
 ## Built In Milestone 3
 
-- Production Postgres storage adapter behind the existing storage interface.
+- Production Postgres storage adapter behind the async storage interface.
 - Postgres support for scenario states, scenario instance states, organization config, world revision, source-change ledger, source-object projection, dataset metadata, snapshots, restart persistence, and transaction-backed world replacement.
 - SQLite/Postgres parity tests and CI Postgres service.
 - Structured request telemetry with sanitized logs, request IDs, connection IDs, cursor position, world revision, operation, duration, status, and safe error classification.
-- Rich `/healthz` with storage health, world revision, dataset metadata, organization summary, uptime, build version, and schema version.
+- `/healthz` liveness and `/readyz` readiness with storage health, world revision, dataset metadata, organization summary, uptime, build version, and schema version.
 - Admin metrics, request inspector, storage inspector, performance benchmark, failure-mode configuration, and connector test-kit endpoints.
+- Real request rate limiting keyed by authenticated admin identity or resolved connection ID.
 - Deterministic failure simulation for connector testing. Failures are configured rules, never random.
 - Connector lifecycle test kit covering initial sync, incremental sync, late arrivals, updates/deletes, destructive reset, stale cursor handling, new cursor acquisition, permission differences, and connection regeneration behavior.
+- Container build and CI readiness smoke test against Postgres.
 - Internal operator console controls for metrics, storage, ledger, snapshots, failure toggles, benchmarks, and connector kit.
 - Updated OpenAPI, migrations, examples, and docs for production deployment and integration.
 
@@ -36,17 +38,12 @@ The benchmark harness creates one extra manual-trigger instance during each run,
 
 ## Latest Local Verification
 
-- `pnpm run typecheck`: passed.
-- `pnpm run test`: passed, 53 tests total with 51 local passes and 2 Postgres tests skipped without `SIMULATOR_POSTGRES_TEST_URL`.
+- `pnpm install --frozen-lockfile`: passed.
+- `pnpm run verify`: passed.
+- `git diff --check`: passed.
+- Vitest count: 57 tests total with 55 local passes and 2 Postgres tests skipped without `SIMULATOR_POSTGRES_TEST_URL`.
 
-Before final reporting, run:
-
-```bash
-pnpm install --frozen-lockfile
-pnpm run verify
-```
-
-GitHub Actions provides Postgres and should run all 53 tests.
+GitHub Actions provides Postgres and should run all 57 tests.
 
 ## Known Limitations
 

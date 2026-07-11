@@ -85,7 +85,7 @@ These reviews were completed before runtime implementation. Their purpose is to 
 ### Implementation Direction
 
 - Implement Postgres storage with migrations, transaction-backed `replaceWorld`, restart persistence, and parity tests against SQLite.
-- Improve `/healthz` with uptime, storage health, world revision, dataset metadata, organization summary, build/schema version, and storage kind.
+- Improve health endpoints with uptime, storage health, world revision, dataset metadata, organization summary, build/schema version, and storage kind. Final implementation splits this into storage-independent `/healthz` liveness and storage-backed `/readyz` readiness.
 - Add `/v1/admin/metrics`, `/v1/admin/performance/benchmark`, failure-mode config APIs, and a connector-kit endpoint/report.
 - Add benchmark docs with local measured numbers and conditional Postgres results when a test database URL is available.
 

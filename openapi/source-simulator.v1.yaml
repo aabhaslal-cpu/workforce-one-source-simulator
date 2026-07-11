@@ -7,9 +7,15 @@ servers:
 paths:
   /healthz:
     get:
-      summary: Health check
+      summary: Liveness check that does not depend on storage
       responses:
         '200': { description: OK }
+  /readyz:
+    get:
+      summary: Readiness check with storage health, world revision, dataset metadata, and organization summary
+      responses:
+        '200': { description: Ready }
+        '503': { description: Storage or world state is not ready }
   /v1/catalog:
     get:
       summary: Safe public catalog metadata only
@@ -117,6 +123,7 @@ paths:
         '200': { description: Manifest }
         '401': { description: Missing, unknown, revoked, or wrong credential type }
         '403': { description: Credential is valid for a different connection ID }
+        '429': { description: Request rate limited for this authenticated connection }
   /v1/connections/{connectionId}/records:
     get:
       summary: Cursor-paginated source feed for the authenticated connection only
@@ -146,6 +153,7 @@ paths:
         '400': { description: Malformed pagination or cursor }
         '401': { description: Missing, unknown, revoked, or wrong credential type }
         '403': { description: Credential is valid for a different connection ID }
+        '429': { description: Request rate limited for this authenticated connection }
   /sim/{sourceSystem}/{sourceId}:
     get:
       summary: Simulator-owned readable source object view
@@ -165,6 +173,7 @@ paths:
         '401': { description: Missing, unknown, revoked, or wrong credential type }
         '403': { description: Source object is not visible to this connection }
         '404': { description: Unknown source object }
+        '429': { description: Request rate limited for this authenticated connection }
   /v1/admin/organization/generate:
     post:
       summary: Generate organization with optional seed/config overrides
@@ -512,12 +521,12 @@ paths:
         '200': { description: Empty failure mode configuration }
   /v1/admin/performance/benchmark:
     post:
-      summary: Run deterministic small/medium/large benchmark operations against memory, SQLite, or Postgres storage
+      summary: Run deterministic small/medium/large benchmark operations against memory, SQLite, or an isolated benchmark Postgres schema
       security:
         - adminKey: []
       responses:
         '200': { description: Benchmark report }
-        '400': { description: Invalid benchmark request or missing DATABASE_URL for Postgres }
+        '400': { description: Invalid benchmark request, missing SIMULATOR_BENCHMARK_DATABASE_URL for Postgres, or benchmark URL matches DATABASE_URL }
   /v1/admin/connector-test-kit/run:
     post:
       summary: Run reference connector lifecycle test kit

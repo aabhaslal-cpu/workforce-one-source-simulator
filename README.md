@@ -28,10 +28,10 @@ Built:
 - Small, medium, and large deterministic datasets.
 - SQLite local persistence for scenario instance states, legacy scenario states, organization config, world revision, source-change ledger, current source-object projection, dataset metadata, and snapshots.
 - Production Postgres persistence for the same durable state, with transaction-backed world replacement and CI parity tests.
-- Structured request telemetry, sanitized error envelopes with correlation IDs, operational metrics, richer `/healthz`, storage inspection, and request inspection.
+- Structured request telemetry, sanitized error envelopes with correlation IDs, operational metrics, `/healthz` liveness, `/readyz` readiness, storage inspection, and request inspection.
 - Deterministic failure simulation for connector development: rate limits, timeouts, 500/503, latency, partial pages, cursor corruption, auth failures, expired credentials, outages, malformed payloads, permission changes, deletes, edits, late arrivals, duplicate objects, and stale objects.
 - Connector test kit covering initial sync, incremental sync, late arrivals, updates/deletes, world reset, stale cursor rejection, new cursor acquisition, permission differences, and connection-regeneration behavior.
-- Built-in deterministic benchmark harness for small, medium, and large datasets across memory, SQLite, and Postgres when `DATABASE_URL` is configured.
+- Built-in deterministic benchmark harness for small, medium, and large datasets across memory, SQLite, and Postgres when a separate `SIMULATOR_BENCHMARK_DATABASE_URL` is configured.
 - Simulator-owned source deep links at `/sim/{sourceSystem}/{sourceId}` with the same connection visibility checks as feeds.
 - Internal operator console at `/console` with organization, scenario, ledger, storage, snapshot, metrics, failure-mode, benchmark, and connector-kit controls.
 
@@ -84,7 +84,7 @@ pnpm install --frozen-lockfile
 pnpm run verify
 ```
 
-The Milestone 3 suite has 53 Vitest tests. Local runs without `SIMULATOR_POSTGRES_TEST_URL` execute 51 tests and skip the 2 Postgres parity tests. GitHub Actions provides Postgres and runs the full suite.
+The Milestone 3 suite has 57 Vitest tests. Local runs without `SIMULATOR_POSTGRES_TEST_URL` execute 55 tests and skip the 2 Postgres parity tests. GitHub Actions provides Postgres and runs the full suite plus a container readiness smoke test.
 
 ## Deployment Honesty
 

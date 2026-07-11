@@ -1,9 +1,9 @@
+import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { readFileSync, unlinkSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { Worker } from "node:worker_threads";
+import { dirname } from "node:path";
+import pg, { type Pool as PgPool, type PoolClient, type QueryResult } from "pg";
 import type {
   DatasetMetadata,
   OrganizationConfig,
@@ -33,33 +33,37 @@ type SQLiteModule = {
 };
 
 const require = createRequire(import.meta.url);
+const { Pool } = pg;
+const POSTGRES_WORLD_LOCK_ID = "71452711301011";
+const POSTGRES_MIGRATIONS = [{ version: "001_initial", path: "../migrations/postgres_001_initial.sql" }] as const;
 
 export interface SimulatorStorage {
   readonly kind: StorageKind;
-  health(): StorageHealth;
-  listScenarioStates(): ScenarioState[];
-  getScenarioState(scenarioId: string): ScenarioState | undefined;
-  saveScenarioState(state: ScenarioState): void;
-  replaceScenarioStates(states: ScenarioState[]): void;
-  listScenarioInstanceStates(): ScenarioInstanceState[];
-  getScenarioInstanceState(scenarioInstanceId: string): ScenarioInstanceState | undefined;
-  saveScenarioInstanceState(state: ScenarioInstanceState): void;
-  replaceScenarioInstanceStates(states: ScenarioInstanceState[]): void;
-  getOrganizationConfig(): OrganizationConfig | undefined;
-  saveOrganizationConfig(config: OrganizationConfig): void;
-  getDatasetMetadata(): DatasetMetadata | undefined;
-  saveDatasetMetadata(metadata: DatasetMetadata): void;
-  getWorldRevision(): string | undefined;
-  saveWorldRevision(worldRevision: string): void;
-  listSourceChanges(): SourceChangeLedgerEntry[];
-  replaceSourceChanges(changes: SourceChangeLedgerEntry[]): void;
-  listSourceObjects(): SourceObjectProjection[];
-  replaceSourceObjects(objects: SourceObjectProjection[]): void;
-  createSnapshot(snapshot: Snapshot): void;
-  getSnapshot(snapshotId: string): Snapshot | undefined;
-  listSnapshots(): Snapshot[];
-  replaceWorld(replacement: WorldReplacement): void;
-  close?(): void;
+  health(): Promise<StorageHealth>;
+  listScenarioStates(): Promise<ScenarioState[]>;
+  getScenarioState(scenarioId: string): Promise<ScenarioState | undefined>;
+  saveScenarioState(state: ScenarioState): Promise<void>;
+  replaceScenarioStates(states: ScenarioState[]): Promise<void>;
+  listScenarioInstanceStates(): Promise<ScenarioInstanceState[]>;
+  getScenarioInstanceState(scenarioInstanceId: string): Promise<ScenarioInstanceState | undefined>;
+  saveScenarioInstanceState(state: ScenarioInstanceState): Promise<void>;
+  replaceScenarioInstanceStates(states: ScenarioInstanceState[]): Promise<void>;
+  getOrganizationConfig(): Promise<OrganizationConfig | undefined>;
+  saveOrganizationConfig(config: OrganizationConfig): Promise<void>;
+  getDatasetMetadata(): Promise<DatasetMetadata | undefined>;
+  saveDatasetMetadata(metadata: DatasetMetadata): Promise<void>;
+  getWorldRevision(): Promise<string | undefined>;
+  saveWorldRevision(worldRevision: string): Promise<void>;
+  listSourceChanges(): Promise<SourceChangeLedgerEntry[]>;
+  replaceSourceChanges(changes: SourceChangeLedgerEntry[]): Promise<void>;
+  listSourceObjects(): Promise<SourceObjectProjection[]>;
+  replaceSourceObjects(objects: SourceObjectProjection[]): Promise<void>;
+  createSnapshot(snapshot: Snapshot): Promise<void>;
+  getSnapshot(snapshotId: string): Promise<Snapshot | undefined>;
+  listSnapshots(): Promise<Snapshot[]>;
+  replaceWorld(replacement: WorldReplacement, options?: WorldMutationOptions): Promise<void>;
+  mutateWorld<T>(mutation: WorldMutation<T>, options?: WorldMutationOptions): Promise<T>;
+  close?(): Promise<void>;
 }
 
 export interface WorldReplacement {
@@ -72,10 +76,43 @@ export interface WorldReplacement {
   datasetMetadata: DatasetMetadata;
 }
 
+export interface WorldSnapshot {
+  scenarioStates: ScenarioState[];
+  scenarioInstanceStates: ScenarioInstanceState[];
+  organizationConfig?: OrganizationConfig;
+  worldRevision?: string;
+  sourceChanges: SourceChangeLedgerEntry[];
+  sourceObjects: SourceObjectProjection[];
+  datasetMetadata?: DatasetMetadata;
+}
+
+export interface WorldMutationResult<T> {
+  replacement: WorldReplacement;
+  result: T;
+}
+
+export type WorldMutation<T> = (snapshot: WorldSnapshot) => WorldMutationResult<T> | Promise<WorldMutationResult<T>>;
+
+export interface WorldMutationOptions {
+  expectedWorldRevision?: string;
+}
+
 export interface StorageHealth {
   ok: boolean;
   kind: StorageKind;
   message: string;
+}
+
+export class StorageError extends Error {
+  constructor(message = "Storage operation failed") {
+    super(message);
+  }
+}
+
+export class WorldConflictError extends Error {
+  constructor(message = "Simulator world changed before the operation could commit") {
+    super(message);
+  }
 }
 
 export class MemorySimulatorStorage implements SimulatorStorage {
@@ -88,127 +125,155 @@ export class MemorySimulatorStorage implements SimulatorStorage {
   private organizationConfig: OrganizationConfig | undefined;
   private datasetMetadata: DatasetMetadata | undefined;
   private worldRevision: string | undefined;
+  private mutationQueue = Promise.resolve();
 
-  health(): StorageHealth {
+  async health(): Promise<StorageHealth> {
     return { ok: true, kind: this.kind, message: "memory storage available" };
   }
 
-  listScenarioStates(): ScenarioState[] {
+  async listScenarioStates(): Promise<ScenarioState[]> {
     return [...this.states.values()].map(cloneState);
   }
 
-  getScenarioState(scenarioId: string): ScenarioState | undefined {
+  async getScenarioState(scenarioId: string): Promise<ScenarioState | undefined> {
     const state = this.states.get(scenarioId);
     return state ? cloneState(state) : undefined;
   }
 
-  saveScenarioState(state: ScenarioState): void {
+  async saveScenarioState(state: ScenarioState): Promise<void> {
     this.states.set(state.scenarioId, cloneState(state));
   }
 
-  replaceScenarioStates(states: ScenarioState[]): void {
+  async replaceScenarioStates(states: ScenarioState[]): Promise<void> {
     this.states.clear();
-    for (const state of states) {
-      this.saveScenarioState(state);
-    }
+    for (const state of states) this.states.set(state.scenarioId, cloneState(state));
   }
 
-  listScenarioInstanceStates(): ScenarioInstanceState[] {
+  async listScenarioInstanceStates(): Promise<ScenarioInstanceState[]> {
     return [...this.instanceStates.values()].map(cloneInstanceState);
   }
 
-  getScenarioInstanceState(scenarioInstanceId: string): ScenarioInstanceState | undefined {
+  async getScenarioInstanceState(scenarioInstanceId: string): Promise<ScenarioInstanceState | undefined> {
     const state = this.instanceStates.get(scenarioInstanceId);
     return state ? cloneInstanceState(state) : undefined;
   }
 
-  saveScenarioInstanceState(state: ScenarioInstanceState): void {
+  async saveScenarioInstanceState(state: ScenarioInstanceState): Promise<void> {
     this.instanceStates.set(state.scenarioInstanceId, cloneInstanceState(state));
   }
 
-  replaceScenarioInstanceStates(states: ScenarioInstanceState[]): void {
+  async replaceScenarioInstanceStates(states: ScenarioInstanceState[]): Promise<void> {
     this.instanceStates.clear();
-    for (const state of states) {
-      this.saveScenarioInstanceState(state);
-    }
+    for (const state of states) this.instanceStates.set(state.scenarioInstanceId, cloneInstanceState(state));
   }
 
-  getOrganizationConfig(): OrganizationConfig | undefined {
+  async getOrganizationConfig(): Promise<OrganizationConfig | undefined> {
     return this.organizationConfig ? cloneJson(this.organizationConfig) : undefined;
   }
 
-  saveOrganizationConfig(config: OrganizationConfig): void {
+  async saveOrganizationConfig(config: OrganizationConfig): Promise<void> {
     this.organizationConfig = cloneJson(config);
   }
 
-  getDatasetMetadata(): DatasetMetadata | undefined {
+  async getDatasetMetadata(): Promise<DatasetMetadata | undefined> {
     return this.datasetMetadata ? cloneJson(this.datasetMetadata) : undefined;
   }
 
-  saveDatasetMetadata(metadata: DatasetMetadata): void {
+  async saveDatasetMetadata(metadata: DatasetMetadata): Promise<void> {
     this.datasetMetadata = cloneJson(metadata);
   }
 
-  getWorldRevision(): string | undefined {
+  async getWorldRevision(): Promise<string | undefined> {
     return this.worldRevision;
   }
 
-  saveWorldRevision(worldRevision: string): void {
+  async saveWorldRevision(worldRevision: string): Promise<void> {
     this.worldRevision = worldRevision;
   }
 
-  listSourceChanges(): SourceChangeLedgerEntry[] {
+  async listSourceChanges(): Promise<SourceChangeLedgerEntry[]> {
     return this.sourceChanges.map((change) => cloneJson(change));
   }
 
-  replaceSourceChanges(changes: SourceChangeLedgerEntry[]): void {
+  async replaceSourceChanges(changes: SourceChangeLedgerEntry[]): Promise<void> {
     this.sourceChanges.splice(0, this.sourceChanges.length, ...changes.map((change) => cloneJson(change)));
   }
 
-  listSourceObjects(): SourceObjectProjection[] {
+  async listSourceObjects(): Promise<SourceObjectProjection[]> {
     return [...this.sourceObjects.values()].map((object) => cloneJson(object));
   }
 
-  replaceSourceObjects(objects: SourceObjectProjection[]): void {
+  async replaceSourceObjects(objects: SourceObjectProjection[]): Promise<void> {
     this.sourceObjects.clear();
-    for (const object of objects) {
-      this.sourceObjects.set(object.sourceKey, cloneJson(object));
-    }
+    for (const object of objects) this.sourceObjects.set(object.sourceKey, cloneJson(object));
   }
 
-  createSnapshot(snapshot: Snapshot): void {
+  async createSnapshot(snapshot: Snapshot): Promise<void> {
     this.snapshots.set(snapshot.snapshotId, cloneSnapshot(snapshot));
   }
 
-  getSnapshot(snapshotId: string): Snapshot | undefined {
+  async getSnapshot(snapshotId: string): Promise<Snapshot | undefined> {
     const snapshot = this.snapshots.get(snapshotId);
     return snapshot ? cloneSnapshot(snapshot) : undefined;
   }
 
-  listSnapshots(): Snapshot[] {
+  async listSnapshots(): Promise<Snapshot[]> {
     return [...this.snapshots.values()].map(cloneSnapshot);
   }
 
-  replaceWorld(replacement: WorldReplacement): void {
-    const states = replacement.scenarioStates?.map(cloneState);
-    const instanceStates = replacement.scenarioInstanceStates.map(cloneInstanceState);
-    const organizationConfig = replacement.organizationConfig ? cloneJson(replacement.organizationConfig) : undefined;
-    const sourceChanges = replacement.sourceChanges.map((change) => cloneJson(change));
-    const sourceObjects = replacement.sourceObjects.map((object) => cloneJson(object));
-    const datasetMetadata = cloneJson(replacement.datasetMetadata);
+  async replaceWorld(replacement: WorldReplacement, options: WorldMutationOptions = {}): Promise<void> {
+    await this.mutateWorld(() => ({ replacement, result: undefined }), options);
+  }
 
-    if (states) {
+  async mutateWorld<T>(mutation: WorldMutation<T>, options: WorldMutationOptions = {}): Promise<T> {
+    return this.withMutationLock(async () => {
+      const snapshot = this.worldSnapshot();
+      if (options.expectedWorldRevision && snapshot.worldRevision !== options.expectedWorldRevision) throw new WorldConflictError();
+      const output = await mutation(cloneJson(snapshot));
+      this.applyWorldReplacement(output.replacement);
+      return output.result;
+    });
+  }
+
+  private async withMutationLock<T>(callback: () => Promise<T>): Promise<T> {
+    const previous = this.mutationQueue;
+    let release!: () => void;
+    this.mutationQueue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await callback();
+    } finally {
+      release();
+    }
+  }
+
+  private worldSnapshot(): WorldSnapshot {
+    return {
+      scenarioStates: [...this.states.values()].map(cloneState),
+      scenarioInstanceStates: [...this.instanceStates.values()].map(cloneInstanceState),
+      ...(this.organizationConfig ? { organizationConfig: cloneJson(this.organizationConfig) } : {}),
+      ...(this.worldRevision ? { worldRevision: this.worldRevision } : {}),
+      sourceChanges: this.sourceChanges.map((change) => cloneJson(change)),
+      sourceObjects: [...this.sourceObjects.values()].map((object) => cloneJson(object)),
+      ...(this.datasetMetadata ? { datasetMetadata: cloneJson(this.datasetMetadata) } : {}),
+    };
+  }
+
+  private applyWorldReplacement(replacement: WorldReplacement): void {
+    if (replacement.scenarioStates) {
       this.states.clear();
-      for (const state of states) this.states.set(state.scenarioId, state);
+      for (const state of replacement.scenarioStates) this.states.set(state.scenarioId, cloneState(state));
     }
     this.instanceStates.clear();
-    for (const state of instanceStates) this.instanceStates.set(state.scenarioInstanceId, state);
-    if (organizationConfig) this.organizationConfig = organizationConfig;
+    for (const state of replacement.scenarioInstanceStates) this.instanceStates.set(state.scenarioInstanceId, cloneInstanceState(state));
+    if (replacement.organizationConfig) this.organizationConfig = cloneJson(replacement.organizationConfig);
     this.worldRevision = replacement.worldRevision;
-    this.sourceChanges.splice(0, this.sourceChanges.length, ...sourceChanges);
+    this.sourceChanges.splice(0, this.sourceChanges.length, ...replacement.sourceChanges.map((change) => cloneJson(change)));
     this.sourceObjects.clear();
-    for (const object of sourceObjects) this.sourceObjects.set(object.sourceKey, object);
-    this.datasetMetadata = datasetMetadata;
+    for (const object of replacement.sourceObjects) this.sourceObjects.set(object.sourceKey, cloneJson(object));
+    this.datasetMetadata = cloneJson(replacement.datasetMetadata);
   }
 }
 
@@ -218,54 +283,22 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
   private failNextWorldReplacement = false;
 
   constructor(filename: string) {
-    if (!filename.trim()) {
-      throw new Error("SQLite storage requires a database path");
-    }
-    if (filename !== ":memory:") {
-      mkdirSync(dirname(filename), { recursive: true });
-    }
+    if (!filename.trim()) throw new Error("SQLite storage requires a database path");
+    if (filename !== ":memory:") mkdirSync(dirname(filename), { recursive: true });
     this.database = openSQLiteDatabase(filename);
     this.database.exec(`
-      CREATE TABLE IF NOT EXISTS scenario_states (
-        scenario_id TEXT PRIMARY KEY,
-        state_json TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS scenario_instance_states (
-        scenario_instance_id TEXT PRIMARY KEY,
-        scenario_pack_id TEXT NOT NULL,
-        state_json TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS organization_config (
-        id TEXT PRIMARY KEY CHECK (id = 'singleton'),
-        config_json TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS snapshots (
-        snapshot_id TEXT PRIMARY KEY,
-        created_at TEXT NOT NULL,
-        snapshot_json TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS world_state (
-        id TEXT PRIMARY KEY CHECK (id = 'singleton'),
-        world_revision TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS dataset_metadata (
-        id TEXT PRIMARY KEY CHECK (id = 'singleton'),
-        metadata_json TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS source_change_ledger (
-        ledger_sequence INTEGER PRIMARY KEY,
-        world_revision TEXT NOT NULL,
-        change_json TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS source_objects (
-        source_key TEXT PRIMARY KEY,
-        world_revision TEXT NOT NULL,
-        object_json TEXT NOT NULL
-      );
+      CREATE TABLE IF NOT EXISTS scenario_states (scenario_id TEXT PRIMARY KEY, state_json TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS scenario_instance_states (scenario_instance_id TEXT PRIMARY KEY, scenario_pack_id TEXT NOT NULL, state_json TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS organization_config (id TEXT PRIMARY KEY CHECK (id = 'singleton'), config_json TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS snapshots (snapshot_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, snapshot_json TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS world_state (id TEXT PRIMARY KEY CHECK (id = 'singleton'), world_revision TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS dataset_metadata (id TEXT PRIMARY KEY CHECK (id = 'singleton'), metadata_json TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS source_change_ledger (ledger_sequence INTEGER PRIMARY KEY, world_revision TEXT NOT NULL, change_json TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS source_objects (source_key TEXT PRIMARY KEY, world_revision TEXT NOT NULL, object_json TEXT NOT NULL);
     `);
   }
 
-  health(): StorageHealth {
+  async health(): Promise<StorageHealth> {
     try {
       this.database.prepare("SELECT 1").get();
       return { ok: true, kind: this.kind, message: "sqlite storage available" };
@@ -274,19 +307,18 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
     }
   }
 
-  listScenarioStates(): ScenarioState[] {
-    const rows = this.database.prepare("SELECT state_json FROM scenario_states ORDER BY scenario_id").all() as Array<{ state_json: string }>;
-    return rows.map((row) => parseJson<ScenarioState>(row.state_json));
+  async listScenarioStates(): Promise<ScenarioState[]> {
+    return this.readScenarioStates();
   }
 
-  getScenarioState(scenarioId: string): ScenarioState | undefined {
+  async getScenarioState(scenarioId: string): Promise<ScenarioState | undefined> {
     const row = this.database.prepare("SELECT state_json FROM scenario_states WHERE scenario_id = ?").get(scenarioId) as
       | { state_json: string }
       | undefined;
     return row ? parseJson<ScenarioState>(row.state_json) : undefined;
   }
 
-  saveScenarioState(state: ScenarioState): void {
+  async saveScenarioState(state: ScenarioState): Promise<void> {
     this.database
       .prepare(
         `INSERT INTO scenario_states (scenario_id, state_json)
@@ -296,14 +328,10 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
       .run(state.scenarioId, JSON.stringify(state));
   }
 
-  replaceScenarioStates(states: ScenarioState[]): void {
+  async replaceScenarioStates(states: ScenarioState[]): Promise<void> {
     this.database.exec("BEGIN");
     try {
-      this.database.prepare("DELETE FROM scenario_states").run();
-      const statement = this.database.prepare("INSERT INTO scenario_states (scenario_id, state_json) VALUES (?, ?)");
-      for (const state of states) {
-        statement.run(state.scenarioId, JSON.stringify(state));
-      }
+      this.writeScenarioStates(states);
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -311,21 +339,18 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
     }
   }
 
-  listScenarioInstanceStates(): ScenarioInstanceState[] {
-    const rows = this.database.prepare("SELECT state_json FROM scenario_instance_states ORDER BY scenario_instance_id").all() as Array<{
-      state_json: string;
-    }>;
-    return rows.map((row) => parseJson<ScenarioInstanceState>(row.state_json));
+  async listScenarioInstanceStates(): Promise<ScenarioInstanceState[]> {
+    return this.readScenarioInstanceStates();
   }
 
-  getScenarioInstanceState(scenarioInstanceId: string): ScenarioInstanceState | undefined {
+  async getScenarioInstanceState(scenarioInstanceId: string): Promise<ScenarioInstanceState | undefined> {
     const row = this.database.prepare("SELECT state_json FROM scenario_instance_states WHERE scenario_instance_id = ?").get(scenarioInstanceId) as
       | { state_json: string }
       | undefined;
     return row ? parseJson<ScenarioInstanceState>(row.state_json) : undefined;
   }
 
-  saveScenarioInstanceState(state: ScenarioInstanceState): void {
+  async saveScenarioInstanceState(state: ScenarioInstanceState): Promise<void> {
     this.database
       .prepare(
         `INSERT INTO scenario_instance_states (scenario_instance_id, scenario_pack_id, state_json)
@@ -335,16 +360,10 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
       .run(state.scenarioInstanceId, state.scenarioPackId, JSON.stringify(state));
   }
 
-  replaceScenarioInstanceStates(states: ScenarioInstanceState[]): void {
+  async replaceScenarioInstanceStates(states: ScenarioInstanceState[]): Promise<void> {
     this.database.exec("BEGIN");
     try {
-      this.database.prepare("DELETE FROM scenario_instance_states").run();
-      const statement = this.database.prepare(
-        "INSERT INTO scenario_instance_states (scenario_instance_id, scenario_pack_id, state_json) VALUES (?, ?, ?)",
-      );
-      for (const state of states) {
-        statement.run(state.scenarioInstanceId, state.scenarioPackId, JSON.stringify(state));
-      }
+      this.writeScenarioInstanceStates(states);
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -352,14 +371,11 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
     }
   }
 
-  getOrganizationConfig(): OrganizationConfig | undefined {
-    const row = this.database.prepare("SELECT config_json FROM organization_config WHERE id = 'singleton'").get() as
-      | { config_json: string }
-      | undefined;
-    return row ? parseJson<OrganizationConfig>(row.config_json) : undefined;
+  async getOrganizationConfig(): Promise<OrganizationConfig | undefined> {
+    return this.readOrganizationConfig();
   }
 
-  saveOrganizationConfig(config: OrganizationConfig): void {
+  async saveOrganizationConfig(config: OrganizationConfig): Promise<void> {
     this.database
       .prepare(
         `INSERT INTO organization_config (id, config_json)
@@ -369,14 +385,11 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
       .run(JSON.stringify(config));
   }
 
-  getDatasetMetadata(): DatasetMetadata | undefined {
-    const row = this.database.prepare("SELECT metadata_json FROM dataset_metadata WHERE id = 'singleton'").get() as
-      | { metadata_json: string }
-      | undefined;
-    return row ? parseJson<DatasetMetadata>(row.metadata_json) : undefined;
+  async getDatasetMetadata(): Promise<DatasetMetadata | undefined> {
+    return this.readDatasetMetadata();
   }
 
-  saveDatasetMetadata(metadata: DatasetMetadata): void {
+  async saveDatasetMetadata(metadata: DatasetMetadata): Promise<void> {
     this.database
       .prepare(
         `INSERT INTO dataset_metadata (id, metadata_json)
@@ -386,14 +399,11 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
       .run(JSON.stringify(metadata));
   }
 
-  getWorldRevision(): string | undefined {
-    const row = this.database.prepare("SELECT world_revision FROM world_state WHERE id = 'singleton'").get() as
-      | { world_revision: string }
-      | undefined;
-    return row?.world_revision;
+  async getWorldRevision(): Promise<string | undefined> {
+    return this.readWorldRevision();
   }
 
-  saveWorldRevision(worldRevision: string): void {
+  async saveWorldRevision(worldRevision: string): Promise<void> {
     this.database
       .prepare(
         `INSERT INTO world_state (id, world_revision)
@@ -403,23 +413,14 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
       .run(worldRevision);
   }
 
-  listSourceChanges(): SourceChangeLedgerEntry[] {
-    const rows = this.database.prepare("SELECT change_json FROM source_change_ledger ORDER BY ledger_sequence").all() as Array<{
-      change_json: string;
-    }>;
-    return rows.map((row) => parseJson<SourceChangeLedgerEntry>(row.change_json));
+  async listSourceChanges(): Promise<SourceChangeLedgerEntry[]> {
+    return this.readSourceChanges();
   }
 
-  replaceSourceChanges(changes: SourceChangeLedgerEntry[]): void {
+  async replaceSourceChanges(changes: SourceChangeLedgerEntry[]): Promise<void> {
     this.database.exec("BEGIN");
     try {
-      this.database.prepare("DELETE FROM source_change_ledger").run();
-      const statement = this.database.prepare(
-        "INSERT INTO source_change_ledger (ledger_sequence, world_revision, change_json) VALUES (?, ?, ?)",
-      );
-      for (const change of changes) {
-        statement.run(change.ledgerSequence, change.worldRevision, JSON.stringify(change));
-      }
+      this.writeSourceChanges(changes);
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -427,19 +428,14 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
     }
   }
 
-  listSourceObjects(): SourceObjectProjection[] {
-    const rows = this.database.prepare("SELECT object_json FROM source_objects ORDER BY source_key").all() as Array<{ object_json: string }>;
-    return rows.map((row) => parseJson<SourceObjectProjection>(row.object_json));
+  async listSourceObjects(): Promise<SourceObjectProjection[]> {
+    return this.readSourceObjects();
   }
 
-  replaceSourceObjects(objects: SourceObjectProjection[]): void {
+  async replaceSourceObjects(objects: SourceObjectProjection[]): Promise<void> {
     this.database.exec("BEGIN");
     try {
-      this.database.prepare("DELETE FROM source_objects").run();
-      const statement = this.database.prepare("INSERT INTO source_objects (source_key, world_revision, object_json) VALUES (?, ?, ?)");
-      for (const object of objects) {
-        statement.run(object.sourceKey, object.worldRevision, JSON.stringify(object));
-      }
+      this.writeSourceObjects(objects);
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
@@ -447,7 +443,7 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
     }
   }
 
-  createSnapshot(snapshot: Snapshot): void {
+  async createSnapshot(snapshot: Snapshot): Promise<void> {
     this.database
       .prepare(
         `INSERT INTO snapshots (snapshot_id, created_at, snapshot_json)
@@ -457,85 +453,34 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
       .run(snapshot.snapshotId, snapshot.createdAt, JSON.stringify(snapshot));
   }
 
-  getSnapshot(snapshotId: string): Snapshot | undefined {
+  async getSnapshot(snapshotId: string): Promise<Snapshot | undefined> {
     const row = this.database.prepare("SELECT snapshot_json FROM snapshots WHERE snapshot_id = ?").get(snapshotId) as
       | { snapshot_json: string }
       | undefined;
     return row ? parseJson<Snapshot>(row.snapshot_json) : undefined;
   }
 
-  listSnapshots(): Snapshot[] {
-    const rows = this.database.prepare("SELECT snapshot_json FROM snapshots ORDER BY created_at, snapshot_id").all() as Array<{
-      snapshot_json: string;
-    }>;
-    return rows.map((row) => parseJson<Snapshot>(row.snapshot_json));
+  async listSnapshots(): Promise<Snapshot[]> {
+    return this.readSnapshots();
   }
 
-  replaceWorld(replacement: WorldReplacement): void {
+  async replaceWorld(replacement: WorldReplacement, options: WorldMutationOptions = {}): Promise<void> {
+    await this.mutateWorld(() => ({ replacement, result: undefined }), options);
+  }
+
+  async mutateWorld<T>(mutation: WorldMutation<T>, options: WorldMutationOptions = {}): Promise<T> {
     this.database.exec("BEGIN");
     try {
-      if (replacement.scenarioStates) {
-        this.database.prepare("DELETE FROM scenario_states").run();
-        const statement = this.database.prepare("INSERT INTO scenario_states (scenario_id, state_json) VALUES (?, ?)");
-        for (const state of replacement.scenarioStates) {
-          statement.run(state.scenarioId, JSON.stringify(state));
-        }
-      }
-
-      this.database.prepare("DELETE FROM scenario_instance_states").run();
-      const instanceStatement = this.database.prepare(
-        "INSERT INTO scenario_instance_states (scenario_instance_id, scenario_pack_id, state_json) VALUES (?, ?, ?)",
-      );
-      for (const state of replacement.scenarioInstanceStates) {
-        instanceStatement.run(state.scenarioInstanceId, state.scenarioPackId, JSON.stringify(state));
-      }
-
+      const snapshot = this.readWorldSnapshot();
+      if (options.expectedWorldRevision && snapshot.worldRevision !== options.expectedWorldRevision) throw new WorldConflictError();
+      const output = await mutation(cloneJson(snapshot));
       if (this.failNextWorldReplacement) {
         this.failNextWorldReplacement = false;
         throw new Error("Injected world replacement failure");
       }
-
-      if (replacement.organizationConfig) {
-        this.database
-          .prepare(
-            `INSERT INTO organization_config (id, config_json)
-             VALUES ('singleton', ?)
-             ON CONFLICT(id) DO UPDATE SET config_json = excluded.config_json`,
-          )
-          .run(JSON.stringify(replacement.organizationConfig));
-      }
-
-      this.database
-        .prepare(
-          `INSERT INTO world_state (id, world_revision)
-           VALUES ('singleton', ?)
-           ON CONFLICT(id) DO UPDATE SET world_revision = excluded.world_revision`,
-        )
-        .run(replacement.worldRevision);
-
-      this.database.prepare("DELETE FROM source_change_ledger").run();
-      const changeStatement = this.database.prepare(
-        "INSERT INTO source_change_ledger (ledger_sequence, world_revision, change_json) VALUES (?, ?, ?)",
-      );
-      for (const change of replacement.sourceChanges) {
-        changeStatement.run(change.ledgerSequence, change.worldRevision, JSON.stringify(change));
-      }
-
-      this.database.prepare("DELETE FROM source_objects").run();
-      const objectStatement = this.database.prepare("INSERT INTO source_objects (source_key, world_revision, object_json) VALUES (?, ?, ?)");
-      for (const object of replacement.sourceObjects) {
-        objectStatement.run(object.sourceKey, object.worldRevision, JSON.stringify(object));
-      }
-
-      this.database
-        .prepare(
-          `INSERT INTO dataset_metadata (id, metadata_json)
-           VALUES ('singleton', ?)
-           ON CONFLICT(id) DO UPDATE SET metadata_json = excluded.metadata_json`,
-        )
-        .run(JSON.stringify(replacement.datasetMetadata));
-
+      this.writeWorldReplacement(output.replacement);
       this.database.exec("COMMIT");
+      return output.result;
     } catch (error) {
       this.database.exec("ROLLBACK");
       throw error;
@@ -546,167 +491,455 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
     this.failNextWorldReplacement = true;
   }
 
-  close(): void {
+  async close(): Promise<void> {
     this.database.close();
+  }
+
+  private readWorldSnapshot(): WorldSnapshot {
+    const organizationConfig = this.readOrganizationConfig();
+    const worldRevision = this.readWorldRevision();
+    const datasetMetadata = this.readDatasetMetadata();
+    return {
+      scenarioStates: this.readScenarioStates(),
+      scenarioInstanceStates: this.readScenarioInstanceStates(),
+      ...(organizationConfig ? { organizationConfig } : {}),
+      ...(worldRevision ? { worldRevision } : {}),
+      sourceChanges: this.readSourceChanges(),
+      sourceObjects: this.readSourceObjects(),
+      ...(datasetMetadata ? { datasetMetadata } : {}),
+    };
+  }
+
+  private readScenarioStates(): ScenarioState[] {
+    const rows = this.database.prepare("SELECT state_json FROM scenario_states ORDER BY scenario_id").all() as Array<{ state_json: string }>;
+    return rows.map((row) => parseJson<ScenarioState>(row.state_json));
+  }
+
+  private writeScenarioStates(states: ScenarioState[]): void {
+    this.database.prepare("DELETE FROM scenario_states").run();
+    const statement = this.database.prepare("INSERT INTO scenario_states (scenario_id, state_json) VALUES (?, ?)");
+    for (const state of states) statement.run(state.scenarioId, JSON.stringify(state));
+  }
+
+  private readScenarioInstanceStates(): ScenarioInstanceState[] {
+    const rows = this.database.prepare("SELECT state_json FROM scenario_instance_states ORDER BY scenario_instance_id").all() as Array<{
+      state_json: string;
+    }>;
+    return rows.map((row) => parseJson<ScenarioInstanceState>(row.state_json));
+  }
+
+  private writeScenarioInstanceStates(states: ScenarioInstanceState[]): void {
+    this.database.prepare("DELETE FROM scenario_instance_states").run();
+    const statement = this.database.prepare(
+      "INSERT INTO scenario_instance_states (scenario_instance_id, scenario_pack_id, state_json) VALUES (?, ?, ?)",
+    );
+    for (const state of states) statement.run(state.scenarioInstanceId, state.scenarioPackId, JSON.stringify(state));
+  }
+
+  private readOrganizationConfig(): OrganizationConfig | undefined {
+    const row = this.database.prepare("SELECT config_json FROM organization_config WHERE id = 'singleton'").get() as
+      | { config_json: string }
+      | undefined;
+    return row ? parseJson<OrganizationConfig>(row.config_json) : undefined;
+  }
+
+  private readDatasetMetadata(): DatasetMetadata | undefined {
+    const row = this.database.prepare("SELECT metadata_json FROM dataset_metadata WHERE id = 'singleton'").get() as
+      | { metadata_json: string }
+      | undefined;
+    return row ? parseJson<DatasetMetadata>(row.metadata_json) : undefined;
+  }
+
+  private readWorldRevision(): string | undefined {
+    const row = this.database.prepare("SELECT world_revision FROM world_state WHERE id = 'singleton'").get() as
+      | { world_revision: string }
+      | undefined;
+    return row?.world_revision;
+  }
+
+  private readSourceChanges(): SourceChangeLedgerEntry[] {
+    const rows = this.database.prepare("SELECT change_json FROM source_change_ledger ORDER BY ledger_sequence").all() as Array<{
+      change_json: string;
+    }>;
+    return rows.map((row) => parseJson<SourceChangeLedgerEntry>(row.change_json));
+  }
+
+  private writeSourceChanges(changes: SourceChangeLedgerEntry[]): void {
+    this.database.prepare("DELETE FROM source_change_ledger").run();
+    const statement = this.database.prepare(
+      "INSERT INTO source_change_ledger (ledger_sequence, world_revision, change_json) VALUES (?, ?, ?)",
+    );
+    for (const change of changes) statement.run(change.ledgerSequence, change.worldRevision, JSON.stringify(change));
+  }
+
+  private readSourceObjects(): SourceObjectProjection[] {
+    const rows = this.database.prepare("SELECT object_json FROM source_objects ORDER BY source_key").all() as Array<{ object_json: string }>;
+    return rows.map((row) => parseJson<SourceObjectProjection>(row.object_json));
+  }
+
+  private writeSourceObjects(objects: SourceObjectProjection[]): void {
+    this.database.prepare("DELETE FROM source_objects").run();
+    const statement = this.database.prepare("INSERT INTO source_objects (source_key, world_revision, object_json) VALUES (?, ?, ?)");
+    for (const object of objects) statement.run(object.sourceKey, object.worldRevision, JSON.stringify(object));
+  }
+
+  private readSnapshots(): Snapshot[] {
+    const rows = this.database.prepare("SELECT snapshot_json FROM snapshots ORDER BY created_at, snapshot_id").all() as Array<{
+      snapshot_json: string;
+    }>;
+    return rows.map((row) => parseJson<Snapshot>(row.snapshot_json));
+  }
+
+  private writeWorldReplacement(replacement: WorldReplacement): void {
+    if (replacement.scenarioStates) this.writeScenarioStates(replacement.scenarioStates);
+    this.writeScenarioInstanceStates(replacement.scenarioInstanceStates);
+    if (replacement.organizationConfig) {
+      this.database
+        .prepare(
+          `INSERT INTO organization_config (id, config_json)
+           VALUES ('singleton', ?)
+           ON CONFLICT(id) DO UPDATE SET config_json = excluded.config_json`,
+        )
+        .run(JSON.stringify(replacement.organizationConfig));
+    }
+    this.database
+      .prepare(
+        `INSERT INTO world_state (id, world_revision)
+         VALUES ('singleton', ?)
+         ON CONFLICT(id) DO UPDATE SET world_revision = excluded.world_revision`,
+      )
+      .run(replacement.worldRevision);
+    this.writeSourceChanges(replacement.sourceChanges);
+    this.writeSourceObjects(replacement.sourceObjects);
+    this.database
+      .prepare(
+        `INSERT INTO dataset_metadata (id, metadata_json)
+         VALUES ('singleton', ?)
+         ON CONFLICT(id) DO UPDATE SET metadata_json = excluded.metadata_json`,
+      )
+      .run(JSON.stringify(replacement.datasetMetadata));
   }
 }
 
 export interface PostgresSimulatorStorageOptions {
   connectionString: string;
-  resetForTesting?: boolean;
+  schema?: string;
+  queryTimeoutMs?: number;
+  connectionTimeoutMs?: number;
+  maxPoolSize?: number;
 }
 
 export class PostgresSimulatorStorage implements SimulatorStorage {
   readonly kind = "postgres" as const;
-  private static nextInstanceId = 0;
-  private readonly worker: Worker;
-  private readonly instanceId: number;
+  private readonly pool: PgPool;
+  private readonly schema: string;
+  private readonly queryTimeoutMs: number;
+  private migrationPromise: Promise<void> | undefined;
   private closed = false;
-  private requestCounter = 0;
+  private failNextWorldReplacement = false;
+  private lastPoolError: string | undefined;
 
   constructor(options: string | PostgresSimulatorStorageOptions) {
     const connectionString = typeof options === "string" ? options : options.connectionString;
-    const resetForTesting = typeof options === "string" ? false : options.resetForTesting === true;
-    if (!connectionString.trim()) {
-      throw new Error("Postgres storage requires DATABASE_URL");
-    }
-    PostgresSimulatorStorage.nextInstanceId += 1;
-    this.instanceId = PostgresSimulatorStorage.nextInstanceId;
-    this.worker = new Worker(POSTGRES_WORKER_SOURCE, {
-      eval: true,
-      workerData: { connectionString },
+    if (!connectionString.trim()) throw new Error("Postgres storage requires DATABASE_URL");
+    this.schema = typeof options === "string" ? "public" : sanitizeIdentifier(options.schema ?? "public");
+    this.queryTimeoutMs = typeof options === "string" ? 10_000 : options.queryTimeoutMs ?? 10_000;
+    this.pool = new Pool({
+      connectionString,
+      connectionTimeoutMillis: typeof options === "string" ? 5_000 : options.connectionTimeoutMs ?? 5_000,
+      idleTimeoutMillis: 30_000,
+      max: typeof options === "string" ? 10 : options.maxPoolSize ?? 10,
+      options: `-c search_path=${this.schema}`,
+      query_timeout: this.queryTimeoutMs,
+      statement_timeout: this.queryTimeoutMs,
     });
-    this.call("migrate", { resetForTesting });
+    this.pool.on("error", () => {
+      this.lastPoolError = "postgres pool error";
+    });
   }
 
-  health(): StorageHealth {
-    return this.call<StorageHealth>("health", {});
+  async health(): Promise<StorageHealth> {
+    try {
+      await this.ensureMigrated();
+      await this.query("SELECT 1");
+      return { ok: true, kind: this.kind, message: "postgres storage available" };
+    } catch {
+      return { ok: false, kind: this.kind, message: this.lastPoolError ?? "postgres storage unavailable" };
+    }
   }
 
-  listScenarioStates(): ScenarioState[] {
-    return this.call<ScenarioState[]>("listScenarioStates", {});
+  async listScenarioStates(): Promise<ScenarioState[]> {
+    const rows = await this.rows<{ state_json: string }>("list scenario states", "SELECT state_json FROM scenario_states ORDER BY scenario_id");
+    return rows.map((row) => parseJson<ScenarioState>(row.state_json));
   }
 
-  getScenarioState(scenarioId: string): ScenarioState | undefined {
-    return this.call<ScenarioState | undefined>("getScenarioState", { scenarioId });
+  async getScenarioState(scenarioId: string): Promise<ScenarioState | undefined> {
+    const rows = await this.rows<{ state_json: string }>("get scenario state", "SELECT state_json FROM scenario_states WHERE scenario_id = $1", [
+      scenarioId,
+    ]);
+    return rows[0] ? parseJson<ScenarioState>(rows[0].state_json) : undefined;
   }
 
-  saveScenarioState(state: ScenarioState): void {
-    this.call<void>("saveScenarioState", { state });
+  async saveScenarioState(state: ScenarioState): Promise<void> {
+    await this.query(
+      `INSERT INTO scenario_states (scenario_id, state_json)
+       VALUES ($1, $2)
+       ON CONFLICT (scenario_id) DO UPDATE SET state_json = EXCLUDED.state_json`,
+      [state.scenarioId, JSON.stringify(state)],
+    );
   }
 
-  replaceScenarioStates(states: ScenarioState[]): void {
-    this.call<void>("replaceScenarioStates", { states });
+  async replaceScenarioStates(states: ScenarioState[]): Promise<void> {
+    await this.transaction(async (client) => {
+      await client.query("DELETE FROM scenario_states");
+      for (const state of states) await client.query("INSERT INTO scenario_states (scenario_id, state_json) VALUES ($1, $2)", [state.scenarioId, JSON.stringify(state)]);
+    }, "replace scenario states");
   }
 
-  listScenarioInstanceStates(): ScenarioInstanceState[] {
-    return this.call<ScenarioInstanceState[]>("listScenarioInstanceStates", {});
+  async listScenarioInstanceStates(): Promise<ScenarioInstanceState[]> {
+    const rows = await this.rows<{ state_json: string }>(
+      "list scenario instance states",
+      "SELECT state_json FROM scenario_instance_states ORDER BY scenario_instance_id",
+    );
+    return rows.map((row) => parseJson<ScenarioInstanceState>(row.state_json));
   }
 
-  getScenarioInstanceState(scenarioInstanceId: string): ScenarioInstanceState | undefined {
-    return this.call<ScenarioInstanceState | undefined>("getScenarioInstanceState", { scenarioInstanceId });
+  async getScenarioInstanceState(scenarioInstanceId: string): Promise<ScenarioInstanceState | undefined> {
+    const rows = await this.rows<{ state_json: string }>(
+      "get scenario instance state",
+      "SELECT state_json FROM scenario_instance_states WHERE scenario_instance_id = $1",
+      [scenarioInstanceId],
+    );
+    return rows[0] ? parseJson<ScenarioInstanceState>(rows[0].state_json) : undefined;
   }
 
-  saveScenarioInstanceState(state: ScenarioInstanceState): void {
-    this.call<void>("saveScenarioInstanceState", { state });
+  async saveScenarioInstanceState(state: ScenarioInstanceState): Promise<void> {
+    await this.query(
+      `INSERT INTO scenario_instance_states (scenario_instance_id, scenario_pack_id, state_json)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (scenario_instance_id) DO UPDATE SET scenario_pack_id = EXCLUDED.scenario_pack_id, state_json = EXCLUDED.state_json`,
+      [state.scenarioInstanceId, state.scenarioPackId, JSON.stringify(state)],
+    );
   }
 
-  replaceScenarioInstanceStates(states: ScenarioInstanceState[]): void {
-    this.call<void>("replaceScenarioInstanceStates", { states });
+  async replaceScenarioInstanceStates(states: ScenarioInstanceState[]): Promise<void> {
+    await this.transaction(async (client) => {
+      await client.query("DELETE FROM scenario_instance_states");
+      for (const state of states) {
+        await client.query("INSERT INTO scenario_instance_states (scenario_instance_id, scenario_pack_id, state_json) VALUES ($1, $2, $3)", [
+          state.scenarioInstanceId,
+          state.scenarioPackId,
+          JSON.stringify(state),
+        ]);
+      }
+    }, "replace scenario instance states");
   }
 
-  getOrganizationConfig(): OrganizationConfig | undefined {
-    return this.call<OrganizationConfig | undefined>("getOrganizationConfig", {});
+  async getOrganizationConfig(): Promise<OrganizationConfig | undefined> {
+    const rows = await this.rows<{ config_json: string }>("get organization config", "SELECT config_json FROM organization_config WHERE id = 'singleton'");
+    return rows[0] ? parseJson<OrganizationConfig>(rows[0].config_json) : undefined;
   }
 
-  saveOrganizationConfig(config: OrganizationConfig): void {
-    this.call<void>("saveOrganizationConfig", { config });
+  async saveOrganizationConfig(config: OrganizationConfig): Promise<void> {
+    await this.query(
+      `INSERT INTO organization_config (id, config_json)
+       VALUES ('singleton', $1)
+       ON CONFLICT (id) DO UPDATE SET config_json = EXCLUDED.config_json`,
+      [JSON.stringify(config)],
+    );
   }
 
-  getDatasetMetadata(): DatasetMetadata | undefined {
-    return this.call<DatasetMetadata | undefined>("getDatasetMetadata", {});
+  async getDatasetMetadata(): Promise<DatasetMetadata | undefined> {
+    const rows = await this.rows<{ metadata_json: string }>("get dataset metadata", "SELECT metadata_json FROM dataset_metadata WHERE id = 'singleton'");
+    return rows[0] ? parseJson<DatasetMetadata>(rows[0].metadata_json) : undefined;
   }
 
-  saveDatasetMetadata(metadata: DatasetMetadata): void {
-    this.call<void>("saveDatasetMetadata", { metadata });
+  async saveDatasetMetadata(metadata: DatasetMetadata): Promise<void> {
+    await this.query(
+      `INSERT INTO dataset_metadata (id, metadata_json)
+       VALUES ('singleton', $1)
+       ON CONFLICT (id) DO UPDATE SET metadata_json = EXCLUDED.metadata_json`,
+      [JSON.stringify(metadata)],
+    );
   }
 
-  getWorldRevision(): string | undefined {
-    return this.call<string | undefined>("getWorldRevision", {});
+  async getWorldRevision(): Promise<string | undefined> {
+    const rows = await this.rows<{ world_revision: string }>("get world revision", "SELECT world_revision FROM world_state WHERE id = 'singleton'");
+    return rows[0]?.world_revision;
   }
 
-  saveWorldRevision(worldRevision: string): void {
-    this.call<void>("saveWorldRevision", { worldRevision });
+  async saveWorldRevision(worldRevision: string): Promise<void> {
+    await this.query(
+      `INSERT INTO world_state (id, world_revision)
+       VALUES ('singleton', $1)
+       ON CONFLICT (id) DO UPDATE SET world_revision = EXCLUDED.world_revision`,
+      [worldRevision],
+    );
   }
 
-  listSourceChanges(): SourceChangeLedgerEntry[] {
-    return this.call<SourceChangeLedgerEntry[]>("listSourceChanges", {});
+  async listSourceChanges(): Promise<SourceChangeLedgerEntry[]> {
+    const rows = await this.rows<{ change_json: string }>("list source changes", "SELECT change_json FROM source_change_ledger ORDER BY ledger_sequence");
+    return rows.map((row) => parseJson<SourceChangeLedgerEntry>(row.change_json));
   }
 
-  replaceSourceChanges(changes: SourceChangeLedgerEntry[]): void {
-    this.call<void>("replaceSourceChanges", { changes });
+  async replaceSourceChanges(changes: SourceChangeLedgerEntry[]): Promise<void> {
+    await this.transaction(async (client) => {
+      await client.query("DELETE FROM source_change_ledger");
+      await writePostgresSourceChanges(client, changes);
+    }, "replace source changes");
   }
 
-  listSourceObjects(): SourceObjectProjection[] {
-    return this.call<SourceObjectProjection[]>("listSourceObjects", {});
+  async listSourceObjects(): Promise<SourceObjectProjection[]> {
+    const rows = await this.rows<{ object_json: string }>("list source objects", "SELECT object_json FROM source_objects ORDER BY source_key");
+    return rows.map((row) => parseJson<SourceObjectProjection>(row.object_json));
   }
 
-  replaceSourceObjects(objects: SourceObjectProjection[]): void {
-    this.call<void>("replaceSourceObjects", { objects });
+  async replaceSourceObjects(objects: SourceObjectProjection[]): Promise<void> {
+    await this.transaction(async (client) => {
+      await client.query("DELETE FROM source_objects");
+      await writePostgresSourceObjects(client, objects);
+    }, "replace source objects");
   }
 
-  createSnapshot(snapshot: Snapshot): void {
-    this.call<void>("createSnapshot", { snapshot });
+  async createSnapshot(snapshot: Snapshot): Promise<void> {
+    await this.query(
+      `INSERT INTO snapshots (snapshot_id, created_at, snapshot_json)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (snapshot_id) DO UPDATE SET created_at = EXCLUDED.created_at, snapshot_json = EXCLUDED.snapshot_json`,
+      [snapshot.snapshotId, snapshot.createdAt, JSON.stringify(snapshot)],
+    );
   }
 
-  getSnapshot(snapshotId: string): Snapshot | undefined {
-    return this.call<Snapshot | undefined>("getSnapshot", { snapshotId });
+  async getSnapshot(snapshotId: string): Promise<Snapshot | undefined> {
+    const rows = await this.rows<{ snapshot_json: string }>("get snapshot", "SELECT snapshot_json FROM snapshots WHERE snapshot_id = $1", [snapshotId]);
+    return rows[0] ? parseJson<Snapshot>(rows[0].snapshot_json) : undefined;
   }
 
-  listSnapshots(): Snapshot[] {
-    return this.call<Snapshot[]>("listSnapshots", {});
+  async listSnapshots(): Promise<Snapshot[]> {
+    const rows = await this.rows<{ snapshot_json: string }>("list snapshots", "SELECT snapshot_json FROM snapshots ORDER BY created_at, snapshot_id");
+    return rows.map((row) => parseJson<Snapshot>(row.snapshot_json));
   }
 
-  replaceWorld(replacement: WorldReplacement): void {
-    this.call<void>("replaceWorld", { replacement });
+  async replaceWorld(replacement: WorldReplacement, options: WorldMutationOptions = {}): Promise<void> {
+    await this.mutateWorld(() => ({ replacement, result: undefined }), options);
+  }
+
+  async mutateWorld<T>(mutation: WorldMutation<T>, options: WorldMutationOptions = {}): Promise<T> {
+    await this.ensureMigrated();
+    return this.transaction(async (client) => {
+      await client.query(`SELECT pg_advisory_xact_lock(${POSTGRES_WORLD_LOCK_ID})`);
+      const snapshot = await readPostgresWorldSnapshot(client);
+      if (options.expectedWorldRevision && snapshot.worldRevision !== options.expectedWorldRevision) throw new WorldConflictError();
+      const output = await mutation(cloneJson(snapshot));
+      if (this.failNextWorldReplacement) {
+        this.failNextWorldReplacement = false;
+        throw new Error("Injected world replacement failure");
+      }
+      await writePostgresWorldReplacement(client, output.replacement);
+      return output.result;
+    }, "mutate world");
   }
 
   injectWorldReplacementFailureForTesting(): void {
-    this.call<void>("injectWorldReplacementFailureForTesting", {});
+    this.failNextWorldReplacement = true;
   }
 
-  close(): void {
+  async close(): Promise<void> {
     if (this.closed) return;
+    this.closed = true;
+    await this.pool.end();
+  }
+
+  async dropOwnedSchemaForTesting(): Promise<void> {
+    if (!this.schema.startsWith("sim_test_") && !this.schema.startsWith("sim_benchmark_")) {
+      throw new Error("Refusing to drop a non-test Postgres schema");
+    }
+    const client = await this.pool.connect();
     try {
-      this.call<void>("close", {});
+      await client.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(this.schema)} CASCADE`);
     } finally {
-      this.closed = true;
-      void this.worker.terminate();
+      client.release();
     }
   }
 
-  private call<T>(task: string, payload: Record<string, unknown>): T {
-    if (this.closed) throw new Error("Postgres storage is closed");
-    const signal = new SharedArrayBuffer(4);
-    const signalView = new Int32Array(signal);
-    this.requestCounter += 1;
-    const resultFile = join(tmpdir(), `source-simulator-pg-${process.pid}-${this.instanceId}-${this.requestCounter}.json`);
-    this.worker.postMessage({ task, payload, resultFile, signal });
-    const waitResult = Atomics.wait(signalView, 0, 0, 120_000);
-    if (waitResult === "timed-out") {
-      throw new Error(`Postgres storage operation timed out: ${task}`);
-    }
+  private async rows<T>(operation: string, sql: string, values: unknown[] = []): Promise<T[]> {
+    return (await this.query(sql, values, operation)).rows as T[];
+  }
+
+  private async query(sql: string, values: unknown[] = [], operation = "postgres query"): Promise<QueryResult> {
+    await this.ensureMigrated();
     try {
-      const raw = readFileSync(resultFile, "utf8");
-      const result = JSON.parse(raw) as { ok: true; value: T } | { ok: false; error: string };
-      if (!result.ok) throw new Error(result.error);
-      return result.value;
-    } finally {
+      return await this.pool.query(sql, values);
+    } catch (error) {
+      if (error instanceof WorldConflictError) throw error;
+      throw safeStorageError(operation, error);
+    }
+  }
+
+  private async transaction<T>(callback: (client: PoolClient) => Promise<T>, operation: string): Promise<T> {
+    await this.ensureMigrated();
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`SET LOCAL statement_timeout = ${this.queryTimeoutMs}`);
+      await client.query(`SET LOCAL search_path = ${quoteIdentifier(this.schema)}`);
+      const result = await callback(client);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
       try {
-        unlinkSync(resultFile);
+        await client.query("ROLLBACK");
       } catch {
-        // best effort cleanup
+        // best effort rollback
       }
+      if (error instanceof WorldConflictError) throw error;
+      throw safeStorageError(operation, error);
+    } finally {
+      client.release();
+    }
+  }
+
+  private async ensureMigrated(): Promise<void> {
+    if (this.migrationPromise) return this.migrationPromise;
+    this.migrationPromise = this.runMigrations();
+    return this.migrationPromise;
+  }
+
+  private async runMigrations(): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(this.schema)}`);
+      await client.query(`SET LOCAL search_path = ${quoteIdentifier(this.schema)}`);
+      await client.query(
+        "CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TEXT NOT NULL)",
+      );
+      for (const migration of POSTGRES_MIGRATIONS) {
+        const sql = await readFile(new URL(migration.path, import.meta.url), "utf8");
+        const checksum = createHash("sha256").update(sql).digest("hex");
+        const existing = (
+          await client.query<{ checksum: string }>("SELECT checksum FROM schema_migrations WHERE version = $1", [migration.version])
+        ).rows[0];
+        if (existing && existing.checksum !== checksum) throw new StorageError("Postgres migration checksum mismatch");
+        if (!existing) {
+          await client.query(sql);
+          await client.query("INSERT INTO schema_migrations (version, checksum, applied_at) VALUES ($1, $2, $3)", [
+            migration.version,
+            checksum,
+            new Date().toISOString(),
+          ]);
+        }
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // best effort rollback
+      }
+      throw safeStorageError("migrate postgres storage", error);
+    } finally {
+      client.release();
     }
   }
 }
@@ -736,202 +969,105 @@ function parseJson<T>(value: string): T {
   return JSON.parse(value) as T;
 }
 
-const POSTGRES_WORKER_SOURCE = `
-const { parentPort, workerData } = require("node:worker_threads");
-const { writeFileSync } = require("node:fs");
-const pg = require("pg");
-
-const { Pool } = pg;
-const pool = new Pool({ connectionString: workerData.connectionString });
-let failNextWorldReplacement = false;
-
-const tables = [
-  "scenario_states",
-  "scenario_instance_states",
-  "organization_config",
-  "snapshots",
-  "world_state",
-  "dataset_metadata",
-  "source_change_ledger",
-  "source_objects"
-];
-
-function json(value) {
-  return JSON.stringify(value);
+function safeStorageError(operation: string, error: unknown): Error {
+  if (error instanceof WorldConflictError || error instanceof StorageError) return error;
+  if (error instanceof Error && error.message === "Injected world replacement failure") return error;
+  return new StorageError(`${operation} failed`);
 }
 
-function parse(value) {
-  if (value === null || value === undefined) return undefined;
-  return JSON.parse(value);
+function sanitizeIdentifier(value: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(value)) throw new Error("Invalid Postgres schema identifier");
+  return value;
 }
 
-async function migrate(resetForTesting) {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    if (resetForTesting) {
-      for (const table of [...tables].reverse()) await client.query("DROP TABLE IF EXISTS " + table);
+function quoteIdentifier(value: string): string {
+  return `"${sanitizeIdentifier(value).replaceAll('"', '""')}"`;
+}
+
+async function readPostgresWorldSnapshot(client: PoolClient): Promise<WorldSnapshot> {
+  const scenarioStates = (await client.query<{ state_json: string }>("SELECT state_json FROM scenario_states ORDER BY scenario_id")).rows.map((row) =>
+    parseJson<ScenarioState>(row.state_json),
+  );
+  const scenarioInstanceStates = (
+    await client.query<{ state_json: string }>("SELECT state_json FROM scenario_instance_states ORDER BY scenario_instance_id")
+  ).rows.map((row) => parseJson<ScenarioInstanceState>(row.state_json));
+  const organizationRow = (await client.query<{ config_json: string }>("SELECT config_json FROM organization_config WHERE id = 'singleton'")).rows[0];
+  const worldRow = (await client.query<{ world_revision: string }>("SELECT world_revision FROM world_state WHERE id = 'singleton'")).rows[0];
+  const sourceChanges = (await client.query<{ change_json: string }>("SELECT change_json FROM source_change_ledger ORDER BY ledger_sequence")).rows.map(
+    (row) => parseJson<SourceChangeLedgerEntry>(row.change_json),
+  );
+  const sourceObjects = (await client.query<{ object_json: string }>("SELECT object_json FROM source_objects ORDER BY source_key")).rows.map((row) =>
+    parseJson<SourceObjectProjection>(row.object_json),
+  );
+  const metadataRow = (await client.query<{ metadata_json: string }>("SELECT metadata_json FROM dataset_metadata WHERE id = 'singleton'")).rows[0];
+  return {
+    scenarioStates,
+    scenarioInstanceStates,
+    ...(organizationRow ? { organizationConfig: parseJson<OrganizationConfig>(organizationRow.config_json) } : {}),
+    ...(worldRow ? { worldRevision: worldRow.world_revision } : {}),
+    sourceChanges,
+    sourceObjects,
+    ...(metadataRow ? { datasetMetadata: parseJson<DatasetMetadata>(metadataRow.metadata_json) } : {}),
+  };
+}
+
+async function writePostgresWorldReplacement(client: PoolClient, replacement: WorldReplacement): Promise<void> {
+  if (replacement.scenarioStates) {
+    await client.query("DELETE FROM scenario_states");
+    for (const state of replacement.scenarioStates) {
+      await client.query("INSERT INTO scenario_states (scenario_id, state_json) VALUES ($1, $2)", [state.scenarioId, JSON.stringify(state)]);
     }
-    await client.query("CREATE TABLE IF NOT EXISTS scenario_states (scenario_id TEXT PRIMARY KEY, state_json TEXT NOT NULL)");
-    await client.query("CREATE TABLE IF NOT EXISTS scenario_instance_states (scenario_instance_id TEXT PRIMARY KEY, scenario_pack_id TEXT NOT NULL, state_json TEXT NOT NULL)");
-    await client.query("CREATE TABLE IF NOT EXISTS organization_config (id TEXT PRIMARY KEY CHECK (id = 'singleton'), config_json TEXT NOT NULL)");
-    await client.query("CREATE TABLE IF NOT EXISTS snapshots (snapshot_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, snapshot_json TEXT NOT NULL)");
-    await client.query("CREATE TABLE IF NOT EXISTS world_state (id TEXT PRIMARY KEY CHECK (id = 'singleton'), world_revision TEXT NOT NULL)");
-    await client.query("CREATE TABLE IF NOT EXISTS dataset_metadata (id TEXT PRIMARY KEY CHECK (id = 'singleton'), metadata_json TEXT NOT NULL)");
-    await client.query("CREATE TABLE IF NOT EXISTS source_change_ledger (ledger_sequence INTEGER PRIMARY KEY, world_revision TEXT NOT NULL, change_json TEXT NOT NULL)");
-    await client.query("CREATE TABLE IF NOT EXISTS source_objects (source_key TEXT PRIMARY KEY, world_revision TEXT NOT NULL, object_json TEXT NOT NULL)");
-    await client.query("COMMIT");
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
+  }
+  await client.query("DELETE FROM scenario_instance_states");
+  for (const state of replacement.scenarioInstanceStates) {
+    await client.query("INSERT INTO scenario_instance_states (scenario_instance_id, scenario_pack_id, state_json) VALUES ($1, $2, $3)", [
+      state.scenarioInstanceId,
+      state.scenarioPackId,
+      JSON.stringify(state),
+    ]);
+  }
+  if (replacement.organizationConfig) {
+    await client.query(
+      `INSERT INTO organization_config (id, config_json)
+       VALUES ('singleton', $1)
+       ON CONFLICT (id) DO UPDATE SET config_json = EXCLUDED.config_json`,
+      [JSON.stringify(replacement.organizationConfig)],
+    );
+  }
+  await client.query(
+    `INSERT INTO world_state (id, world_revision)
+     VALUES ('singleton', $1)
+     ON CONFLICT (id) DO UPDATE SET world_revision = EXCLUDED.world_revision`,
+    [replacement.worldRevision],
+  );
+  await client.query("DELETE FROM source_change_ledger");
+  await writePostgresSourceChanges(client, replacement.sourceChanges);
+  await client.query("DELETE FROM source_objects");
+  await writePostgresSourceObjects(client, replacement.sourceObjects);
+  await client.query(
+    `INSERT INTO dataset_metadata (id, metadata_json)
+     VALUES ('singleton', $1)
+     ON CONFLICT (id) DO UPDATE SET metadata_json = EXCLUDED.metadata_json`,
+    [JSON.stringify(replacement.datasetMetadata)],
+  );
+}
+
+async function writePostgresSourceChanges(client: PoolClient, changes: SourceChangeLedgerEntry[]): Promise<void> {
+  for (const change of changes) {
+    await client.query("INSERT INTO source_change_ledger (ledger_sequence, world_revision, change_json) VALUES ($1, $2, $3)", [
+      change.ledgerSequence,
+      change.worldRevision,
+      JSON.stringify(change),
+    ]);
   }
 }
 
-async function transaction(callback) {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const result = await callback(client);
-    await client.query("COMMIT");
-    return result;
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
+async function writePostgresSourceObjects(client: PoolClient, objects: SourceObjectProjection[]): Promise<void> {
+  for (const object of objects) {
+    await client.query("INSERT INTO source_objects (source_key, world_revision, object_json) VALUES ($1, $2, $3)", [
+      object.sourceKey,
+      object.worldRevision,
+      JSON.stringify(object),
+    ]);
   }
 }
-
-async function handle(task, payload) {
-  switch (task) {
-    case "migrate":
-      await migrate(payload.resetForTesting === true);
-      return undefined;
-    case "health":
-      await pool.query("SELECT 1");
-      return { ok: true, kind: "postgres", message: "postgres storage available" };
-    case "listScenarioStates":
-      return (await pool.query("SELECT state_json FROM scenario_states ORDER BY scenario_id")).rows.map((row) => parse(row.state_json));
-    case "getScenarioState": {
-      const row = (await pool.query("SELECT state_json FROM scenario_states WHERE scenario_id = $1", [payload.scenarioId])).rows[0];
-      return row ? parse(row.state_json) : undefined;
-    }
-    case "saveScenarioState":
-      await pool.query("INSERT INTO scenario_states (scenario_id, state_json) VALUES ($1, $2) ON CONFLICT (scenario_id) DO UPDATE SET state_json = EXCLUDED.state_json", [payload.state.scenarioId, json(payload.state)]);
-      return undefined;
-    case "replaceScenarioStates":
-      await transaction(async (client) => {
-        await client.query("DELETE FROM scenario_states");
-        for (const state of payload.states) await client.query("INSERT INTO scenario_states (scenario_id, state_json) VALUES ($1, $2)", [state.scenarioId, json(state)]);
-      });
-      return undefined;
-    case "listScenarioInstanceStates":
-      return (await pool.query("SELECT state_json FROM scenario_instance_states ORDER BY scenario_instance_id")).rows.map((row) => parse(row.state_json));
-    case "getScenarioInstanceState": {
-      const row = (await pool.query("SELECT state_json FROM scenario_instance_states WHERE scenario_instance_id = $1", [payload.scenarioInstanceId])).rows[0];
-      return row ? parse(row.state_json) : undefined;
-    }
-    case "saveScenarioInstanceState":
-      await pool.query("INSERT INTO scenario_instance_states (scenario_instance_id, scenario_pack_id, state_json) VALUES ($1, $2, $3) ON CONFLICT (scenario_instance_id) DO UPDATE SET scenario_pack_id = EXCLUDED.scenario_pack_id, state_json = EXCLUDED.state_json", [payload.state.scenarioInstanceId, payload.state.scenarioPackId, json(payload.state)]);
-      return undefined;
-    case "replaceScenarioInstanceStates":
-      await transaction(async (client) => {
-        await client.query("DELETE FROM scenario_instance_states");
-        for (const state of payload.states) await client.query("INSERT INTO scenario_instance_states (scenario_instance_id, scenario_pack_id, state_json) VALUES ($1, $2, $3)", [state.scenarioInstanceId, state.scenarioPackId, json(state)]);
-      });
-      return undefined;
-    case "getOrganizationConfig": {
-      const row = (await pool.query("SELECT config_json FROM organization_config WHERE id = 'singleton'")).rows[0];
-      return row ? parse(row.config_json) : undefined;
-    }
-    case "saveOrganizationConfig":
-      await pool.query("INSERT INTO organization_config (id, config_json) VALUES ('singleton', $1) ON CONFLICT (id) DO UPDATE SET config_json = EXCLUDED.config_json", [json(payload.config)]);
-      return undefined;
-    case "getDatasetMetadata": {
-      const row = (await pool.query("SELECT metadata_json FROM dataset_metadata WHERE id = 'singleton'")).rows[0];
-      return row ? parse(row.metadata_json) : undefined;
-    }
-    case "saveDatasetMetadata":
-      await pool.query("INSERT INTO dataset_metadata (id, metadata_json) VALUES ('singleton', $1) ON CONFLICT (id) DO UPDATE SET metadata_json = EXCLUDED.metadata_json", [json(payload.metadata)]);
-      return undefined;
-    case "getWorldRevision": {
-      const row = (await pool.query("SELECT world_revision FROM world_state WHERE id = 'singleton'")).rows[0];
-      return row?.world_revision;
-    }
-    case "saveWorldRevision":
-      await pool.query("INSERT INTO world_state (id, world_revision) VALUES ('singleton', $1) ON CONFLICT (id) DO UPDATE SET world_revision = EXCLUDED.world_revision", [payload.worldRevision]);
-      return undefined;
-    case "listSourceChanges":
-      return (await pool.query("SELECT change_json FROM source_change_ledger ORDER BY ledger_sequence")).rows.map((row) => parse(row.change_json));
-    case "replaceSourceChanges":
-      await transaction(async (client) => {
-        await client.query("DELETE FROM source_change_ledger");
-        for (const change of payload.changes) await client.query("INSERT INTO source_change_ledger (ledger_sequence, world_revision, change_json) VALUES ($1, $2, $3)", [change.ledgerSequence, change.worldRevision, json(change)]);
-      });
-      return undefined;
-    case "listSourceObjects":
-      return (await pool.query("SELECT object_json FROM source_objects ORDER BY source_key")).rows.map((row) => parse(row.object_json));
-    case "replaceSourceObjects":
-      await transaction(async (client) => {
-        await client.query("DELETE FROM source_objects");
-        for (const object of payload.objects) await client.query("INSERT INTO source_objects (source_key, world_revision, object_json) VALUES ($1, $2, $3)", [object.sourceKey, object.worldRevision, json(object)]);
-      });
-      return undefined;
-    case "createSnapshot":
-      await pool.query("INSERT INTO snapshots (snapshot_id, created_at, snapshot_json) VALUES ($1, $2, $3) ON CONFLICT (snapshot_id) DO UPDATE SET created_at = EXCLUDED.created_at, snapshot_json = EXCLUDED.snapshot_json", [payload.snapshot.snapshotId, payload.snapshot.createdAt, json(payload.snapshot)]);
-      return undefined;
-    case "getSnapshot": {
-      const row = (await pool.query("SELECT snapshot_json FROM snapshots WHERE snapshot_id = $1", [payload.snapshotId])).rows[0];
-      return row ? parse(row.snapshot_json) : undefined;
-    }
-    case "listSnapshots":
-      return (await pool.query("SELECT snapshot_json FROM snapshots ORDER BY created_at, snapshot_id")).rows.map((row) => parse(row.snapshot_json));
-    case "replaceWorld":
-      await transaction(async (client) => {
-        if (failNextWorldReplacement) {
-          failNextWorldReplacement = false;
-          await client.query("DELETE FROM source_change_ledger");
-          throw new Error("Injected world replacement failure");
-        }
-        if (payload.replacement.scenarioStates) {
-          await client.query("DELETE FROM scenario_states");
-          for (const state of payload.replacement.scenarioStates) await client.query("INSERT INTO scenario_states (scenario_id, state_json) VALUES ($1, $2)", [state.scenarioId, json(state)]);
-        }
-        await client.query("DELETE FROM scenario_instance_states");
-        for (const state of payload.replacement.scenarioInstanceStates) await client.query("INSERT INTO scenario_instance_states (scenario_instance_id, scenario_pack_id, state_json) VALUES ($1, $2, $3)", [state.scenarioInstanceId, state.scenarioPackId, json(state)]);
-        if (payload.replacement.organizationConfig) await client.query("INSERT INTO organization_config (id, config_json) VALUES ('singleton', $1) ON CONFLICT (id) DO UPDATE SET config_json = EXCLUDED.config_json", [json(payload.replacement.organizationConfig)]);
-        await client.query("INSERT INTO world_state (id, world_revision) VALUES ('singleton', $1) ON CONFLICT (id) DO UPDATE SET world_revision = EXCLUDED.world_revision", [payload.replacement.worldRevision]);
-        await client.query("DELETE FROM source_change_ledger");
-        for (const change of payload.replacement.sourceChanges) await client.query("INSERT INTO source_change_ledger (ledger_sequence, world_revision, change_json) VALUES ($1, $2, $3)", [change.ledgerSequence, change.worldRevision, json(change)]);
-        await client.query("DELETE FROM source_objects");
-        for (const object of payload.replacement.sourceObjects) await client.query("INSERT INTO source_objects (source_key, world_revision, object_json) VALUES ($1, $2, $3)", [object.sourceKey, object.worldRevision, json(object)]);
-        await client.query("INSERT INTO dataset_metadata (id, metadata_json) VALUES ('singleton', $1) ON CONFLICT (id) DO UPDATE SET metadata_json = EXCLUDED.metadata_json", [json(payload.replacement.datasetMetadata)]);
-      });
-      return undefined;
-    case "injectWorldReplacementFailureForTesting":
-      failNextWorldReplacement = true;
-      return undefined;
-    case "close":
-      await pool.end();
-      return undefined;
-    default:
-      throw new Error("Unknown Postgres storage operation: " + task);
-  }
-}
-
-parentPort.on("message", async (message) => {
-  try {
-    const value = await handle(message.task, message.payload ?? {});
-    writeFileSync(message.resultFile, JSON.stringify({ ok: true, value }));
-  } catch (error) {
-    const messageText = error instanceof Error ? error.message : "Postgres storage operation failed";
-    writeFileSync(message.resultFile, JSON.stringify({ ok: false, error: messageText }));
-  } finally {
-    const signalView = new Int32Array(message.signal);
-    Atomics.store(signalView, 0, 1);
-    Atomics.notify(signalView, 0);
-  }
-});
-`;

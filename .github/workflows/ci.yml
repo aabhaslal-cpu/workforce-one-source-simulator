@@ -33,3 +33,25 @@ jobs:
           node-version: 22
       - run: pnpm install --frozen-lockfile
       - run: pnpm run verify
+      - run: docker build -t workforce-one-source-simulator:ci .
+      - name: Container smoke test
+        run: |
+          docker run --rm -d --network host \
+            --name source-simulator-smoke \
+            -e PORT=3000 \
+            -e SIMULATOR_RUNTIME_ENV=production \
+            -e DATABASE_URL="$SIMULATOR_POSTGRES_TEST_URL" \
+            -e SIMULATOR_ADMIN_API_KEY=ci-admin-key \
+            -e SIMULATOR_CONNECTION_CREDENTIALS='{"ci-product-manager":"conn-product-manager"}' \
+            workforce-one-source-simulator:ci
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/readyz >/tmp/source-sim-ready.json; then
+              cat /tmp/source-sim-ready.json
+              docker stop source-simulator-smoke
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs source-simulator-smoke
+          docker stop source-simulator-smoke || true
+          exit 1

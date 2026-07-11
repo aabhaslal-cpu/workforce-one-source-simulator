@@ -2,7 +2,9 @@
 
 ## Health
 
-`GET /healthz` is unauthenticated and safe for deployment probes. It returns:
+`GET /healthz` is unauthenticated liveness. It does not touch storage and is safe for container/process probes.
+
+`GET /readyz` is unauthenticated readiness. It returns:
 
 - storage health and storage kind
 - world revision
@@ -12,13 +14,22 @@
 - build version and commit when provided by the environment
 - contract and storage schema versions
 
-Preview and production health should report `storage.kind: postgres`.
+Preview and production readiness should report `storage.kind: postgres`. If storage or world metadata is unavailable, `/readyz` returns `503` with a safe `storage_error` classification and correlation ID.
 
 ## Metrics
 
 `GET /v1/admin/metrics` requires admin auth. It returns request counters, status counters, operation counters, latency average/max, recent sanitized request telemetry, active scenario instances, source-change count, source-object count, dataset size, organization size, ledger size, storage health, and enabled failure-rule count.
 
 `GET /v1/admin/requests` returns the recent sanitized request ring buffer. It is intended for connector debugging.
+
+## Rate Limiting
+
+Real request rate limiting is separate from deterministic provider failure simulation. It is keyed by authenticated identity:
+
+- admin routes: admin identity
+- manifest/feed/deep-link routes: resolved connection ID
+
+Rate-limit responses return `429`, `Retry-After`, a safe `rate_limit` classification, and a correlation ID. Preview and production default to enabled protection; local/test environments may disable or override limits through `SIMULATOR_RATE_LIMITS`.
 
 ## Logs
 
@@ -47,6 +58,8 @@ Database-level backups remain a deployment responsibility.
 
 `POST /v1/admin/performance/benchmark` runs deterministic benchmark operations for memory, SQLite, or Postgres. The endpoint creates its own benchmark world and does not mutate the active service world.
 
+Postgres benchmarks require `SIMULATOR_BENCHMARK_DATABASE_URL`. The benchmark URL must not normalize to the live `DATABASE_URL`. Benchmark cleanup is limited to `sim_benchmark_*` schemas.
+
 Measured locally on July 11, 2026 with `docs-benchmark`:
 
 | Storage | Dataset | Generate | Advance | Trigger | Feed | Snapshot | Restore | Org Regen |
@@ -58,4 +71,4 @@ Measured locally on July 11, 2026 with `docs-benchmark`:
 | sqlite | medium | 30.11 ms | 42.85 ms | 42.61 ms | 8.74 ms | 1.94 ms | 38.30 ms | 40.79 ms |
 | sqlite | large | 160.21 ms | 231.39 ms | 218.81 ms | 37.37 ms | 7.83 ms | 191.81 ms | 197.34 ms |
 
-Postgres benchmarks require `DATABASE_URL` and should be captured in the target deployment environment.
+Postgres benchmark numbers should be captured in a benchmark database, not against the live application database.

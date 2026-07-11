@@ -49,6 +49,13 @@ Production-like startup requires Postgres through `DATABASE_URL`. If Postgres is
 - Logs and error responses must not include credentials, internal stack traces, or database connection strings.
 - Error responses include a safe classification and correlation ID.
 
+## Rate Limiting
+
+- Real service rate limits are separate from deterministic failure modes.
+- Admin routes are keyed by admin identity.
+- Manifest, feed, and source deep-link routes are keyed by the resolved connection ID.
+- Rate-limit responses return `429`, `Retry-After`, `rate_limit`, and a correlation ID.
+
 ## Failure Simulation Safety
 
 - Failure modes are admin-controlled and disabled by default.
