@@ -463,9 +463,15 @@ describe("HTTP API validation", () => {
     });
     await incompatible((config) => {
       config.departments.product.icsPerManager = 0;
+      config.departments.product.customIcsPerManager = {};
     });
     await incompatible((config) => {
-      config.departments.product.customIcsPerManager = { "product:v1:d1:m1": 0 };
+      config.departments.product.customIcsPerManager = {
+        "product:v1:d1:m1": 0,
+        "product:v1:d1:m2": 0,
+        "product:v1:d2:m1": 0,
+        "product:v1:d2:m2": 0,
+      };
     });
   });
 
