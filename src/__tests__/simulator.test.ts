@@ -1,4 +1,5 @@
 import { mkdtempSync } from "node:fs";
+import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,18 @@ import { SourceSimulator } from "../engine.js";
 import { createApp } from "../app.js";
 import { defaultOrganizationConfig, personConnectionId } from "../organization.js";
 import { MemorySimulatorStorage, SQLiteSimulatorStorage } from "../storage.js";
+
+type TestSQLiteStatement = {
+  all(...parameters: unknown[]): unknown[];
+};
+
+type TestSQLiteDatabase = {
+  exec(sql: string): void;
+  prepare(sql: string): TestSQLiteStatement;
+  close(): void;
+};
+
+const require = createRequire(import.meta.url);
 
 function advancedSimulator(seed = "test-seed") {
   const simulator = new SourceSimulator({ seed, baseUrl: "http://sim.test" });
@@ -67,6 +80,24 @@ function withEnv<T>(overrides: Record<string, string | undefined>, callback: () 
       else process.env[key] = value;
     }
   }
+}
+
+function openTestSQLiteDatabase(filename: string): TestSQLiteDatabase {
+  const sqlite = require("node:sqlite") as { DatabaseSync: new (filename: string) => TestSQLiteDatabase };
+  return new sqlite.DatabaseSync(filename);
+}
+
+function durableTableSql(database: TestSQLiteDatabase): Record<string, string> {
+  const rows = database.prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'table' AND name IN (?, ?, ?) ORDER BY name").all(
+    "scenario_states",
+    "organization_config",
+    "snapshots",
+  ) as Array<{ name: string; sql: string }>;
+  return Object.fromEntries(rows.map((row) => [row.name, normalizeSql(row.sql)]));
+}
+
+function normalizeSql(sql: string): string {
+  return sql.replace(/\s+/g, " ").trim();
 }
 
 describe("organization generation", () => {
@@ -535,6 +566,29 @@ describe("source deep links", () => {
 });
 
 describe("SQLite storage", () => {
+  it("keeps the migration schema aligned with the runtime SQLite schema", async () => {
+    const migrationSql = await readFile(new URL("../../migrations/001_initial.sql", import.meta.url), "utf8");
+    const runtimeDatabasePath = join(mkdtempSync(join(tmpdir(), "source-sim-runtime-schema-")), "runtime.sqlite");
+    const runtimeStorage = new SQLiteSimulatorStorage(runtimeDatabasePath);
+    runtimeStorage.close();
+
+    const migrationDatabase = openTestSQLiteDatabase(":memory:");
+    const runtimeDatabase = openTestSQLiteDatabase(runtimeDatabasePath);
+    try {
+      migrationDatabase.exec(migrationSql);
+      const expectedSchema = {
+        organization_config: "CREATE TABLE organization_config ( id TEXT PRIMARY KEY CHECK (id = 'singleton'), config_json TEXT NOT NULL )",
+        scenario_states: "CREATE TABLE scenario_states ( scenario_id TEXT PRIMARY KEY, state_json TEXT NOT NULL )",
+        snapshots: "CREATE TABLE snapshots ( snapshot_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, snapshot_json TEXT NOT NULL )",
+      };
+      expect(durableTableSql(migrationDatabase)).toEqual(expectedSchema);
+      expect(durableTableSql(runtimeDatabase)).toEqual(expectedSchema);
+    } finally {
+      migrationDatabase.close();
+      runtimeDatabase.close();
+    }
+  });
+
   it("persists scenario states, organization config, and snapshots across engine recreation", () => {
     const databasePath = join(mkdtempSync(join(tmpdir(), "source-sim-")), "simulator.sqlite");
     const firstStorage = new SQLiteSimulatorStorage(databasePath);
