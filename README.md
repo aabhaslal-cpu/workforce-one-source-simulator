@@ -20,20 +20,23 @@ Built:
 - Modular source adapters for Slack, Gmail, Calendar, Notion, Jira, Productboard, Amplitude-style analytics, GitHub, PagerDuty-style incidents, Salesforce, Gainsight-style customer success, and Zendesk-style support.
 - Ten scenario packs covering launch readiness, adoption lag, roadmap tradeoff, incident response, delivery slip, technical debt/staffing risk, renewal risk, implementation blocker, expansion opportunity, and major cross-functional release.
 - Persisted scenario instance state. Packs are reusable templates; instances hold their own seed, dataset size, clock, pause state, event occurrence times, event log, completion state, participants, and account/project/product/service/workstream context.
+- Persisted company clock with manual mode, realtime mode, bounded catch-up, speed multiplier, pause/resume, restart persistence, feed-triggered reconciliation, and Vercel cron reconciliation.
+- Deterministic continuous activity orchestrator. Completed instances can create successor instances from the existing 10 packs, preserving one shared Product/Engineering/Customer Success company world.
 - Compact v3 source feed cursor over a deterministic source-change ledger: connection ID, world revision, and `afterSequence`.
 - Occurred-only durable source-change ledger. Normal time advancement appends newly reached changes without rotating world revision.
 - Manual triggers occur at the selected instance's current simulation time; updates and deletions are calculated relative to that actual trigger time.
 - Destructive scenario instance reset/delete, dataset generation, organization regeneration, and snapshot restore atomically reconstruct the world and rotate world revision.
 - Source updates, late arrivals, corrected analytics, reschedules, archived/deleted objects, and conflicting partial evidence.
 - Small, medium, and large deterministic datasets.
-- SQLite local persistence for scenario instance states, legacy scenario states, organization config, world revision, source-change ledger, current source-object projection, dataset metadata, and snapshots.
+- SQLite local persistence for scenario instance states, legacy scenario states, organization config, world revision, source-change ledger, current source-object projection, dataset metadata, snapshots, simulation clock, and orchestration state.
 - Production Postgres persistence for the same durable state, with transaction-backed world replacement and CI parity tests.
+- Postgres-backed distributed rate limiting in preview/production. Local/test may use the in-memory limiter.
 - Structured request telemetry, sanitized error envelopes with correlation IDs, operational metrics, `/healthz` liveness, `/readyz` readiness, storage inspection, and request inspection.
 - Deterministic failure simulation for connector development: rate limits, timeouts, 500/503, latency, partial pages, cursor corruption, auth failures, expired credentials, outages, malformed payloads, permission changes, deletes, edits, late arrivals, duplicate objects, and stale objects.
 - Connector test kit covering initial sync, incremental sync, late arrivals, updates/deletes, world reset, stale cursor rejection, new cursor acquisition, permission differences, and connection-regeneration behavior.
 - Built-in deterministic benchmark harness for small, medium, and large datasets across memory, SQLite, and Postgres when a separate `SIMULATOR_BENCHMARK_DATABASE_URL` is configured.
 - Simulator-owned source deep links at `/sim/{sourceSystem}/{sourceId}` with the same connection visibility checks as feeds.
-- Internal operator console at `/console` with organization, scenario, ledger, storage, snapshot, metrics, failure-mode, benchmark, and connector-kit controls.
+- Internal operator console at `/console` with organization, scenario, clock, ledger, storage, snapshot, metrics, failure-mode, benchmark, and connector-kit controls.
 
 Dataset counts with the current implementation:
 
@@ -64,6 +67,7 @@ curl -H 'x-admin-api-key: dev-admin-key' http://localhost:3000/v1/catalog/scenar
 curl -H 'x-admin-api-key: dev-admin-key' http://localhost:3000/v1/admin/datasets/current
 curl -H 'x-admin-api-key: dev-admin-key' http://localhost:3000/v1/admin/metrics
 curl -H 'x-admin-api-key: dev-admin-key' http://localhost:3000/v1/admin/source-changes
+curl -H 'x-admin-api-key: dev-admin-key' http://localhost:3000/v1/admin/clock
 curl -H 'x-connection-secret: dev-connection-secret:conn-product-manager' \
   'http://localhost:3000/v1/connections/conn-product-manager/records?limit=5'
 ```
@@ -84,7 +88,7 @@ pnpm install --frozen-lockfile
 pnpm run verify
 ```
 
-The Milestone 3 suite has 57 Vitest tests. Local runs without `SIMULATOR_POSTGRES_TEST_URL` execute 55 tests and skip the 2 Postgres parity tests. GitHub Actions provides Postgres and runs the full suite plus a container readiness smoke test.
+The Milestone 3 suite has 65 Vitest tests. Local runs without `SIMULATOR_POSTGRES_TEST_URL` execute 62 tests and skip the 3 Postgres integration tests. GitHub Actions provides Postgres and runs the full suite plus Vercel config validation, route smoke tests, Docker build, and a container readiness smoke test. A real `vercel build` runs in CI only when `VERCEL_TOKEN` is configured.
 
 ## Deployment Honesty
 
@@ -92,7 +96,7 @@ Local durable storage defaults to SQLite. Memory storage is available only for t
 
 Preview, production, and Vercel-like runtimes reject missing credentials, known development credentials, identical admin/connection credentials, memory storage, SQLite storage, and injected local-storage simulators. Production-like runtimes require `DATABASE_URL` with Postgres.
 
-Postgres is implemented and CI-proven for the simulator storage contract. Operational readiness still depends on the deployment owner providing database backups, network controls, secret rotation, and monitoring around this service.
+Postgres is implemented and CI-proven for the simulator storage, clock, orchestration, and distributed rate-limit contracts. Operational readiness still depends on the deployment owner providing database backups, network controls, secret rotation, and monitoring around this service.
 
 ## Documentation Map
 

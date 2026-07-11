@@ -250,6 +250,54 @@ export interface DatasetMetadata {
   worldRevision: string;
 }
 
+export type SimulationClockMode = "manual" | "realtime";
+
+export interface SimulationReconciliationReport {
+  schemaVersion: "simulation-reconciliation.v1";
+  trigger: "manual" | "feed" | "cron" | "startup" | "admin";
+  previousWallTime: string;
+  reconciledWallTime: string;
+  previousSimulationTime: string;
+  reconciledSimulationTime: string;
+  simulationDeltaMs: number;
+  instancesAdvanced: number;
+  instancesCreated: number;
+  changesAppended: number;
+  objectsChanged: number;
+  worldRevision: string;
+  alreadyCurrent: boolean;
+}
+
+export interface SimulationClockState {
+  schemaVersion: "simulation-clock.v1";
+  mode: SimulationClockMode;
+  wallClockAnchor: string;
+  simulationClockAnchor: string;
+  lastReconciledWallTime: string;
+  lastReconciledSimulationTime: string;
+  speedMultiplier: number;
+  paused: boolean;
+  continuousActivity: boolean;
+  maxCatchUpSeconds: number;
+  reconciliationCount: number;
+  totalSimulationTimeAdvancedMs: number;
+  lastReconciliationReport?: SimulationReconciliationReport;
+}
+
+export interface ContinuousOrchestrationState {
+  schemaVersion: "continuous-orchestration.v1";
+  enabled: boolean;
+  activityProfile: "standard" | "quiet" | "intense";
+  cycleNumber: number;
+  generationCounters: Record<string, number>;
+  successorByCompletedInstanceId: Record<string, string>;
+  nextScheduledInstanceTime: string;
+  lastCreatedInstanceId?: string;
+  recentSuccessorInstanceIds: string[];
+  maxSuccessorInstancesPerReconciliation: number;
+  minSuccessorIntervalHours: number;
+}
+
 export interface ScenarioEventLogEntry {
   scenarioId: string;
   scenarioInstanceId?: string;
@@ -291,4 +339,6 @@ export interface Snapshot {
   organizationConfig: OrganizationConfig;
   datasetMetadata?: DatasetMetadata;
   worldRevision?: string;
+  clockState?: SimulationClockState;
+  orchestrationState?: ContinuousOrchestrationState;
 }

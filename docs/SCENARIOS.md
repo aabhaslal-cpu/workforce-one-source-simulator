@@ -44,4 +44,10 @@ Instances, not packs, hold runtime state: seed, dataset size, started time, curr
 
 When an operator manually triggers an event, that event occurs at the instance's current simulation time. It does not wait for the template's scheduled `atHour`, and no other instance from the same pack is affected.
 
+## Realtime Continuous Mode
+
+In realtime continuous mode, reconciliation may deterministically occur manual-labeled story beats at their configured scenario time so unattended company activity can complete and create successors. Explicit manual API triggers still occur at the instance's current time and remain idempotent.
+
+Continuous mode reuses these same 10 packs. It does not add hidden Workforce One-specific scenario logic.
+
 Scenario authoring rules live in `docs/SCENARIO_AUTHORING.md`.

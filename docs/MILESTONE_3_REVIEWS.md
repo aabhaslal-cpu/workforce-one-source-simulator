@@ -118,3 +118,11 @@ These reviews were completed before runtime implementation. Their purpose is to 
 ## Final Pre-Code Decision
 
 Proceed with implementation only after this review artifact exists. Milestone 3 will focus on production hardening, not new scenario content.
+
+## Final Hardening Notes
+
+The final Milestone 3 pass added the persisted company clock, canonical reconciliation, deterministic continuous successor activity, Vercel cron path, Vercel rewrites, route smoke tests, and Postgres-backed distributed rate limits without adding new scenario packs.
+
+Normal realtime reconciliation appends to the current world revision. Dataset generation, destructive resets/deletes, organization regeneration, and snapshot restore remain the operations that rotate world revision.
+
+The simulator repository remains the only repository touched. Workforce One integration remains a future external consumer implementation against the documented API contract.

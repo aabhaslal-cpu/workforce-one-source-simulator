@@ -5,10 +5,12 @@ import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import pg, { type Pool as PgPool, type PoolClient, type QueryResult } from "pg";
 import type {
+  ContinuousOrchestrationState,
   DatasetMetadata,
   OrganizationConfig,
   ScenarioInstanceState,
   ScenarioState,
+  SimulationClockState,
   Snapshot,
   SourceChangeLedgerEntry,
   SourceObjectProjection,
@@ -35,7 +37,10 @@ type SQLiteModule = {
 const require = createRequire(import.meta.url);
 const { Pool } = pg;
 const POSTGRES_WORLD_LOCK_ID = "71452711301011";
-const POSTGRES_MIGRATIONS = [{ version: "001_initial", path: "../migrations/postgres_001_initial.sql" }] as const;
+const POSTGRES_MIGRATIONS = [
+  { version: "001_initial", path: "../migrations/postgres_001_initial.sql" },
+  { version: "002_clock_runtime", path: "../migrations/postgres_002_clock_runtime.sql" },
+] as const;
 
 export interface SimulatorStorage {
   readonly kind: StorageKind;
@@ -52,6 +57,10 @@ export interface SimulatorStorage {
   saveOrganizationConfig(config: OrganizationConfig): Promise<void>;
   getDatasetMetadata(): Promise<DatasetMetadata | undefined>;
   saveDatasetMetadata(metadata: DatasetMetadata): Promise<void>;
+  getClockState(): Promise<SimulationClockState | undefined>;
+  saveClockState(state: SimulationClockState): Promise<void>;
+  getOrchestrationState(): Promise<ContinuousOrchestrationState | undefined>;
+  saveOrchestrationState(state: ContinuousOrchestrationState): Promise<void>;
   getWorldRevision(): Promise<string | undefined>;
   saveWorldRevision(worldRevision: string): Promise<void>;
   listSourceChanges(): Promise<SourceChangeLedgerEntry[]>;
@@ -63,6 +72,7 @@ export interface SimulatorStorage {
   listSnapshots(): Promise<Snapshot[]>;
   replaceWorld(replacement: WorldReplacement, options?: WorldMutationOptions): Promise<void>;
   mutateWorld<T>(mutation: WorldMutation<T>, options?: WorldMutationOptions): Promise<T>;
+  checkRateLimit?(input: StorageRateLimitInput): Promise<StorageRateLimitDecision>;
   close?(): Promise<void>;
 }
 
@@ -74,6 +84,8 @@ export interface WorldReplacement {
   sourceChanges: SourceChangeLedgerEntry[];
   sourceObjects: SourceObjectProjection[];
   datasetMetadata: DatasetMetadata;
+  clockState?: SimulationClockState;
+  orchestrationState?: ContinuousOrchestrationState;
 }
 
 export interface WorldSnapshot {
@@ -84,6 +96,8 @@ export interface WorldSnapshot {
   sourceChanges: SourceChangeLedgerEntry[];
   sourceObjects: SourceObjectProjection[];
   datasetMetadata?: DatasetMetadata;
+  clockState?: SimulationClockState;
+  orchestrationState?: ContinuousOrchestrationState;
 }
 
 export interface WorldMutationResult<T> {
@@ -101,6 +115,19 @@ export interface StorageHealth {
   ok: boolean;
   kind: StorageKind;
   message: string;
+}
+
+export interface StorageRateLimitInput {
+  scope: "admin" | "connection" | "cron";
+  identityKey: string;
+  limit: number;
+  windowMs: number;
+  nowMs: number;
+}
+
+export interface StorageRateLimitDecision {
+  allowed: boolean;
+  retryAfterSeconds?: number;
 }
 
 export class StorageError extends Error {
@@ -124,6 +151,8 @@ export class MemorySimulatorStorage implements SimulatorStorage {
   private readonly sourceObjects = new Map<string, SourceObjectProjection>();
   private organizationConfig: OrganizationConfig | undefined;
   private datasetMetadata: DatasetMetadata | undefined;
+  private clockState: SimulationClockState | undefined;
+  private orchestrationState: ContinuousOrchestrationState | undefined;
   private worldRevision: string | undefined;
   private mutationQueue = Promise.resolve();
 
@@ -181,6 +210,22 @@ export class MemorySimulatorStorage implements SimulatorStorage {
 
   async saveDatasetMetadata(metadata: DatasetMetadata): Promise<void> {
     this.datasetMetadata = cloneJson(metadata);
+  }
+
+  async getClockState(): Promise<SimulationClockState | undefined> {
+    return this.clockState ? cloneJson(this.clockState) : undefined;
+  }
+
+  async saveClockState(state: SimulationClockState): Promise<void> {
+    this.clockState = cloneJson(state);
+  }
+
+  async getOrchestrationState(): Promise<ContinuousOrchestrationState | undefined> {
+    return this.orchestrationState ? cloneJson(this.orchestrationState) : undefined;
+  }
+
+  async saveOrchestrationState(state: ContinuousOrchestrationState): Promise<void> {
+    this.orchestrationState = cloneJson(state);
   }
 
   async getWorldRevision(): Promise<string | undefined> {
@@ -258,6 +303,8 @@ export class MemorySimulatorStorage implements SimulatorStorage {
       sourceChanges: this.sourceChanges.map((change) => cloneJson(change)),
       sourceObjects: [...this.sourceObjects.values()].map((object) => cloneJson(object)),
       ...(this.datasetMetadata ? { datasetMetadata: cloneJson(this.datasetMetadata) } : {}),
+      ...(this.clockState ? { clockState: cloneJson(this.clockState) } : {}),
+      ...(this.orchestrationState ? { orchestrationState: cloneJson(this.orchestrationState) } : {}),
     };
   }
 
@@ -274,6 +321,8 @@ export class MemorySimulatorStorage implements SimulatorStorage {
     this.sourceObjects.clear();
     for (const object of replacement.sourceObjects) this.sourceObjects.set(object.sourceKey, cloneJson(object));
     this.datasetMetadata = cloneJson(replacement.datasetMetadata);
+    if (replacement.clockState) this.clockState = cloneJson(replacement.clockState);
+    if (replacement.orchestrationState) this.orchestrationState = cloneJson(replacement.orchestrationState);
   }
 }
 
@@ -293,6 +342,8 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
       CREATE TABLE IF NOT EXISTS snapshots (snapshot_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, snapshot_json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS world_state (id TEXT PRIMARY KEY CHECK (id = 'singleton'), world_revision TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS dataset_metadata (id TEXT PRIMARY KEY CHECK (id = 'singleton'), metadata_json TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS simulation_clock_state (id TEXT PRIMARY KEY CHECK (id = 'singleton'), state_json TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS continuous_orchestration_state (id TEXT PRIMARY KEY CHECK (id = 'singleton'), state_json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS source_change_ledger (ledger_sequence INTEGER PRIMARY KEY, world_revision TEXT NOT NULL, change_json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS source_objects (source_key TEXT PRIMARY KEY, world_revision TEXT NOT NULL, object_json TEXT NOT NULL);
     `);
@@ -399,6 +450,34 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
       .run(JSON.stringify(metadata));
   }
 
+  async getClockState(): Promise<SimulationClockState | undefined> {
+    return this.readClockState();
+  }
+
+  async saveClockState(state: SimulationClockState): Promise<void> {
+    this.database
+      .prepare(
+        `INSERT INTO simulation_clock_state (id, state_json)
+         VALUES ('singleton', ?)
+         ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json`,
+      )
+      .run(JSON.stringify(state));
+  }
+
+  async getOrchestrationState(): Promise<ContinuousOrchestrationState | undefined> {
+    return this.readOrchestrationState();
+  }
+
+  async saveOrchestrationState(state: ContinuousOrchestrationState): Promise<void> {
+    this.database
+      .prepare(
+        `INSERT INTO continuous_orchestration_state (id, state_json)
+         VALUES ('singleton', ?)
+         ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json`,
+      )
+      .run(JSON.stringify(state));
+  }
+
   async getWorldRevision(): Promise<string | undefined> {
     return this.readWorldRevision();
   }
@@ -499,6 +578,8 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
     const organizationConfig = this.readOrganizationConfig();
     const worldRevision = this.readWorldRevision();
     const datasetMetadata = this.readDatasetMetadata();
+    const clockState = this.readClockState();
+    const orchestrationState = this.readOrchestrationState();
     return {
       scenarioStates: this.readScenarioStates(),
       scenarioInstanceStates: this.readScenarioInstanceStates(),
@@ -507,6 +588,8 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
       sourceChanges: this.readSourceChanges(),
       sourceObjects: this.readSourceObjects(),
       ...(datasetMetadata ? { datasetMetadata } : {}),
+      ...(clockState ? { clockState } : {}),
+      ...(orchestrationState ? { orchestrationState } : {}),
     };
   }
 
@@ -548,6 +631,20 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
       | { metadata_json: string }
       | undefined;
     return row ? parseJson<DatasetMetadata>(row.metadata_json) : undefined;
+  }
+
+  private readClockState(): SimulationClockState | undefined {
+    const row = this.database.prepare("SELECT state_json FROM simulation_clock_state WHERE id = 'singleton'").get() as
+      | { state_json: string }
+      | undefined;
+    return row ? parseJson<SimulationClockState>(row.state_json) : undefined;
+  }
+
+  private readOrchestrationState(): ContinuousOrchestrationState | undefined {
+    const row = this.database.prepare("SELECT state_json FROM continuous_orchestration_state WHERE id = 'singleton'").get() as
+      | { state_json: string }
+      | undefined;
+    return row ? parseJson<ContinuousOrchestrationState>(row.state_json) : undefined;
   }
 
   private readWorldRevision(): string | undefined {
@@ -618,6 +715,24 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
          ON CONFLICT(id) DO UPDATE SET metadata_json = excluded.metadata_json`,
       )
       .run(JSON.stringify(replacement.datasetMetadata));
+    if (replacement.clockState) {
+      this.database
+        .prepare(
+          `INSERT INTO simulation_clock_state (id, state_json)
+           VALUES ('singleton', ?)
+           ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json`,
+        )
+        .run(JSON.stringify(replacement.clockState));
+    }
+    if (replacement.orchestrationState) {
+      this.database
+        .prepare(
+          `INSERT INTO continuous_orchestration_state (id, state_json)
+           VALUES ('singleton', ?)
+           ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json`,
+        )
+        .run(JSON.stringify(replacement.orchestrationState));
+    }
   }
 }
 
@@ -763,6 +878,37 @@ export class PostgresSimulatorStorage implements SimulatorStorage {
     );
   }
 
+  async getClockState(): Promise<SimulationClockState | undefined> {
+    const rows = await this.rows<{ state_json: string }>("get simulation clock", "SELECT state_json FROM simulation_clock_state WHERE id = 'singleton'");
+    return rows[0] ? parseJson<SimulationClockState>(rows[0].state_json) : undefined;
+  }
+
+  async saveClockState(state: SimulationClockState): Promise<void> {
+    await this.query(
+      `INSERT INTO simulation_clock_state (id, state_json)
+       VALUES ('singleton', $1)
+       ON CONFLICT (id) DO UPDATE SET state_json = EXCLUDED.state_json`,
+      [JSON.stringify(state)],
+    );
+  }
+
+  async getOrchestrationState(): Promise<ContinuousOrchestrationState | undefined> {
+    const rows = await this.rows<{ state_json: string }>(
+      "get continuous orchestration",
+      "SELECT state_json FROM continuous_orchestration_state WHERE id = 'singleton'",
+    );
+    return rows[0] ? parseJson<ContinuousOrchestrationState>(rows[0].state_json) : undefined;
+  }
+
+  async saveOrchestrationState(state: ContinuousOrchestrationState): Promise<void> {
+    await this.query(
+      `INSERT INTO continuous_orchestration_state (id, state_json)
+       VALUES ('singleton', $1)
+       ON CONFLICT (id) DO UPDATE SET state_json = EXCLUDED.state_json`,
+      [JSON.stringify(state)],
+    );
+  }
+
   async getWorldRevision(): Promise<string | undefined> {
     const rows = await this.rows<{ world_revision: string }>("get world revision", "SELECT world_revision FROM world_state WHERE id = 'singleton'");
     return rows[0]?.world_revision;
@@ -860,6 +1006,51 @@ export class PostgresSimulatorStorage implements SimulatorStorage {
     } finally {
       client.release();
     }
+  }
+
+  async checkRateLimit(input: StorageRateLimitInput): Promise<StorageRateLimitDecision> {
+    await this.ensureMigrated();
+    return this.transaction(async (client) => {
+      const cleanupBefore = input.nowMs - input.windowMs * 2;
+      await client.query(
+        `DELETE FROM rate_limit_buckets
+         WHERE expires_at_ms < $1
+         AND (scope, identity_key) IN (
+           SELECT scope, identity_key FROM rate_limit_buckets WHERE expires_at_ms < $1 LIMIT 100
+         )`,
+        [cleanupBefore],
+      );
+      const existing = (
+        await client.query<{ window_started_at_ms: string; request_count: number }>(
+          "SELECT window_started_at_ms, request_count FROM rate_limit_buckets WHERE scope = $1 AND identity_key = $2 FOR UPDATE",
+          [input.scope, input.identityKey],
+        )
+      ).rows[0];
+      if (!existing || input.nowMs - Number(existing.window_started_at_ms) >= input.windowMs) {
+        await client.query(
+          `INSERT INTO rate_limit_buckets (scope, identity_key, window_started_at_ms, request_count, expires_at_ms)
+           VALUES ($1, $2, $3, 1, $4)
+           ON CONFLICT (scope, identity_key)
+           DO UPDATE SET window_started_at_ms = EXCLUDED.window_started_at_ms,
+                         request_count = EXCLUDED.request_count,
+                         expires_at_ms = EXCLUDED.expires_at_ms`,
+          [input.scope, input.identityKey, input.nowMs, input.nowMs + input.windowMs],
+        );
+        return { allowed: true };
+      }
+      const nextCount = existing.request_count + 1;
+      await client.query(
+        `UPDATE rate_limit_buckets
+         SET request_count = $3, expires_at_ms = $4
+         WHERE scope = $1 AND identity_key = $2`,
+        [input.scope, input.identityKey, nextCount, Number(existing.window_started_at_ms) + input.windowMs],
+      );
+      if (nextCount <= input.limit) return { allowed: true };
+      return {
+        allowed: false,
+        retryAfterSeconds: Math.max(1, Math.ceil((input.windowMs - (input.nowMs - Number(existing.window_started_at_ms))) / 1_000)),
+      };
+    }, "check rate limit");
   }
 
   private async rows<T>(operation: string, sql: string, values: unknown[] = []): Promise<T[]> {
@@ -1000,6 +1191,8 @@ async function readPostgresWorldSnapshot(client: PoolClient): Promise<WorldSnaps
     parseJson<SourceObjectProjection>(row.object_json),
   );
   const metadataRow = (await client.query<{ metadata_json: string }>("SELECT metadata_json FROM dataset_metadata WHERE id = 'singleton'")).rows[0];
+  const clockRow = (await client.query<{ state_json: string }>("SELECT state_json FROM simulation_clock_state WHERE id = 'singleton'")).rows[0];
+  const orchestrationRow = (await client.query<{ state_json: string }>("SELECT state_json FROM continuous_orchestration_state WHERE id = 'singleton'")).rows[0];
   return {
     scenarioStates,
     scenarioInstanceStates,
@@ -1008,6 +1201,8 @@ async function readPostgresWorldSnapshot(client: PoolClient): Promise<WorldSnaps
     sourceChanges,
     sourceObjects,
     ...(metadataRow ? { datasetMetadata: parseJson<DatasetMetadata>(metadataRow.metadata_json) } : {}),
+    ...(clockRow ? { clockState: parseJson<SimulationClockState>(clockRow.state_json) } : {}),
+    ...(orchestrationRow ? { orchestrationState: parseJson<ContinuousOrchestrationState>(orchestrationRow.state_json) } : {}),
   };
 }
 
@@ -1050,6 +1245,22 @@ async function writePostgresWorldReplacement(client: PoolClient, replacement: Wo
      ON CONFLICT (id) DO UPDATE SET metadata_json = EXCLUDED.metadata_json`,
     [JSON.stringify(replacement.datasetMetadata)],
   );
+  if (replacement.clockState) {
+    await client.query(
+      `INSERT INTO simulation_clock_state (id, state_json)
+       VALUES ('singleton', $1)
+       ON CONFLICT (id) DO UPDATE SET state_json = EXCLUDED.state_json`,
+      [JSON.stringify(replacement.clockState)],
+    );
+  }
+  if (replacement.orchestrationState) {
+    await client.query(
+      `INSERT INTO continuous_orchestration_state (id, state_json)
+       VALUES ('singleton', $1)
+       ON CONFLICT (id) DO UPDATE SET state_json = EXCLUDED.state_json`,
+      [JSON.stringify(replacement.orchestrationState)],
+    );
+  }
 }
 
 async function writePostgresSourceChanges(client: PoolClient, changes: SourceChangeLedgerEntry[]): Promise<void> {

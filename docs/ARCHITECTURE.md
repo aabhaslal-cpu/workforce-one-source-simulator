@@ -11,7 +11,7 @@ The simulator owns fictional source data only. Workforce One owns interpretation
 ## Runtime Components
 
 - `src/app.ts`: HTTP API, admin auth, connection-bound auth, request validation, operator console, source deep links, admin inspection routes, health, metrics, failure controls, benchmark, and connector-kit routes.
-- `src/engine.ts`: deterministic organization-aware scenario engine, scenario instances, source-change ledger, v3 cursor feed, world revision, snapshots, dataset metadata, and visibility filtering.
+- `src/engine.ts`: deterministic organization-aware scenario engine, scenario instances, persisted simulation clock, continuous activity orchestration, source-change ledger, v3 cursor feed, world revision, snapshots, dataset metadata, and visibility filtering.
 - `src/adapters/*`: provider-shaped payload adapters and adapter registry.
 - `src/data.ts`: fictional tenant and 10 scenario-pack definitions.
 - `src/organization.ts`: role templates, deterministic people/teams/reporting graph, dotted-line relationships, cross-functional memberships, and connection IDs.
@@ -49,7 +49,28 @@ Each ledger entry has:
 
 The v3 cursor stores only connection ID, world revision, and `afterSequence`. It remains compact regardless of dataset size.
 
-Normal time advancement and manual triggers append new changes with increasing `ledgerSequence` values and keep the same `worldRevision`. Destructive reset/delete of a scenario instance, dataset generation, organization regeneration, and snapshot restore atomically rebuild the world and rotate `worldRevision`.
+Normal time advancement, manual triggers, and realtime clock reconciliation append new changes with increasing `ledgerSequence` values and keep the same `worldRevision`. Destructive reset/delete of a scenario instance, dataset generation, organization regeneration, and snapshot restore atomically rebuild the world and rotate `worldRevision`.
+
+## Company Clock And Reconciliation
+
+The simulator has one persisted company clock, not one process-local timer.
+
+Clock state includes:
+
+- mode: `manual` or `realtime`
+- wall-clock anchor
+- simulation-clock anchor
+- last reconciled wall time
+- last reconciled simulation time
+- speed multiplier
+- pause state
+- continuous-activity flag
+- maximum catch-up window
+- last reconciliation report
+
+All realtime progression passes through `reconcileSimulationClock(now)`. The operation runs inside the same storage mutation lock as world replacement, calculates bounded elapsed simulation time from server-owned wall time, advances eligible non-paused instances by the same delta, materializes newly due source changes, creates bounded deterministic successor instances when continuous activity is enabled, updates source-object projection and dataset metadata, persists the clock checkpoint, and commits atomically.
+
+Feed polling calls reconciliation before reading authorized ledger changes in realtime mode. `/api/cron/tick` calls the same operation and is only a convenience to keep the world warm; correctness does not depend on a permanently running process.
 
 ## Source Objects
 
@@ -70,6 +91,16 @@ Dataset size controls deterministic instance count:
 Scenario instances advance, pause, reset, delete, and trigger events independently. Reset/delete are destructive world replacements and invalidate previous cursors; ordinary advance/trigger append to the current world and preserve cursor continuity.
 
 Automatically scheduled events occur at `startedAt + atHour`. Manual triggers occur at the selected instance's `currentTime`, even when that is earlier than the template's `atHour`. The persisted event occurrence time is the source of truth for created, updated, and deleted source timestamps.
+
+For unattended realtime continuous activity, manual-labeled story beats are deterministically occurred at their configured scenario time by reconciliation. Explicit manual API triggers still occur at the instance's current simulation time and remain idempotent.
+
+## Continuous Activity
+
+Continuous activity reuses the existing 10 scenario packs. It does not add new business scenarios or Workforce One logic.
+
+When enabled, completed scenario instances become eligible for deterministic successor instances. Successor IDs, seeds, start times, and account/product/project/service/workstream context are derived from persisted orchestration state and the completed instance. Per-reconciliation creation limits and minimum successor intervals prevent unbounded catch-up.
+
+The major cross-functional release pack continues the shared storyline across Product, Engineering, Customer Success, all four organizational levels, and all 12 source systems.
 
 ## Organization
 
@@ -100,7 +131,11 @@ SQLite and Postgres persist:
 - `source_change_ledger`
 - `source_objects`
 - `dataset_metadata`
+- `simulation_clock_state`
+- `continuous_orchestration_state`
 - `snapshots`
+
+Postgres also persists `rate_limit_buckets` for distributed preview/production request limiting.
 
 Memory storage is for tests or explicitly selected local ephemeral development. SQLite is for local development and CI-level local durability. Preview, production, and Vercel-like environments reject memory and SQLite and require Postgres through `DATABASE_URL`.
 
@@ -112,7 +147,7 @@ Postgres migrations are versioned files recorded in `schema_migrations` with che
 
 Every request receives a request ID and sanitized telemetry record. Logs and metrics include operation, path, status, duration, connection ID when present, cursor version/position when present, world revision, and safe error classification. Credentials, stack traces, and database connection strings are not logged by the simulator.
 
-`/healthz` is storage-independent liveness; `/readyz` reports storage health, world revision, dataset metadata, organization summary, uptime, build version, and schema version. Admin-only metrics and request-inspection routes expose recent sanitized request data for connector debugging.
+`/healthz` is storage-independent liveness; `/readyz` reports storage health, world revision, safe clock state, dataset metadata, organization summary, uptime, build version, and schema version. Admin-only metrics and request-inspection routes expose recent sanitized request data for connector debugging.
 
 ## Failure Simulation
 
@@ -122,7 +157,13 @@ Failure controls are disabled by default and require admin authentication at run
 
 ## Rate Limits
 
-Real service rate limits are separate from failure simulation. They are keyed by authenticated admin identity or resolved connection ID and return safe `429` envelopes with `Retry-After`, correlation ID, and `rate_limit` classification.
+Real service rate limits are separate from failure simulation. They are keyed by authenticated admin identity, cron identity, or resolved connection ID and return safe `429` envelopes with `Retry-After`, correlation ID, and `rate_limit` classification. Preview/production use Postgres-backed distributed buckets; development/test may use local in-memory buckets.
+
+## Vercel And Warm Processes
+
+The Vercel path uses the same Hono fetch handler in `api/index.ts` as the service contract. `vercel.json` rewrites all service routes to that handler and configures `/api/cron/tick`.
+
+Warm Vercel Function instances cannot trust cached organization or connection definitions. Before connection-sensitive authorization and admin detailed catalog reads, the app refreshes persisted organization config and rebuilds people, teams, role-alias connections, person-specific connections, and permission mappings when the stored organization changes.
 
 ## Public Vs Admin
 

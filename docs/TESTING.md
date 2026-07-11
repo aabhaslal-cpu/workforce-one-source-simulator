@@ -7,7 +7,7 @@ pnpm install --frozen-lockfile
 pnpm run verify
 ```
 
-Local verification without Postgres runs 55 tests and skips 2 Postgres tests.
+Local verification without Postgres runs 62 tests and skips 3 Postgres tests.
 
 ## Postgres Parity
 
@@ -17,7 +17,7 @@ Set `SIMULATOR_POSTGRES_TEST_URL` to run Postgres tests locally:
 SIMULATOR_POSTGRES_TEST_URL=postgres://postgres:postgres@localhost:5432/source_simulator_test pnpm run test
 ```
 
-GitHub Actions provisions Postgres 16, runs all 57 tests, builds the Docker image, and runs a container `/readyz` smoke test against Postgres.
+GitHub Actions provisions Postgres 16, runs all 65 tests, validates Vercel config, smoke-tests standard routes, builds the Docker image, and runs a container `/readyz` smoke test against Postgres. If `VERCEL_TOKEN` is configured, CI also runs `vercel build`; without that token, real Vercel account build execution is intentionally skipped.
 
 Postgres tests cover:
 
@@ -25,6 +25,28 @@ Postgres tests cover:
 - restart persistence
 - transaction rollback on injected world-replacement failure
 - production-like app acceptance with Postgres storage
+- persisted clock state across engine recreation
+- Postgres-backed distributed rate limiting across app instances
+
+## Clock And Vercel Coverage
+
+Clock tests cover:
+
+- manual mode preserving operator-controlled state
+- realtime mode advancing by speed multiplier
+- pause/resume
+- SQLite restart persistence
+- feed-triggered reconciliation from a saved cursor
+- deterministic continuous successor creation
+- idempotent duplicate reconciliation
+- all-12-source activity through the major cross-functional release storyline
+
+Vercel/deployment tests cover:
+
+- `vercel.json` frozen install, rewrite, cron, runtime, and max-duration configuration
+- `/`, `/console`, `/healthz`, `/readyz`, and `/v1/catalog`
+- cron route missing, incorrect, and correct bearer secret handling
+- warm-process organization refresh before connection authorization
 
 ## Connector Test Kit
 

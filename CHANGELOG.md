@@ -6,26 +6,32 @@
 
 - Production Postgres storage adapter with migrations and transaction-backed world replacement.
 - CI Postgres service and conditional local Postgres parity tests.
+- Persisted simulation clock and continuous orchestration state in memory, SQLite, and Postgres.
+- Admin clock APIs and Vercel cron tick endpoint backed by one canonical reconciliation operation.
+- Feed-triggered realtime reconciliation so source feeds can advance the company world after cold starts or missed cron delivery.
+- Deterministic continuous successor activity using the existing 10 scenario packs, including the all-source major cross-functional release storyline.
+- Postgres-backed distributed production rate limiting for admin, cron, and connection identities.
 - Storage health checks for memory, SQLite, and Postgres.
 - Structured request telemetry with request ID, connection ID, world revision, cursor metadata, operation, status, duration, and safe error classification.
 - `/healthz` liveness and `/readyz` readiness, admin metrics, request inspector, storage inspector, deterministic benchmark endpoint, failure-mode configuration endpoints, and connector test-kit endpoint.
 - Deterministic failure modes for rate limits, timeouts, 500/503, latency, partial pages, cursor corruption, auth failures, expired credentials, outages, malformed payloads, permission changes, deleted objects, edited objects, late-arriving objects, duplicate objects, and stale objects.
 - Connector lifecycle test kit covering initial sync, incremental sync, late arrivals, updates/deletes, world reset, stale cursor rejection, new cursor acquisition, permission differences, and connection regeneration behavior.
-- Operator console controls for metrics, storage, ledger, snapshots, failure toggles, benchmark, and connector kit.
+- Operator console controls for clock, metrics, storage, ledger, snapshots, failure toggles, benchmark, and connector kit.
 - Production configuration docs, `.env.example` updates, storage docs, operations docs, failure-mode docs, testing docs, scenario-authoring docs, provider-adapter docs, and Milestone 3 review notes.
 
 ### Changed
 
 - Production-like runtimes now accept Postgres when `DATABASE_URL` is configured and continue to reject memory/SQLite.
+- Preview/production rate limiting is distributed through Postgres and cannot be downgraded to process-local buckets.
 - Postgres benchmarks now require a separate `SIMULATOR_BENCHMARK_DATABASE_URL` and reject reuse of the live `DATABASE_URL`.
-- OpenAPI now includes operational, failure-mode, benchmark, and connector-kit endpoints.
+- OpenAPI now includes operational, clock, cron, failure-mode, benchmark, and connector-kit endpoints.
 - Benchmark output is compact and reports durations/counts only.
 - Error responses include safe classifications and correlation IDs without credentials, stack traces, or database strings.
 
 ### Verification
 
-- Local suite: 57 Vitest tests total; 55 pass locally and 2 Postgres tests skip without `SIMULATOR_POSTGRES_TEST_URL`.
-- GitHub Actions provides Postgres and is expected to run all 57 tests.
+- Local suite: 65 Vitest tests total; 62 pass locally and 3 Postgres tests skip without `SIMULATOR_POSTGRES_TEST_URL`.
+- GitHub Actions provides Postgres and is expected to run all 65 tests plus Vercel config validation, route smoke tests, Docker build, and container readiness smoke. A real Vercel CLI build runs when `VERCEL_TOKEN` is configured.
 
 ### Performance Snapshot
 

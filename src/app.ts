@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import {
@@ -5,6 +6,7 @@ import {
   HttpError,
   badRequest,
   validateOrganizationConfigCompatibility,
+  type ClockUpdateInput,
   type ScenarioInstanceCreateInput,
   type SimulatorOptions,
 } from "./engine.js";
@@ -131,6 +133,15 @@ const ScenarioInstanceCreateSchema = z
     participantPersonIds: z.record(z.string().min(1).max(128), z.string().min(1).max(160)).optional(),
   })
   .strict();
+const ClockUpdateSchema = z
+  .object({
+    mode: z.enum(["manual", "realtime"]).optional(),
+    speedMultiplier: z.number().positive().max(24 * 60).optional(),
+    paused: z.boolean().optional(),
+    continuousActivity: z.boolean().optional(),
+    maxCatchUpSeconds: z.number().int().min(1).max(60 * 60 * 24 * 7).optional(),
+  })
+  .strict();
 
 type AuthConfig = {
   adminKey: string;
@@ -149,6 +160,14 @@ export async function createApp(options: AppOptions = {}) {
   const configuredDatasetSize = parseDatasetSize(process.env.SIMULATOR_DEFAULT_DATASET_SIZE);
   if (configuredDatasetSize) simulatorOptions.datasetSize = configuredDatasetSize;
   if (process.env.SIMULATOR_PUBLIC_BASE_URL) simulatorOptions.baseUrl = process.env.SIMULATOR_PUBLIC_BASE_URL;
+  const clockMode = parseClockMode(process.env.SIMULATOR_CLOCK_MODE);
+  if (clockMode) simulatorOptions.clockMode = clockMode;
+  const clockSpeed = parsePositiveNumber(process.env.SIMULATOR_CLOCK_SPEED);
+  if (clockSpeed !== undefined) simulatorOptions.clockSpeedMultiplier = clockSpeed;
+  const maxCatchUpSeconds = parsePositiveInteger(process.env.SIMULATOR_MAX_CATCH_UP_SECONDS);
+  if (maxCatchUpSeconds !== undefined) simulatorOptions.maxCatchUpSeconds = maxCatchUpSeconds;
+  const continuousActivity = parseBoolean(process.env.SIMULATOR_CONTINUOUS_ACTIVITY);
+  if (continuousActivity !== undefined) simulatorOptions.continuousActivity = continuousActivity;
   if (options.storage) simulatorOptions.storage = options.storage;
   if (!options.simulator && !options.storage) simulatorOptions.storage = createStorageForRuntime(runtimeEnv);
 
@@ -156,7 +175,7 @@ export async function createApp(options: AppOptions = {}) {
   enforceProductionSimulatorStorage(runtimeEnv, simulator);
   const auth = buildAuthConfig(simulator, options, runtimeEnv);
   const telemetry = new OperationalTelemetry(process.env.SIMULATOR_STRUCTURED_LOGS === "true" || isProductionLike(runtimeEnv));
-  const rateLimiter = new RateLimiter(buildRateLimitConfig(runtimeEnv, options.rateLimitConfigJson));
+  const rateLimiter = new RateLimiter(buildRateLimitConfig(runtimeEnv, options.rateLimitConfigJson), (input) => simulator.checkDistributedRateLimit(input));
   const failureController = new FailureController();
   failureController.setConfig(parseFailureConfig(process.env.SIMULATOR_FAILURE_MODES));
   const requestIds = new WeakMap<Request, string>();
@@ -239,19 +258,19 @@ export async function createApp(options: AppOptions = {}) {
     }),
   );
   app.get("/v1/catalog/scenario-packs", (c) => c.json({ scenarioPacks: simulator.scenarioPacks() }));
-  app.get("/v1/catalog/scenario-instances", (c) => withAdmin(c, auth, rateLimiter, requestIds, async () => c.json({ scenarioInstances: await simulator.scenarioInstances() })));
+  app.get("/v1/catalog/scenario-instances", (c) => withAdmin(c, auth, rateLimiter, requestIds, simulator, async () => c.json({ scenarioInstances: await simulator.scenarioInstances() })));
   app.get("/v1/catalog/seats", (c) => c.json({ roleTemplates }));
-  app.get("/v1/catalog/people", (c) => withAdmin(c, auth, rateLimiter, requestIds, () => c.json({ people: simulator.people() })));
-  app.get("/v1/catalog/people/:personId", (c) => withAdmin(c, auth, rateLimiter, requestIds, () => c.json(simulator.person(c.req.param("personId")))));
-  app.get("/v1/catalog/organization", (c) => withAdmin(c, auth, rateLimiter, requestIds, () => c.json(simulator.organizationSummary())));
-  app.get("/v1/catalog/organization/tree", (c) => withAdmin(c, auth, rateLimiter, requestIds, () => c.json(simulator.organizationTree())));
-  app.get("/v1/catalog/teams", (c) => withAdmin(c, auth, rateLimiter, requestIds, () => c.json({ teams: simulator.teams() })));
-  app.get("/v1/catalog/teams/:teamId", (c) => withAdmin(c, auth, rateLimiter, requestIds, () => c.json(simulator.team(c.req.param("teamId")))));
+  app.get("/v1/catalog/people", (c) => withAdmin(c, auth, rateLimiter, requestIds, simulator, () => c.json({ people: simulator.people() })));
+  app.get("/v1/catalog/people/:personId", (c) => withAdmin(c, auth, rateLimiter, requestIds, simulator, () => c.json(simulator.person(c.req.param("personId")))));
+  app.get("/v1/catalog/organization", (c) => withAdmin(c, auth, rateLimiter, requestIds, simulator, () => c.json(simulator.organizationSummary())));
+  app.get("/v1/catalog/organization/tree", (c) => withAdmin(c, auth, rateLimiter, requestIds, simulator, () => c.json(simulator.organizationTree())));
+  app.get("/v1/catalog/teams", (c) => withAdmin(c, auth, rateLimiter, requestIds, simulator, () => c.json({ teams: simulator.teams() })));
+  app.get("/v1/catalog/teams/:teamId", (c) => withAdmin(c, auth, rateLimiter, requestIds, simulator, () => c.json(simulator.team(c.req.param("teamId")))));
 
   app.get("/v1/connections/:connectionId/manifest", async (c) => {
-    const authenticated = authenticateConnection(c, auth, simulator, requestIds, c.req.param("connectionId"));
+    const authenticated = await authenticateConnection(c, auth, simulator, requestIds, c.req.param("connectionId"));
     if (!authenticated.ok) return authenticated.response;
-    const rateLimited = rateLimitConnection(c, rateLimiter, requestIds, authenticated.connectionId);
+    const rateLimited = await rateLimitConnection(c, rateLimiter, requestIds, authenticated.connectionId);
     if (rateLimited) return rateLimited;
     const failure = await failureResponse(c, failureController.evaluate({ operation: "manifest", connectionId: authenticated.connectionId }), requestIds);
     if (failure) return failure;
@@ -259,11 +278,12 @@ export async function createApp(options: AppOptions = {}) {
   });
 
   app.get("/v1/connections/:connectionId/records", async (c) => {
-    const authenticated = authenticateConnection(c, auth, simulator, requestIds, c.req.param("connectionId"));
+    const authenticated = await authenticateConnection(c, auth, simulator, requestIds, c.req.param("connectionId"));
     if (!authenticated.ok) return authenticated.response;
-    const rateLimited = rateLimitConnection(c, rateLimiter, requestIds, authenticated.connectionId);
+    const rateLimited = await rateLimitConnection(c, rateLimiter, requestIds, authenticated.connectionId);
     if (rateLimited) return rateLimited;
     const pagination = parseSchema(PaginationSchema, { cursor: c.req.query("cursor"), limit: c.req.query("limit") });
+    recordReconciliationTelemetry(telemetry, await simulator.reconcileSimulationClock({ trigger: "feed" }));
     const decision = failureController.evaluate({ operation: "feed", connectionId: authenticated.connectionId });
     const failure = await failureResponse(c, decision, requestIds);
     if (failure) return failure;
@@ -272,9 +292,9 @@ export async function createApp(options: AppOptions = {}) {
   });
 
   app.get("/sim/:sourceSystem/:sourceId", async (c) => {
-    const authenticated = authenticateConnection(c, auth, simulator, requestIds);
+    const authenticated = await authenticateConnection(c, auth, simulator, requestIds);
     if (!authenticated.ok) return authenticated.response;
-    const rateLimited = rateLimitConnection(c, rateLimiter, requestIds, authenticated.connectionId);
+    const rateLimited = await rateLimitConnection(c, rateLimiter, requestIds, authenticated.connectionId);
     if (rateLimited) return rateLimited;
     const failure = await failureResponse(
       c,
@@ -290,10 +310,21 @@ export async function createApp(options: AppOptions = {}) {
     return c.json({ record });
   });
 
+  app.get("/api/cron/tick", async (c) => {
+    const cronAuth = authenticateCron(c, requestIds);
+    if (cronAuth) return cronAuth;
+    const rateLimited = await rateLimitCron(c, rateLimiter, requestIds);
+    if (rateLimited) return rateLimited;
+    const report = await simulator.reconcileSimulationClock({ trigger: "cron" });
+    recordReconciliationTelemetry(telemetry, report);
+    return c.json({ schemaVersion: "simulation-cron-tick.v1", report });
+  });
+
   app.use("/v1/admin/*", async (c, next) => {
     const response = authenticateAdmin(c, auth, requestIds);
     if (response) return response;
-    const rateLimited = rateLimitAdmin(c, rateLimiter, requestIds);
+    await simulator.refreshOrganizationFromStorage();
+    const rateLimited = await rateLimitAdmin(c, rateLimiter, requestIds);
     if (rateLimited) return rateLimited;
     await next();
   });
@@ -386,6 +417,25 @@ export async function createApp(options: AppOptions = {}) {
     c.json({ history: await simulator.sourceObjectHistory(c.req.param("sourceSystem"), c.req.param("sourceId")) }),
   );
   app.get("/v1/admin/source-changes", async (c) => c.json({ sourceChanges: await simulator.sourceChanges() }));
+  app.get("/v1/admin/clock", async (c) => c.json(await simulator.clockStatus()));
+  app.put("/v1/admin/clock", async (c) => {
+    const body = compactOptional(await readJsonBody(c.req.raw, ClockUpdateSchema)) as ClockUpdateInput;
+    return c.json(await simulator.updateClock(body));
+  });
+  app.post("/v1/admin/clock/reconcile", async (c) => {
+    await readJsonBody(c.req.raw, EmptyBodySchema);
+    const report = await simulator.reconcileSimulationClock({ trigger: "manual" });
+    recordReconciliationTelemetry(telemetry, report);
+    return c.json(report);
+  });
+  app.post("/v1/admin/clock/pause", async (c) => {
+    await readJsonBody(c.req.raw, EmptyBodySchema);
+    return c.json(await simulator.pauseClock());
+  });
+  app.post("/v1/admin/clock/resume", async (c) => {
+    await readJsonBody(c.req.raw, EmptyBodySchema);
+    return c.json(await simulator.resumeClock());
+  });
   app.get("/v1/admin/metrics", async (c) => c.json(await buildMetrics(simulator, telemetry, failureController, rateLimiter)));
   app.get("/v1/admin/requests", (c) => c.json({ requests: telemetry.snapshot().requests.recent }));
   app.get("/v1/admin/storage", async (c) => c.json(await buildStorageInspector(simulator)));
@@ -454,6 +504,7 @@ async function buildReadiness(simulator: SourceSimulator, telemetry: Operational
     }
     const metadata = await simulator.datasetMetadata();
     const organization = simulator.organizationSummary();
+    const clockStatus = await simulator.clockStatus();
     return {
       status: 200,
       body: {
@@ -468,6 +519,14 @@ async function buildReadiness(simulator: SourceSimulator, telemetry: Operational
         schemaVersionStorage: "simulator-storage.v1",
         storage,
         worldRevision: metadata.worldRevision,
+        clock: {
+          available: true,
+          schemaVersion: clockStatus.clock.schemaVersion,
+          mode: clockStatus.clock.mode,
+          paused: clockStatus.clock.paused,
+          lastReconciledWallTime: clockStatus.clock.lastReconciledWallTime,
+          lastReconciliationStatus: clockStatus.clock.lastReconciliationReport ? "available" : "not_reconciled",
+        },
         datasetMetadata: metadata,
         organization: {
           seed: organization.seed,
@@ -501,6 +560,7 @@ async function buildMetrics(
   const metadata = await simulator.datasetMetadata();
   const states = await simulator.states();
   const sourceChanges = await simulator.sourceChanges();
+  const clockStatus = await simulator.clockStatus();
   return {
     ...snapshot,
     simulator: {
@@ -515,6 +575,16 @@ async function buildMetrics(
       storage: await simulator.storageHealth(),
       failureRules: failureController.getConfig().rules.filter((rule) => rule.enabled).length,
       rateLimits: rateLimiter.snapshot(),
+      clock: {
+        mode: clockStatus.clock.mode,
+        speedMultiplier: clockStatus.clock.speedMultiplier,
+        currentSimulationTime: clockStatus.clock.lastReconciledSimulationTime,
+        lastReconciledWallTime: clockStatus.clock.lastReconciledWallTime,
+        reconciliationCount: clockStatus.clock.reconciliationCount,
+        totalSimulationTimeAdvancedMs: clockStatus.clock.totalSimulationTimeAdvancedMs,
+        continuousActivity: clockStatus.clock.continuousActivity,
+        lastReconciliationReport: clockStatus.clock.lastReconciliationReport ?? null,
+      },
     },
   };
 }
@@ -531,6 +601,7 @@ async function buildStorageInspector(simulator: SourceSimulator) {
       counts: simulator.organizationSummary().counts,
       validationOk: simulator.organizationSummary().validation.ok,
     },
+    clock: (await simulator.clockStatus()).clock,
     counts: {
       scenarioInstances: (await simulator.states()).length,
       snapshots: (await simulator.listSnapshots()).length,
@@ -569,6 +640,8 @@ function operationFromPath(method: string, path: string): string {
   if (path.includes("/failure-modes")) return "failure_modes";
   if (path.includes("/performance/benchmark")) return "benchmark";
   if (path.includes("/connector-test-kit")) return "connector_test_kit";
+  if (path.includes("/clock")) return "clock";
+  if (path.includes("/api/cron/tick")) return "cron_tick";
   if (path.includes("/metrics")) return "metrics";
   if (path.includes("/healthz")) return "health";
   if (path.includes("/snapshots")) return "snapshot";
@@ -634,11 +707,13 @@ async function withAdmin(
   auth: AuthConfig,
   rateLimiter: RateLimiter,
   requestIds: WeakMap<Request, string>,
+  simulator: SourceSimulator,
   handler: () => Response | Promise<Response>,
 ): Promise<Response> {
   const response = authenticateAdmin(c, auth, requestIds);
   if (response) return response;
-  const rateLimited = rateLimitAdmin(c, rateLimiter, requestIds);
+  await simulator.refreshOrganizationFromStorage();
+  const rateLimited = await rateLimitAdmin(c, rateLimiter, requestIds);
   if (rateLimited) return rateLimited;
   return handler();
 }
@@ -649,13 +724,35 @@ function authenticateAdmin(c: Context, auth: AuthConfig, requestIds: WeakMap<Req
     : jsonError(401, { error: "Unauthorized", classification: "authentication_error", correlationId: requestIds.get(c.req.raw) ?? "unknown" });
 }
 
-function authenticateConnection(
+function authenticateCron(c: Context, requestIds: WeakMap<Request, string>): Response | null {
+  const expected = process.env.CRON_SECRET;
+  if (!expected?.trim()) {
+    return jsonError(503, {
+      error: "Cron secret is not configured",
+      classification: "configuration_error",
+      correlationId: requestIds.get(c.req.raw) ?? "unknown",
+    });
+  }
+  const authorization = c.req.header("authorization") ?? c.req.header("Authorization");
+  const supplied = authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : undefined;
+  if (!supplied || !constantTimeEqual(supplied, expected)) {
+    return jsonError(401, {
+      error: "Unauthorized",
+      classification: "authentication_error",
+      correlationId: requestIds.get(c.req.raw) ?? "unknown",
+    });
+  }
+  return null;
+}
+
+async function authenticateConnection(
   c: Context,
   auth: AuthConfig,
   simulator: SourceSimulator,
   requestIds: WeakMap<Request, string>,
   requestedConnectionId?: string,
-): ConnectionAuthResult {
+): Promise<ConnectionAuthResult> {
+  await simulator.refreshOrganizationFromStorage();
   const credential = extractSecret(c.req.header(), "x-connection-secret");
   if (!credential || auth.revokedConnectionCredentials.has(credential)) return authFailure(c, requestIds, 401, "Unauthorized");
   let authenticatedConnectionId = auth.connectionCredentialToConnectionId.get(credential);
@@ -679,12 +776,16 @@ function authFailure(c: Context, requestIds: WeakMap<Request, string>, status: 4
   };
 }
 
-function rateLimitAdmin(c: Context, rateLimiter: RateLimiter, requestIds: WeakMap<Request, string>): Response | null {
-  return rateLimitResponse(c, rateLimiter.check("admin", "admin"), requestIds);
+async function rateLimitAdmin(c: Context, rateLimiter: RateLimiter, requestIds: WeakMap<Request, string>): Promise<Response | null> {
+  return rateLimitResponse(c, await rateLimiter.check("admin", "admin"), requestIds);
 }
 
-function rateLimitConnection(c: Context, rateLimiter: RateLimiter, requestIds: WeakMap<Request, string>, connectionId: string): Response | null {
-  return rateLimitResponse(c, rateLimiter.check("connection", connectionId), requestIds);
+async function rateLimitConnection(c: Context, rateLimiter: RateLimiter, requestIds: WeakMap<Request, string>, connectionId: string): Promise<Response | null> {
+  return rateLimitResponse(c, await rateLimiter.check("connection", connectionId), requestIds);
+}
+
+async function rateLimitCron(c: Context, rateLimiter: RateLimiter, requestIds: WeakMap<Request, string>): Promise<Response | null> {
+  return rateLimitResponse(c, await rateLimiter.check("cron", "cron"), requestIds);
 }
 
 function rateLimitResponse(c: Context, decision: { allowed: boolean; retryAfterSeconds?: number }, requestIds: WeakMap<Request, string>): Response | null {
@@ -709,6 +810,22 @@ function extractSecret(headers: Record<string, string | undefined>, headerName: 
   const auth = headers.authorization ?? headers.Authorization;
   const bearerSecret = auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length) : undefined;
   return headerSecret ?? bearerSecret;
+}
+
+function constantTimeEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  if (leftBuffer.length !== rightBuffer.length) return false;
+  return timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function recordReconciliationTelemetry(telemetry: OperationalTelemetry, report: { trigger: string; simulationDeltaMs: number; instancesCreated: number; changesAppended: number; alreadyCurrent: boolean }): void {
+  telemetry.increment("reconciliation.count");
+  telemetry.increment(`reconciliation.trigger.${report.trigger}`);
+  if (report.alreadyCurrent) telemetry.increment("reconciliation.already_current");
+  telemetry.increment("reconciliation.simulation_time_advanced_ms", report.simulationDeltaMs);
+  telemetry.increment("reconciliation.successor_instances_created", report.instancesCreated);
+  telemetry.increment("reconciliation.source_changes_appended", report.changesAppended);
 }
 
 function buildAuthConfig(simulator: SourceSimulator, options: AppOptions, runtimeEnv: RuntimeEnv): AuthConfig {
@@ -846,6 +963,33 @@ function parseDatasetSize(value: string | undefined): DatasetSize | undefined {
   return undefined;
 }
 
+function parseClockMode(value: string | undefined): "manual" | "realtime" | undefined {
+  if (!value) return undefined;
+  if (value === "manual" || value === "realtime") return value;
+  throw new Error("SIMULATOR_CLOCK_MODE must be manual or realtime");
+}
+
+function parsePositiveNumber(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error("Expected a positive numeric environment value");
+  return parsed;
+}
+
+function parsePositiveInteger(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) throw new Error("Expected a positive integer environment value");
+  return parsed;
+}
+
+function parseBoolean(value: string | undefined): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error("Expected boolean environment value to be true or false");
+}
+
 function escapeHtml(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
@@ -913,6 +1057,19 @@ const consoleHtml = `<!doctype html>
         <button onclick="instances()">Instances</button>
         <button onclick="instanceDetail()">Instance Detail</button>
         <button onclick="records()">All Records</button>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Clock</h2>
+      <div class="row">
+        <label>Mode <select id="clockMode"><option>manual</option><option>realtime</option></select></label>
+        <label>Speed <input id="clockSpeed" type="number" min="1" max="1440" value="30" /></label>
+        <label>Continuous <select id="clockContinuous"><option value="true">enabled</option><option value="false">disabled</option></select></label>
+        <button onclick="clockStatus()">Clock Status</button>
+        <button onclick="updateClock()">Apply Clock</button>
+        <button onclick="pauseClock()">Pause</button>
+        <button onclick="resumeClock()">Resume</button>
+        <button onclick="reconcileClock()">Reconcile Now</button>
       </div>
     </section>
     <section class="panel">
@@ -988,6 +1145,21 @@ async function callAdmin(action, method) { show(await getJson('/v1/admin/scenari
 async function advance() { show(await getJson('/v1/admin/scenarios/' + scenario() + '/advance', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ hours: 24 }) })); }
 async function records() { show(await getJson('/v1/admin/records', { headers: headers() })); }
 async function health() { show(await getJson('/healthz')); }
+async function clockStatus() { show(await getJson('/v1/admin/clock', { headers: headers() })); }
+async function updateClock() {
+  show(await getJson('/v1/admin/clock', {
+    method: 'PUT',
+    headers: headers({ 'content-type': 'application/json' }),
+    body: JSON.stringify({
+      mode: document.getElementById('clockMode').value,
+      speedMultiplier: Number(document.getElementById('clockSpeed').value),
+      continuousActivity: document.getElementById('clockContinuous').value === 'true'
+    })
+  }));
+}
+async function pauseClock() { show(await getJson('/v1/admin/clock/pause', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: '{}' })); }
+async function resumeClock() { show(await getJson('/v1/admin/clock/resume', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: '{}' })); }
+async function reconcileClock() { show(await getJson('/v1/admin/clock/reconcile', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: '{}' })); }
 async function metrics() { show(await getJson('/v1/admin/metrics', { headers: headers() })); }
 async function requests() { show(await getJson('/v1/admin/requests', { headers: headers() })); }
 async function storageInspector() { show(await getJson('/v1/admin/storage', { headers: headers() })); }

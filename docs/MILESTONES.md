@@ -51,6 +51,9 @@ Delivered in this draft:
 - SQLite/Postgres storage parity and restart persistence tests.
 - Production-like startup with Postgres and continued fail-closed behavior for memory/SQLite.
 - Deployment verification, smoke-test guidance, and runbooks.
+- Persisted manual/realtime company clock with bounded catch-up, feed-triggered reconciliation, Vercel cron tick, and restart persistence.
+- Deterministic continuous successor activity using the existing 10 scenario packs and one shared company world.
+- Postgres-backed distributed rate limiting for production-like runtimes.
 - Deterministic failure simulation controls.
 - Structured safe logging and operational telemetry.
 - Health, metrics, request inspection, storage inspection, benchmark, and connector-kit admin APIs.

@@ -12,10 +12,19 @@ paths:
         '200': { description: OK }
   /readyz:
     get:
-      summary: Readiness check with storage health, world revision, dataset metadata, and organization summary
+      summary: Readiness check with storage health, world revision, safe clock state, dataset metadata, and organization summary
       responses:
         '200': { description: Ready }
         '503': { description: Storage or world state is not ready }
+  /api/cron/tick:
+    get:
+      summary: Vercel-compatible cron tick that reconciles the persisted realtime simulation clock
+      security:
+        - cronBearer: []
+      responses:
+        '200': { description: Concise reconciliation report }
+        '401': { description: Missing or incorrect cron bearer secret }
+        '503': { description: Cron secret or durable state unavailable }
   /v1/catalog:
     get:
       summary: Safe public catalog metadata only
@@ -126,7 +135,7 @@ paths:
         '429': { description: Request rate limited for this authenticated connection }
   /v1/connections/{connectionId}/records:
     get:
-      summary: Cursor-paginated source feed for the authenticated connection only
+      summary: Cursor-paginated source feed for the authenticated connection only. In realtime mode this reconciles the persisted company clock before reading the ledger.
       security:
         - connectionBoundCredential: []
       parameters:
@@ -431,6 +440,54 @@ paths:
         - adminKey: []
       responses:
         '200': { description: Source changes }
+  /v1/admin/clock:
+    get:
+      summary: Inspect persisted simulation clock and continuous activity state
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Clock status }
+    put:
+      summary: Update safe clock controls such as mode, speed, pause state, catch-up bound, and continuous activity
+      security:
+        - adminKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                mode: { enum: [manual, realtime] }
+                speedMultiplier: { type: number, exclusiveMinimum: 0, maximum: 1440 }
+                paused: { type: boolean }
+                continuousActivity: { type: boolean }
+                maxCatchUpSeconds: { type: integer, minimum: 1, maximum: 604800 }
+      responses:
+        '200': { description: Updated clock state }
+        '400': { description: Invalid clock update }
+  /v1/admin/clock/reconcile:
+    post:
+      summary: Manually run the canonical simulation clock reconciliation operation
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Simulation reconciliation report }
+  /v1/admin/clock/pause:
+    post:
+      summary: Pause global realtime simulation clock progression
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Paused clock state }
+  /v1/admin/clock/resume:
+    post:
+      summary: Resume global realtime simulation clock progression
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Resumed clock state }
   /v1/admin/metrics:
     get:
       summary: Inspect operational counters, request telemetry, simulator counts, storage health, and world revision
@@ -594,6 +651,9 @@ components:
       type: apiKey
       in: header
       name: x-connection-secret
+    cronBearer:
+      type: http
+      scheme: bearer
   schemas:
     SourceFeedBatchV1:
       type: object

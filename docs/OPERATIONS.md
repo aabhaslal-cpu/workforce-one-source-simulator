@@ -8,6 +8,7 @@
 
 - storage health and storage kind
 - world revision
+- safe clock state: availability, schema version, mode, pause state, and last reconciliation status
 - dataset metadata
 - organization counts and validation state
 - uptime
@@ -18,7 +19,7 @@ Preview and production readiness should report `storage.kind: postgres`. If stor
 
 ## Metrics
 
-`GET /v1/admin/metrics` requires admin auth. It returns request counters, status counters, operation counters, latency average/max, recent sanitized request telemetry, active scenario instances, source-change count, source-object count, dataset size, organization size, ledger size, storage health, and enabled failure-rule count.
+`GET /v1/admin/metrics` requires admin auth. It returns request counters, status counters, operation counters, latency average/max, recent sanitized request telemetry, active scenario instances, source-change count, source-object count, dataset size, organization size, ledger size, storage health, enabled failure-rule count, clock mode, clock speed, last reconciled simulation time, reconciliation count, total simulated time advanced, successor instances created, and reconciliation source-change append counters.
 
 `GET /v1/admin/requests` returns the recent sanitized request ring buffer. It is intended for connector debugging.
 
@@ -28,8 +29,24 @@ Real request rate limiting is separate from deterministic provider failure simul
 
 - admin routes: admin identity
 - manifest/feed/deep-link routes: resolved connection ID
+- cron route: cron identity
 
-Rate-limit responses return `429`, `Retry-After`, a safe `rate_limit` classification, and a correlation ID. Preview and production default to enabled protection; local/test environments may disable or override limits through `SIMULATOR_RATE_LIMITS`.
+Rate-limit responses return `429`, `Retry-After`, a safe `rate_limit` classification, and a correlation ID. Preview and production force enabled Postgres-backed distributed buckets. Local/test environments may use in-memory buckets and may disable or override limits through `SIMULATOR_RATE_LIMITS`.
+
+## Clock And Continuous Activity
+
+The simulator has one persisted company clock:
+
+- `manual`: operator-controlled scenario advance/trigger behavior is preserved.
+- `realtime`: elapsed server-owned wall time advances simulation time by `speedMultiplier`.
+
+Clock state is persisted in memory, SQLite, and Postgres. It includes wall-clock anchors, simulation anchors, last reconciliation checkpoints, speed, pause state, bounded catch-up, continuous-activity flag, and the last reconciliation report.
+
+All realtime progress goes through `reconcileSimulationClock(now)`. Normal reconciliation does not rotate `worldRevision`; it advances eligible non-paused instances, materializes newly due creates/updates/deletes, appends ledger changes once, creates bounded deterministic successor instances when continuous activity is enabled, updates dataset metadata, and commits the clock checkpoint atomically.
+
+Feed polling reconciles before reading `/v1/connections/{connectionId}/records`. `GET /api/cron/tick` is a Vercel-compatible warm-up path protected by `Authorization: Bearer <CRON_SECRET>`, but cron is not the source of truth. Missed cron delivery is recovered by the next cron tick or feed poll.
+
+`POST /v1/admin/clock/reconcile`, `POST /v1/admin/clock/pause`, `POST /v1/admin/clock/resume`, `GET /v1/admin/clock`, and `PUT /v1/admin/clock` are admin-only controls. Client requests cannot set internal wall-clock checkpoints directly.
 
 ## Logs
 

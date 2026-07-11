@@ -27,11 +27,13 @@ The cursor is opaque to clients. Internally it contains:
 
 The cursor does not contain all consumed change IDs. It is bound to one connection and one world revision. Reusing it for another connection returns 400.
 
-Normal scenario instance advance and manual trigger append source changes to the same world revision, so a saved cursor continues from its `afterSequence`. Scenario instance reset/delete, dataset generation, organization regeneration, and snapshot restore are destructive world replacements; reusing an old cursor after those operations returns a clear stale-checkpoint 400.
+Normal scenario instance advance, manual trigger, and realtime clock reconciliation append source changes to the same world revision, so a saved cursor continues from its `afterSequence`. Scenario instance reset/delete, dataset generation, organization regeneration, and snapshot restore are destructive world replacements; reusing an old cursor after those operations returns a clear stale-checkpoint 400.
 
 For manually triggered events, the event occurrence time is the scenario instance's `currentTime` at trigger time. Delayed source updates and deletions are relative to that persisted occurrence time. Automatically scheduled events continue to use `startedAt + atHour`.
 
 The server returns `nextCursor` even when `hasMore` is false so later polling can continue from the checkpoint.
+
+In realtime mode, `GET /v1/connections/{connectionId}/records` reconciles the persisted company clock before it reads authorized ledger entries. Consumers do not need to depend on a permanently warm process or cron delivery to see catch-up activity.
 
 ## Source Records
 
@@ -75,7 +77,7 @@ The endpoint returns the current fictional source object in JSON or simple HTML.
 
 Admin APIs expose scenario packs, scenario instances, source changes, source objects, source history, dataset metadata, organization relationships, and visibility comparison. Scenario packs are templates. Scenario instances are persisted runtime entities and include concrete participants and context, so instance listing/detail requires admin authentication.
 
-Operational admin APIs expose metrics, recent sanitized requests, storage health/counts, deterministic failure-mode configuration, performance benchmark runs, and the connector test kit.
+Operational admin APIs expose metrics, recent sanitized requests, storage health/counts, persisted clock controls, deterministic failure-mode configuration, performance benchmark runs, and the connector test kit.
 
 ## Failure And Reset Semantics
 
@@ -84,6 +86,8 @@ Deterministic failure modes are simulator-owned test controls. They can alter fe
 Destructive world operations rotate `worldRevision`. Connectors must treat stale-checkpoint 400 responses as an intentional reset boundary and acquire a fresh cursor.
 
 Real service protection can also return `429` with `Retry-After` and `rate_limit` classification. That protection is configured separately from deterministic failure modes.
+
+The Vercel cron endpoint `GET /api/cron/tick` is not part of the connector feed contract. It is an operational endpoint protected by `Authorization: Bearer <CRON_SECRET>` and calls the same clock reconciliation operation as feed-triggered catch-up.
 
 ## Artifacts
 

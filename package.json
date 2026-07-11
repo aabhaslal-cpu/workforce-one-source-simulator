@@ -15,6 +15,7 @@
     "test": "vitest run",
     "lint": "eslint .",
     "format:check": "prettier --check .",
+    "vercel:validate": "node scripts/validate-vercel-config.mjs",
     "verify": "pnpm run typecheck && pnpm run test && pnpm run lint && pnpm run build"
   },
   "dependencies": {

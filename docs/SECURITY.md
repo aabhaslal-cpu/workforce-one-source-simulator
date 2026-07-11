@@ -10,6 +10,8 @@ The simulator contains fictional data, but it preserves production-like boundari
 - Admin credentials are not accepted as connection credentials.
 - Unknown and revoked connection credentials fail closed.
 - Credential material is never emitted through public or admin APIs.
+- Clock admin APIs require admin authentication.
+- `/api/cron/tick` requires `Authorization: Bearer <CRON_SECRET>` and never returns the configured secret.
 
 ## Authorization
 
@@ -20,6 +22,7 @@ The simulator contains fictional data, but it preserves production-like boundari
 - Reporting hierarchy does not automatically grant record access.
 - Cross-department access requires explicit source ACL/group membership.
 - Scenario instance participants and runtime context are admin inspection data, not public catalog data.
+- Warm serverless instances refresh persisted organization config before connection-sensitive authorization and admin detailed catalog reads.
 
 ## Production-Like Fail Closed
 
@@ -32,6 +35,7 @@ Preview, production, and Vercel-like runtimes reject:
 - memory storage
 - SQLite storage
 - injected local-storage simulators
+- missing `CRON_SECRET` when invoking the cron endpoint
 
 Production-like startup requires Postgres through `DATABASE_URL`. If Postgres is missing or unavailable, startup fails closed instead of falling back to memory or SQLite.
 
@@ -54,7 +58,11 @@ Production-like startup requires Postgres through `DATABASE_URL`. If Postgres is
 - Real service rate limits are separate from deterministic failure modes.
 - Admin routes are keyed by admin identity.
 - Manifest, feed, and source deep-link routes are keyed by the resolved connection ID.
+- Cron is keyed by cron identity.
+- Preview/production use Postgres-backed distributed buckets; raw credentials are not stored as limiter keys.
 - Rate-limit responses return `429`, `Retry-After`, `rate_limit`, and a correlation ID.
+
+The deterministic simulated `rate_limit` failure mode remains separate from platform protection and is reported as simulated failure behavior, not as an actual limiter decision.
 
 ## Failure Simulation Safety
 

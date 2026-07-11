@@ -57,3 +57,5 @@ Example:
 | `stale_objects` | Sets batch generated time to the first record occurrence time. |
 
 Failure modes never grant unauthorized record visibility and never expose credentials.
+
+`rate_limit` here is a simulated provider failure. It is separate from real platform request limiting, which is enforced before provider simulation, keyed by admin/cron/connection identity, and returns a `rate_limit` classification with `Retry-After`.

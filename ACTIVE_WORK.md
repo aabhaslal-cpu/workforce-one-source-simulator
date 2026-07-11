@@ -14,16 +14,19 @@ Milestone 3: Production Hardening and Workforce One Integration Readiness.
 ## Built In Milestone 3
 
 - Production Postgres storage adapter behind the async storage interface.
-- Postgres support for scenario states, scenario instance states, organization config, world revision, source-change ledger, source-object projection, dataset metadata, snapshots, restart persistence, and transaction-backed world replacement.
+- Postgres support for scenario states, scenario instance states, organization config, world revision, source-change ledger, source-object projection, dataset metadata, snapshots, simulation clock, continuous orchestration state, restart persistence, and transaction-backed world replacement.
 - SQLite/Postgres parity tests and CI Postgres service.
+- Persisted company clock with manual/realtime modes, bounded catch-up, speed multiplier, pause/resume, restart persistence, feed-triggered reconciliation, admin reconciliation, and Vercel cron tick.
+- Deterministic continuous activity orchestrator that creates bounded successor instances from the existing 10 scenario packs while preserving one shared company world.
 - Structured request telemetry with sanitized logs, request IDs, connection IDs, cursor position, world revision, operation, duration, status, and safe error classification.
 - `/healthz` liveness and `/readyz` readiness with storage health, world revision, dataset metadata, organization summary, uptime, build version, and schema version.
 - Admin metrics, request inspector, storage inspector, performance benchmark, failure-mode configuration, and connector test-kit endpoints.
-- Real request rate limiting keyed by authenticated admin identity or resolved connection ID.
+- Real request rate limiting keyed by authenticated admin identity, cron identity, or resolved connection ID. Preview/production use Postgres-backed distributed buckets.
 - Deterministic failure simulation for connector testing. Failures are configured rules, never random.
 - Connector lifecycle test kit covering initial sync, incremental sync, late arrivals, updates/deletes, destructive reset, stale cursor handling, new cursor acquisition, permission differences, and connection regeneration behavior.
+- Vercel configuration with fetch-handler rewrites, cron path, bounded max duration, frozen install, config validation, optional token-backed Vercel CLI build, and CI route smoke tests.
 - Container build and CI readiness smoke test against Postgres.
-- Internal operator console controls for metrics, storage, ledger, snapshots, failure toggles, benchmarks, and connector kit.
+- Internal operator console controls for clock, metrics, storage, ledger, snapshots, failure toggles, benchmarks, and connector kit.
 - Updated OpenAPI, migrations, examples, and docs for production deployment and integration.
 
 ## Dataset Counts
@@ -41,14 +44,14 @@ The benchmark harness creates one extra manual-trigger instance during each run,
 - `pnpm install --frozen-lockfile`: passed.
 - `pnpm run verify`: passed.
 - `git diff --check`: passed.
-- Vitest count: 57 tests total with 55 local passes and 2 Postgres tests skipped without `SIMULATOR_POSTGRES_TEST_URL`.
+- Vitest count: 65 tests total with 62 local passes and 3 Postgres tests skipped without `SIMULATOR_POSTGRES_TEST_URL`.
 
-GitHub Actions provides Postgres and should run all 57 tests.
+GitHub Actions provides Postgres and should run all 65 tests, Vercel config validation, route smoke tests, Docker build, and container readiness smoke. A real Vercel CLI build runs only when `VERCEL_TOKEN` is configured.
 
 ## Known Limitations
 
 - Provider adapters are simulator-owned approximations, not complete vendor API clones.
-- Postgres is proven for the simulator storage contract, but real production readiness still requires deployment-owner backups, monitoring, network policy, secret rotation, and incident response.
+- Postgres is proven for the simulator storage, clock, orchestration, and distributed rate-limit contracts, but real production readiness still requires deployment-owner backups, monitoring, network policy, secret rotation, and incident response.
 - Structured logs currently write sanitized JSON lines to stdout when enabled; external log shipping is an environment/deployment concern.
 - The benchmark harness is a sanity benchmark, not a full load-test suite.
 - The operator console is intentionally internal and utilitarian.

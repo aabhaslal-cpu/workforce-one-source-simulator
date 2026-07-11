@@ -41,7 +41,7 @@ Cursor payload:
 
 The cursor is connection-bound, world-bound, retry-safe, and compact regardless of total change count.
 
-Normal time advancement and manual triggers append new changes with increasing `ledgerSequence` values and do not rotate `worldRevision`. A saved cursor can be reused after those operations and returns only newly visible authorized changes after its `afterSequence`.
+Normal time advancement, manual triggers, feed-triggered realtime reconciliation, and cron-triggered realtime reconciliation append new changes with increasing `ledgerSequence` values and do not rotate `worldRevision`. A saved cursor can be reused after those operations and returns only newly visible authorized changes after its `afterSequence`.
 
 Manual triggers use the selected scenario instance's current simulation time as the business event occurrence time. Initial source changes become eligible immediately. `updatedAfterHours` and `deletedAfterHours` are calculated from the actual trigger time, not from the template's original `atHour`.
 
@@ -53,4 +53,4 @@ Snapshot restore restores business state, creates a new world revision, rebuilds
 
 ## Atomicity
 
-World replacements commit scenario instance states, organization config when applicable, world revision, source-change ledger, current source-object projection, and dataset metadata together. SQLite and Postgres use one transaction; rollback tests inject failures during replacement and assert the previous world remains intact.
+World replacements commit scenario instance states, organization config when applicable, world revision, source-change ledger, current source-object projection, dataset metadata, simulation clock, and continuous orchestration state together. SQLite and Postgres use one transaction; rollback tests inject failures during replacement and assert the previous world remains intact.

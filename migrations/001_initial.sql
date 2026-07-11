@@ -33,6 +33,16 @@ CREATE TABLE IF NOT EXISTS dataset_metadata (
   metadata_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS simulation_clock_state (
+  id TEXT PRIMARY KEY CHECK (id = 'singleton'),
+  state_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS continuous_orchestration_state (
+  id TEXT PRIMARY KEY CHECK (id = 'singleton'),
+  state_json TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS source_change_ledger (
   ledger_sequence INTEGER PRIMARY KEY,
   world_revision TEXT NOT NULL,

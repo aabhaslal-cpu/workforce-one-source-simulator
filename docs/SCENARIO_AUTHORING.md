@@ -26,6 +26,10 @@ Use `updatedAfterHours` and `deletedAfterHours` on record templates to model pro
 
 The durable ledger must contain only occurred changes. Future planned changes must remain in scenario definitions until the instance clock or manual trigger reaches them.
 
+## Continuous Activity
+
+Continuous activity reuses existing packs as templates for successor instances. Do not add a new pack solely to make realtime mode busy. The orchestrator must remain deterministic and must preserve one shared company world.
+
 ## Visibility
 
 Reporting hierarchy and permissions are separate. Do not grant senior leaders every subordinate record by default.

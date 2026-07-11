@@ -38,6 +38,11 @@ pnpm run verify
 - `SIMULATOR_ALLOW_EPHEMERAL_MEMORY`: must be `true` before local memory storage can be selected.
 - `DATABASE_URL`: Postgres connection string. Required in preview and production.
 - `SIMULATOR_BENCHMARK_DATABASE_URL`: separate Postgres connection string for benchmark runs. It must not equal `DATABASE_URL`.
+- `SIMULATOR_CLOCK_MODE`: `manual` or `realtime`. Production/Vercel should use `realtime`.
+- `SIMULATOR_CLOCK_SPEED`: positive multiplier, for example `30` means one wall minute is 30 simulated minutes.
+- `SIMULATOR_CONTINUOUS_ACTIVITY`: `true` keeps the fictional company producing successor activity.
+- `SIMULATOR_MAX_CATCH_UP_SECONDS`: maximum wall-time catch-up applied in one reconciliation.
+- `CRON_SECRET`: bearer secret required by `/api/cron/tick`.
 - `SIMULATOR_FAILURE_MODES`: optional JSON failure-mode configuration.
 - `SIMULATOR_RATE_LIMITS`: optional JSON real request-rate-limit configuration.
 - `SIMULATOR_STRUCTURED_LOGS`: `true` emits sanitized JSON request logs.
@@ -47,7 +52,7 @@ pnpm run verify
 
 The local SQLite schema is documented in `migrations/001_initial.sql` and checked against `SQLiteSimulatorStorage` in tests.
 
-The production Postgres schema is documented in `migrations/postgres_001_initial.sql` and exercised by CI when `SIMULATOR_POSTGRES_TEST_URL` is configured.
+The production Postgres schema is documented in `migrations/postgres_001_initial.sql` and `migrations/postgres_002_clock_runtime.sql`, then exercised by CI when `SIMULATOR_POSTGRES_TEST_URL` is configured.
 
 Tables:
 
@@ -58,7 +63,10 @@ Tables:
 - `source_change_ledger`
 - `source_objects`
 - `dataset_metadata`
+- `simulation_clock_state`
+- `continuous_orchestration_state`
 - `snapshots`
+- `rate_limit_buckets` in Postgres
 
 ## Production-Like Behavior
 
@@ -69,13 +77,42 @@ Preview, production, and Vercel-like environments must:
 - avoid known development credentials
 - avoid identical admin and connection credentials
 - set `DATABASE_URL` to Postgres
+- set `CRON_SECRET` before using `/api/cron/tick`
+- use Postgres-backed distributed rate limits
 - reject memory and SQLite, including injected storage/simulator instances
 
-Postgres is implemented and CI-proven for the simulator storage contract. Production deployment still requires external backups, secret rotation, log shipping, alerting, database patching, and network controls.
+Postgres is implemented and CI-proven for the simulator storage, clock, orchestration, and distributed rate-limit contracts. Production deployment still requires external backups, secret rotation, log shipping, alerting, database patching, and network controls.
+
+## Vercel
+
+`api/index.ts` exports the Hono web-standard fetch handler. `vercel.json` uses one canonical execution model:
+
+- frozen pnpm install
+- `pnpm run build`
+- Node.js 22 function runtime
+- bounded `maxDuration`
+- rewrite of `/(.*)` to `/api/index`
+- cron path `/api/cron/tick`
+
+Required Vercel environment variables:
+
+- `SIMULATOR_RUNTIME_ENV=production`
+- `DATABASE_URL`
+- `SIMULATOR_ADMIN_API_KEY`
+- `SIMULATOR_CONNECTION_CREDENTIALS`
+- `SIMULATOR_PUBLIC_BASE_URL`
+- `SIMULATOR_CLOCK_MODE=realtime`
+- `SIMULATOR_CLOCK_SPEED`
+- `SIMULATOR_CONTINUOUS_ACTIVITY=true`
+- `SIMULATOR_MAX_CATCH_UP_SECONDS`
+- `SIMULATOR_RATE_LIMITS`
+- `CRON_SECRET`
+
+Vercel correctness does not depend on a warm function. Feed polling and cron both call the same persisted clock reconciliation path, and organization/connection state is refreshed before permission-sensitive operations.
 
 ## CI
 
-GitHub Actions runs `pnpm install --frozen-lockfile` and `pnpm run verify` with a Postgres 16 service. The workflow sets `SIMULATOR_POSTGRES_TEST_URL`, so Postgres parity and rollback tests run in CI. It also builds the Docker image and starts the container against the CI Postgres service, then checks `/readyz`.
+GitHub Actions runs `pnpm install --frozen-lockfile`, `pnpm run verify`, `git diff --check`, Vercel config validation, route smoke tests, Docker build, and container readiness smoke with a Postgres 16 service. The workflow sets `SIMULATOR_POSTGRES_TEST_URL`, so Postgres parity, clock persistence, and distributed limiter tests run in CI. If `VERCEL_TOKEN` is configured, CI also runs `vercel build`; otherwise the repository-owned Vercel config validation remains the always-on check.
 
 ## Container
 
@@ -100,6 +137,8 @@ curl "$BASE_URL/healthz"
 curl "$BASE_URL/readyz"
 curl -H "x-admin-api-key: $SIMULATOR_ADMIN_API_KEY" "$BASE_URL/v1/admin/metrics"
 curl -H "x-admin-api-key: $SIMULATOR_ADMIN_API_KEY" "$BASE_URL/v1/admin/storage"
+curl -H "x-admin-api-key: $SIMULATOR_ADMIN_API_KEY" "$BASE_URL/v1/admin/clock"
+curl -H "Authorization: Bearer $CRON_SECRET" "$BASE_URL/api/cron/tick"
 curl -H "x-connection-secret: $PRODUCT_MANAGER_SECRET" "$BASE_URL/v1/connections/conn-product-manager/records?limit=5"
 ```
 

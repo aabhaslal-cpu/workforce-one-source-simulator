@@ -47,6 +47,26 @@ Supports:
 
 The console requires the admin credential for detailed reads and writes. It does not display credential material.
 
+## Clock
+
+Supports:
+
+- current clock mode
+- current simulated time through the persisted clock state
+- last reconciled wall time
+- speed multiplier
+- pause/running state
+- continuous activity state
+- last reconciliation report
+- active and completed scenario instance counts
+- recent successor instances
+- recent appended source changes
+- switch manual/realtime mode
+- set bounded speed multiplier
+- pause/resume global clock
+- reconcile now
+- enable/disable continuous activity
+
 ## Operations
 
 Supports:
