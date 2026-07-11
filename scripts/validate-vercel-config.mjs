@@ -22,8 +22,7 @@ assert(functionEntries[0]?.[0] === "src/app.ts", "src/app.ts must be the canonic
 const appFunctionConfig = config.functions?.["src/app.ts"] ?? {};
 assert(!("runtime" in appFunctionConfig), "src/app.ts must not set a runtime");
 assert(appFunctionConfig.maxDuration === 30, "src/app.ts maxDuration must be 30");
-assert(Array.isArray(appFunctionConfig.includeFiles), "src/app.ts must include migration SQL files");
-assert(appFunctionConfig.includeFiles.includes("migrations/*.sql"), "src/app.ts must bundle migrations/*.sql");
+assert(appFunctionConfig.includeFiles === "migrations/*.sql", "src/app.ts must bundle migrations/*.sql");
 assert(srcApp.trim() === expectedSrcApp, "src/app.ts must be the thin canonical Hono entrypoint");
 assert(!existsSync(new URL("../api/index.ts", import.meta.url)), "api/index.ts must not exist");
 assert(!existsSync(new URL("../src/server.ts", import.meta.url)), "src/server.ts must not exist");

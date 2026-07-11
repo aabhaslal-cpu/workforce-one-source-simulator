@@ -3,9 +3,7 @@
   "functions": {
     "src/app.ts": {
       "maxDuration": 30,
-      "includeFiles": [
-        "migrations/*.sql"
-      ]
+      "includeFiles": "migrations/*.sql"
     }
   }
 }

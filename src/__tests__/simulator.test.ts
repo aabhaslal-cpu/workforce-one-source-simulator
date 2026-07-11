@@ -1571,7 +1571,7 @@ describe("Milestone 3 operations", () => {
     expect(config.outputDirectory).toBeUndefined();
     expect(config.framework).toBeUndefined();
     expect(Object.keys(config.functions)).toEqual(["src/app.ts"]);
-    expect(config.functions["src/app.ts"]).toEqual({ maxDuration: 30, includeFiles: ["migrations/*.sql"] });
+    expect(config.functions["src/app.ts"]).toEqual({ maxDuration: 30, includeFiles: "migrations/*.sql" });
     expect(config.functions["src/app.ts"].runtime).toBeUndefined();
     expect(config.crons).toBeUndefined();
     expect(config.rewrites).toBeUndefined();
