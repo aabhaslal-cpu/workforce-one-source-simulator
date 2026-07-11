@@ -21,6 +21,7 @@ Built:
 - Ten scenario packs covering launch readiness, adoption lag, roadmap tradeoff, incident response, delivery slip, technical debt/staffing risk, renewal risk, implementation blocker, expansion opportunity, and major cross-functional release.
 - Persisted scenario instance state. Packs are reusable templates; instances hold their own seed, dataset size, clock, pause state, event occurrence times, event log, completion state, participants, and account/project/product/service/workstream context.
 - Persisted company clock with manual mode, realtime mode, bounded catch-up, speed multiplier, pause/resume, restart persistence, feed-triggered reconciliation, and Vercel cron reconciliation.
+- Clock configuration updates fail closed with `clock_backlog_conflict` when bounded realtime catch-up still has wall-clock backlog and the request changes time-affecting settings; operators must drain backlog with `POST /v1/admin/clock/reconcile` first.
 - Deterministic continuous activity orchestrator. Completed instances can create successor instances from the existing 10 packs, preserving one shared Product/Engineering/Customer Success company world.
 - Compact v3 source feed cursor over a deterministic source-change ledger: connection ID, world revision, and `afterSequence`.
 - Occurred-only durable source-change ledger. Normal time advancement appends newly reached changes without rotating world revision.
@@ -88,7 +89,7 @@ pnpm install --frozen-lockfile
 pnpm run verify
 ```
 
-The Milestone 3 suite has 72 Vitest tests. Local runs without `SIMULATOR_POSTGRES_TEST_URL` execute 67 tests and skip the 5 Postgres integration tests. GitHub Actions provides Postgres and runs the full suite plus Vercel config validation, route smoke tests, Docker build, and a container readiness smoke test. A real `vercel build` runs in CI only when `VERCEL_TOKEN` is configured; without that token, the owner-run preview verification command in `docs/DEPLOYMENT.md` remains required before calling Vercel deployability fully proven.
+The Milestone 3 suite has 78 Vitest tests. Local runs without `SIMULATOR_POSTGRES_TEST_URL` execute 72 tests and skip the 6 Postgres integration tests. GitHub Actions provides Postgres and runs the full suite plus Vercel config validation, route smoke tests, Docker build, and a container readiness smoke test. A real `vercel build` runs in CI only when `VERCEL_TOKEN` is configured; without that token, the optional Vercel build step is intentionally skipped and the owner-run preview verification command in `docs/DEPLOYMENT.md` remains required before calling Vercel deployability fully proven.
 
 ## Deployment Honesty
 

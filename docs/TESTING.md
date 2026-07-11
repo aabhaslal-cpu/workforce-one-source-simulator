@@ -7,7 +7,7 @@ pnpm install --frozen-lockfile
 pnpm run verify
 ```
 
-Local verification without Postgres runs 67 tests and skips 5 Postgres tests.
+Local verification without Postgres runs 72 tests and skips 6 Postgres tests.
 
 ## Postgres Parity
 
@@ -17,7 +17,7 @@ Set `SIMULATOR_POSTGRES_TEST_URL` to run Postgres tests locally:
 SIMULATOR_POSTGRES_TEST_URL=postgres://postgres:postgres@localhost:5432/source_simulator_test pnpm run test
 ```
 
-GitHub Actions provisions Postgres 16, runs all 72 tests, validates Vercel config, smoke-tests standard routes, builds the Docker image, and runs a container `/readyz` smoke test against Postgres. If `VERCEL_TOKEN` is configured, CI also runs `vercel build`; without that token, real Vercel account build execution is intentionally skipped and owner-run preview verification is required before claiming Vercel deployability is fully proven.
+GitHub Actions provisions Postgres 16, runs all 78 tests, validates Vercel config, smoke-tests standard routes, builds the Docker image, and runs a container `/readyz` smoke test against Postgres. If `VERCEL_TOKEN` is configured, CI also runs `vercel build`; without that token, real Vercel account build execution is intentionally skipped and owner-run preview verification is required before claiming Vercel deployability is fully proven.
 
 Postgres tests cover:
 
@@ -29,12 +29,15 @@ Postgres tests cover:
 - Postgres-backed distributed rate limiting across app instances
 - atomic simultaneous first-request distributed rate limiting
 - warm two-instance organization regeneration followed by cron reconciliation
+- clock transition rollback with wall-clock backlog
 
 Clock regression tests cover:
 
 - manual events staying untriggered under realtime reconciliation
 - explicit manual trigger occurrence time
 - bounded 24-hour backlog drain across four 6-hour reconciliations
+- fail-closed speed, realtime-to-manual, pause, continuous-activity, activity-profile, and successor-cadence changes while backlog remains
+- idempotent rejected clock transitions with no advancement, ledger, checkpoint, or orchestration writes
 - concurrent backlog reconciliation
 - lossless pause, resume, mode, speed, continuous activity, and catch-up configuration transitions
 - successor due-time gating and bounded overdue successor creation

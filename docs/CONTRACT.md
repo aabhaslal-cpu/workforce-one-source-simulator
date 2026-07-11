@@ -35,6 +35,8 @@ The server returns `nextCursor` even when `hasMore` is false so later polling ca
 
 In realtime mode, `GET /v1/connections/{connectionId}/records` reconciles the persisted company clock before it reads authorized ledger entries. Consumers do not need to depend on a permanently warm process or cron delivery to see catch-up activity. Bounded catch-up cursors remain valid while backlog drains because normal reconciliation appends to the current world revision.
 
+Admin clock updates are fail-closed while backlog remains. `PUT /v1/admin/clock` reconciles once under the current persisted configuration, then returns `409` with classification `clock_backlog_conflict` and `wallTimeBacklogRemainingMs` when the request would change a time-affecting setting before backlog is drained. The rejected transaction writes no checkpoint, source changes, scenario advancement, orchestration change, or partial configuration update. A true no-op update may succeed, but it cannot smuggle a time-affecting change.
+
 ## Source Records
 
 Every record has:

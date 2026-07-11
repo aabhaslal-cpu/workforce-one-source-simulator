@@ -144,6 +144,13 @@ async function storageWorldSnapshot(simulator: SourceSimulator) {
   };
 }
 
+async function clockWorldSnapshot(simulator: SourceSimulator) {
+  return {
+    ...(await storageWorldSnapshot(simulator)),
+    clockStatus: await simulator.clockStatus(),
+  };
+}
+
 const postgresTestUrl = process.env.SIMULATOR_POSTGRES_TEST_URL;
 const describePostgres = postgresTestUrl ? describe : describe.skip;
 
@@ -1140,6 +1147,182 @@ describe("Milestone 3 operations", () => {
     expect(new Set(concurrentChangeIds).size).toBe(concurrentChangeIds.length);
   });
 
+  it("rejects time-affecting clock configuration changes while catch-up backlog remains", async () => {
+    const startedAt = "2026-07-10T00:00:00.000Z";
+    const outageEnd = addHoursIso(startedAt, 24);
+    const simulator = await SourceSimulator.create({
+      seed: "backlog-transition-seed",
+      now: startedAt,
+      clockMode: "realtime",
+      clockSpeedMultiplier: 1,
+      maxCatchUpSeconds: 60 * 60 * 6,
+      baseUrl: "http://sim.test",
+    });
+    const before = await clockWorldSnapshot(simulator);
+
+    await expect(simulator.updateClock({ speedMultiplier: 2 }, outageEnd)).rejects.toMatchObject({
+      status: 409,
+      classification: "clock_backlog_conflict",
+      details: { wallTimeBacklogRemainingMs: 18 * 60 * 60 * 1000 },
+    });
+    expect(await clockWorldSnapshot(simulator)).toEqual(before);
+    await expect(simulator.updateClock({ speedMultiplier: 2 }, outageEnd)).rejects.toMatchObject({
+      status: 409,
+      classification: "clock_backlog_conflict",
+    });
+    expect(await clockWorldSnapshot(simulator)).toEqual(before);
+
+    const firstDrain = await simulator.reconcileSimulationClock({ now: outageEnd, trigger: "admin" });
+    expect(firstDrain.simulationDeltaMs).toBe(6 * 60 * 60 * 1000);
+    expect((await simulator.clockStatus()).clock.lastReconciledSimulationTime).toBe(addHoursIso(startedAt, 6));
+    expect((await simulator.clockStatus()).clock.speedMultiplier).toBe(1);
+
+    const remainingReports = [
+      await simulator.reconcileSimulationClock({ now: outageEnd, trigger: "admin" }),
+      await simulator.reconcileSimulationClock({ now: outageEnd, trigger: "admin" }),
+      await simulator.reconcileSimulationClock({ now: outageEnd, trigger: "admin" }),
+    ];
+    expect(remainingReports.map((report) => report.wallTimeBacklogRemainingMs)).toEqual([12, 6, 0].map((hours) => hours * 60 * 60 * 1000));
+    expect((await simulator.clockStatus()).clock.lastReconciledSimulationTime).toBe(outageEnd);
+
+    await simulator.updateClock({ speedMultiplier: 2 }, outageEnd);
+    expect((await simulator.clockStatus()).clock.speedMultiplier).toBe(2);
+    await simulator.reconcileSimulationClock({ now: addHoursIso(outageEnd, 1), trigger: "admin" });
+    expect((await simulator.clockStatus()).clock.lastReconciledSimulationTime).toBe(addHoursIso(startedAt, 26));
+    const changeIds = (await simulator.sourceChanges()).map((change) => change.changeId);
+    expect(new Set(changeIds).size).toBe(changeIds.length);
+  });
+
+  it("allows true no-op clock updates while backlog remains", async () => {
+    const startedAt = "2026-07-10T00:00:00.000Z";
+    const outageEnd = addHoursIso(startedAt, 24);
+    const simulator = await SourceSimulator.create({
+      seed: "backlog-noop-transition-seed",
+      now: startedAt,
+      clockMode: "realtime",
+      clockSpeedMultiplier: 1,
+      maxCatchUpSeconds: 60 * 60 * 6,
+      baseUrl: "http://sim.test",
+    });
+
+    const beforeLedger = await simulator.sourceChanges();
+    await simulator.updateClock({ speedMultiplier: 1 }, outageEnd);
+    const status = await simulator.clockStatus();
+    expect(status.clock.speedMultiplier).toBe(1);
+    expect(status.clock.mode).toBe("realtime");
+    expect(status.clock.lastReconciledSimulationTime).toBe(addHoursIso(startedAt, 6));
+    expect(status.clock.lastReconciliationReport?.wallTimeBacklogRemainingMs).toBe(18 * 60 * 60 * 1000);
+    expect((await simulator.sourceChanges()).length).toBeGreaterThanOrEqual(beforeLedger.length);
+  });
+
+  it("requires backlog drain before realtime-to-manual and pause transitions", async () => {
+    const startedAt = "2026-07-10T00:00:00.000Z";
+    const outageEnd = addHoursIso(startedAt, 24);
+    const makeSimulator = (seed: string) =>
+      SourceSimulator.create({
+        seed,
+        now: startedAt,
+        clockMode: "realtime",
+        clockSpeedMultiplier: 1,
+        maxCatchUpSeconds: 60 * 60 * 6,
+        baseUrl: "http://sim.test",
+      });
+
+    const manual = await makeSimulator("backlog-manual-transition-seed");
+    const manualBefore = await clockWorldSnapshot(manual);
+    await expect(manual.updateClock({ mode: "manual" }, outageEnd)).rejects.toMatchObject({ classification: "clock_backlog_conflict" });
+    expect(await clockWorldSnapshot(manual)).toEqual(manualBefore);
+    for (let index = 0; index < 4; index += 1) await manual.reconcileSimulationClock({ now: outageEnd, trigger: "admin" });
+    await manual.updateClock({ mode: "manual" }, outageEnd);
+    expect((await manual.clockStatus()).clock.mode).toBe("manual");
+    const beforeManualNoop = await manual.clockStatus();
+    await manual.updateClock({ mode: "manual" }, outageEnd);
+    const afterManualNoop = await manual.clockStatus();
+    expect(afterManualNoop.clock.mode).toBe(beforeManualNoop.clock.mode);
+    expect(afterManualNoop.clock.speedMultiplier).toBe(beforeManualNoop.clock.speedMultiplier);
+    expect(afterManualNoop.clock.lastReconciledSimulationTime).toBe(beforeManualNoop.clock.lastReconciledSimulationTime);
+
+    const pause = await makeSimulator("backlog-pause-transition-seed");
+    const pauseBefore = await clockWorldSnapshot(pause);
+    await expect(pause.updateClock({ paused: true }, outageEnd)).rejects.toMatchObject({ classification: "clock_backlog_conflict" });
+    expect(await clockWorldSnapshot(pause)).toEqual(pauseBefore);
+    for (let index = 0; index < 4; index += 1) await pause.reconcileSimulationClock({ now: outageEnd, trigger: "admin" });
+    await pause.updateClock({ paused: true }, outageEnd);
+    expect((await pause.clockStatus()).clock.paused).toBe(true);
+  });
+
+  it("requires backlog drain before continuous activity and successor cadence changes", async () => {
+    const startedAt = "2026-07-10T00:00:00.000Z";
+    const outageEnd = addHoursIso(startedAt, 24);
+    const simulator = await SourceSimulator.create({
+      seed: "backlog-orchestration-transition-seed",
+      now: startedAt,
+      clockMode: "realtime",
+      clockSpeedMultiplier: 1,
+      continuousActivity: false,
+      maxCatchUpSeconds: 60 * 60 * 6,
+      baseUrl: "http://sim.test",
+    });
+    const before = await clockWorldSnapshot(simulator);
+    for (const input of [
+      { continuousActivity: true },
+      { activityProfile: "intense" as const },
+      { maxSuccessorInstancesPerReconciliation: 8 },
+      { minSuccessorIntervalHours: 1 },
+    ]) {
+      await expect(simulator.updateClock(input, outageEnd)).rejects.toMatchObject({ classification: "clock_backlog_conflict" });
+      expect(await clockWorldSnapshot(simulator)).toEqual(before);
+    }
+
+    for (let index = 0; index < 4; index += 1) await simulator.reconcileSimulationClock({ now: outageEnd, trigger: "admin" });
+    await simulator.updateClock(
+      {
+        continuousActivity: true,
+        activityProfile: "intense",
+        maxSuccessorInstancesPerReconciliation: 8,
+        minSuccessorIntervalHours: 1,
+      },
+      outageEnd,
+    );
+    const status = await simulator.clockStatus();
+    expect(status.clock.continuousActivity).toBe(true);
+    expect(status.orchestration).toMatchObject({
+      enabled: true,
+      activityProfile: "intense",
+      maxSuccessorInstancesPerReconciliation: 8,
+      minSuccessorIntervalHours: 1,
+    });
+  });
+
+  it("returns a structured 409 clock backlog conflict over HTTP", async () => {
+    const startedAt = addHoursIso(new Date().toISOString(), -24);
+    const simulator = await SourceSimulator.create({
+      seed: "http-backlog-conflict-seed",
+      now: startedAt,
+      clockMode: "realtime",
+      clockSpeedMultiplier: 1,
+      maxCatchUpSeconds: 60 * 60 * 6,
+      baseUrl: "http://sim.test",
+    });
+    const app = await createApp({ simulator, runtimeEnv: "test", adminKey: "admin-test" });
+    const before = await clockWorldSnapshot(simulator);
+    const response = await app.request("/v1/admin/clock", {
+      method: "PUT",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ speedMultiplier: 2 }),
+    });
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      error: "Clock backlog must be reconciled before changing clock configuration",
+      classification: "clock_backlog_conflict",
+      correlationId: expect.any(String),
+      wallTimeBacklogRemainingMs: expect.any(Number),
+    });
+    expect(body.wallTimeBacklogRemainingMs).toBeGreaterThan(0);
+    expect(await clockWorldSnapshot(simulator)).toEqual(before);
+  });
+
   it("applies lossless clock configuration transitions atomically", async () => {
     const startedAt = "2026-07-10T00:00:00.000Z";
     const simulator = await SourceSimulator.create({
@@ -2096,6 +2279,34 @@ describePostgres("Postgres storage", () => {
       await storageB?.close();
       await storageA.dropOwnedSchemaForTesting();
       await storageA.close();
+    }
+  });
+
+  it("rolls back rejected clock configuration transitions with backlog in Postgres", async () => {
+    const schema = `sim_test_clock_backlog_${Date.now()}`;
+    const storage = new PostgresSimulatorStorage({ connectionString: postgresTestUrl!, schema });
+    try {
+      const startedAt = "2026-07-10T00:00:00.000Z";
+      const outageEnd = addHoursIso(startedAt, 24);
+      const simulator = await SourceSimulator.create({
+        seed: "postgres-backlog-transition-seed",
+        storage,
+        now: startedAt,
+        clockMode: "realtime",
+        clockSpeedMultiplier: 1,
+        maxCatchUpSeconds: 60 * 60 * 6,
+        baseUrl: "http://sim.test",
+      });
+      const before = await clockWorldSnapshot(simulator);
+      await expect(simulator.updateClock({ speedMultiplier: 2 }, outageEnd)).rejects.toMatchObject({
+        status: 409,
+        classification: "clock_backlog_conflict",
+        details: { wallTimeBacklogRemainingMs: 18 * 60 * 60 * 1000 },
+      });
+      expect(await clockWorldSnapshot(simulator)).toEqual(before);
+    } finally {
+      await storage.dropOwnedSchemaForTesting();
+      await storage.close();
     }
   });
 });

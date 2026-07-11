@@ -187,7 +187,7 @@ export async function createApp(options: AppOptions = {}) {
   app.onError((error, c) => {
     const correlationId = requestIds.get(c.req.raw) ?? "unknown";
     if (error instanceof HttpError) {
-      return jsonError(error.status, { error: error.message, classification: error.classification, correlationId });
+      return jsonError(error.status, { ...error.details, error: error.message, classification: error.classification, correlationId });
     }
     if (error instanceof WorldConflictError) {
       return jsonError(409, { error: error.message, classification: "world_conflict", correlationId });

@@ -49,6 +49,8 @@ Realtime reconciliation never inserts a manual event ID and never assigns an occ
 
 Bounded catch-up advances the persisted wall checkpoint only by the wall time consumed in that reconciliation. Unprocessed wall backlog remains available to later reconciliation, and appended ledger sequences remain monotonic across the drain.
 
+Clock configuration changes do not consume historical backlog under new settings. If a bounded reconciliation would leave backlog and `PUT /v1/admin/clock` changes a time-affecting setting, the request fails with `clock_backlog_conflict` and rolls back the evaluation reconciliation, preserving the previous ledger, projection, clock, and scenario states.
+
 ## World Revision
 
 World revision changes on destructive scenario instance reset/delete, organization regeneration, dataset generation, and snapshot restore. Old cursors fail with a stale-checkpoint 400 after the revision changes.

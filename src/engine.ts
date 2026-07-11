@@ -249,6 +249,12 @@ export class SourceSimulator {
       const currentSimulationTime = maxIso(reconciledClock.lastReconciledSimulationTime, maxCurrentTime(replacement.scenarioInstanceStates));
       const nextMode = input.mode ?? reconciledClock.mode;
       const nextPaused = input.paused ?? reconciledClock.paused;
+      const currentOrchestration = validateOrchestrationState(snapshot.orchestrationState ?? buildDefaultOrchestrationState(normalizedNow, { enabled: reconciled.clock.continuousActivity }));
+      const candidateOrchestration = this.applyOrchestrationUpdate(
+        replacement.orchestrationState ?? reconciled.orchestration,
+        input,
+        input.continuousActivity ?? reconciledClock.continuousActivity,
+      );
       const nextClock = validateClockState({
         ...reconciledClock,
         mode: nextMode,
@@ -261,12 +267,14 @@ export class SourceSimulator {
         lastReconciledWallTime: reconciled.report.reconciledWallTime,
         lastReconciledSimulationTime: currentSimulationTime,
       });
+      if (
+        reconciled.report.wallTimeBacklogRemainingMs > 0 &&
+        clockUpdateChangesTimeAffectingConfiguration(input, reconciled.clock, currentOrchestration, nextClock, candidateOrchestration)
+      ) {
+        throw clockBacklogConflict(reconciled.report.wallTimeBacklogRemainingMs);
+      }
       replacement.clockState = nextClock;
-      replacement.orchestrationState = this.applyOrchestrationUpdate(
-        replacement.orchestrationState ?? reconciled.orchestration,
-        input,
-        nextClock.continuousActivity,
-      );
+      replacement.orchestrationState = candidateOrchestration;
       return {
         replacement,
         result: { clock: nextClock, worldRevision: reconciled.worldRevision, organizationConfig: reconciled.organization.config },
@@ -1768,6 +1776,38 @@ function validateClockUpdate(input: ClockUpdateInput): void {
   }
 }
 
+function clockUpdateChangesTimeAffectingConfiguration(
+  input: ClockUpdateInput,
+  currentClock: SimulationClockState,
+  currentOrchestration: ContinuousOrchestrationState,
+  nextClock: SimulationClockState,
+  nextOrchestration: ContinuousOrchestrationState,
+): boolean {
+  if (input.mode !== undefined && nextClock.mode !== currentClock.mode) return true;
+  if (input.speedMultiplier !== undefined && nextClock.speedMultiplier !== currentClock.speedMultiplier) return true;
+  if (input.paused !== undefined && nextClock.paused !== currentClock.paused) return true;
+  if (input.maxCatchUpSeconds !== undefined && nextClock.maxCatchUpSeconds !== currentClock.maxCatchUpSeconds) return true;
+  if (input.continuousActivity !== undefined && nextClock.continuousActivity !== currentClock.continuousActivity) return true;
+  if (input.activityProfile !== undefined && nextOrchestration.activityProfile !== currentOrchestration.activityProfile) return true;
+  if (
+    input.maxSuccessorInstancesPerReconciliation !== undefined &&
+    nextOrchestration.maxSuccessorInstancesPerReconciliation !== currentOrchestration.maxSuccessorInstancesPerReconciliation
+  ) {
+    return true;
+  }
+  if (input.minSuccessorIntervalHours !== undefined && nextOrchestration.minSuccessorIntervalHours !== currentOrchestration.minSuccessorIntervalHours) {
+    return true;
+  }
+  if (
+    input.activityProfile !== undefined &&
+    (nextOrchestration.maxSuccessorInstancesPerReconciliation !== currentOrchestration.maxSuccessorInstancesPerReconciliation ||
+      nextOrchestration.minSuccessorIntervalHours !== currentOrchestration.minSuccessorIntervalHours)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function buildReconciliationReport(input: Omit<SimulationReconciliationReport, "schemaVersion">): SimulationReconciliationReport {
   return SimulationReconciliationReportSchema.parse({ schemaVersion: "simulation-reconciliation.v1", ...input });
 }
@@ -1942,6 +1982,7 @@ export class HttpError extends Error {
     public readonly status: number,
     message: string,
     public readonly classification = "request_error",
+    public readonly details: Record<string, unknown> = {},
   ) {
     super(message);
   }
@@ -1957,4 +1998,10 @@ export function forbidden(message: string, classification = "authorization_error
 
 export function notFound(message: string, classification = "not_found"): HttpError {
   return new HttpError(404, message, classification);
+}
+
+function clockBacklogConflict(wallTimeBacklogRemainingMs: number): HttpError {
+  return new HttpError(409, "Clock backlog must be reconciled before changing clock configuration", "clock_backlog_conflict", {
+    wallTimeBacklogRemainingMs,
+  });
 }

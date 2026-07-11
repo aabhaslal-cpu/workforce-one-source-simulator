@@ -470,6 +470,18 @@ paths:
       responses:
         '200': { description: Updated clock state }
         '400': { description: Invalid clock update }
+        '409':
+          description: Clock backlog must be reconciled before changing time-affecting clock or orchestration configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, classification, correlationId, wallTimeBacklogRemainingMs]
+                properties:
+                  error: { type: string }
+                  classification: { const: clock_backlog_conflict }
+                  correlationId: { type: string }
+                  wallTimeBacklogRemainingMs: { type: integer, minimum: 1 }
   /v1/admin/clock/reconcile:
     post:
       summary: Manually run the canonical simulation clock reconciliation operation

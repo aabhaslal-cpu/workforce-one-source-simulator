@@ -46,6 +46,8 @@ All realtime progress goes through `reconcileSimulationClock(now)`. Normal recon
 
 One reconciliation consumes at most `maxCatchUpSeconds` of wall-time backlog. The persisted wall checkpoint advances only by the consumed interval, so later reconciliation drains the remaining backlog without skipping or double-applying simulated time. Reconciliation reports include `wallTimeConsumedMs`, `wallTimeBacklogRemainingMs`, `catchUpLimited`, `objectsCreated`, `objectsUpdated`, `objectsDeleted`, and `objectsChanged`.
 
+Changing time-affecting clock or orchestration configuration is fail-closed while backlog remains. `PUT /v1/admin/clock` first performs one bounded reconciliation under the current persisted settings inside the storage transaction. If `wallTimeBacklogRemainingMs > 0` and the request changes `mode`, `speedMultiplier`, `paused`, `maxCatchUpSeconds`, `continuousActivity`, `activityProfile`, `maxSuccessorInstancesPerReconciliation`, or `minSuccessorIntervalHours`, the request returns `409` with classification `clock_backlog_conflict` and the remaining backlog. Because the rejection occurs in the same transaction, the evaluation reconciliation is rolled back and no checkpoint, ledger changes, source projection changes, scenario advancement, orchestration changes, or partial configuration update are written. Run `POST /v1/admin/clock/reconcile` repeatedly until `wallTimeBacklogRemainingMs` is `0`, then retry the configuration update.
+
 Manual events remain explicit in realtime mode. Reconciliation never inserts manual event IDs and never assigns occurrence times to untriggered manual events. Continuous activity uses scheduled nonmanual lifecycle horizons and persisted successor due times.
 
 Activity profiles are real control presets:

@@ -121,7 +121,7 @@ Then smoke-test a protected preview or generated function for `/`, `/console`, `
 
 ## CI
 
-GitHub Actions runs `pnpm install --frozen-lockfile`, `pnpm run verify`, `git diff --check`, Vercel config validation, route smoke tests, Docker build, and container readiness smoke with a Postgres 16 service. The workflow sets `SIMULATOR_POSTGRES_TEST_URL`, so Postgres parity, clock persistence, distributed limiter, and multi-instance organization tests run in CI. If `VERCEL_TOKEN` is configured, CI also runs `vercel build`; otherwise the repository-owned Vercel config validation remains the always-on check and owner-run deployment verification remains required.
+GitHub Actions runs `pnpm install --frozen-lockfile`, `pnpm run verify`, `git diff --check`, Vercel config validation, route smoke tests, Docker build, and container readiness smoke with a Postgres 16 service. The workflow sets `SIMULATOR_POSTGRES_TEST_URL`, so Postgres parity, clock persistence, distributed limiter, multi-instance organization tests, and backlog-transition rollback tests run in CI. If `VERCEL_TOKEN` is configured, CI also runs `vercel build`; otherwise the repository-owned Vercel config validation remains the always-on check and owner-run deployment verification remains required. A Vercel step that exits early because `VERCEL_TOKEN` is absent must not be recorded as an account-backed Vercel build/deployment.
 
 ## Container
 

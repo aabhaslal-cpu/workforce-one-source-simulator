@@ -40,6 +40,8 @@ Manual trigger source changes are timestamped from the scenario instance's curre
 
 In realtime mode, polling `/records` may reconcile the simulator clock before reading the ledger. Consumers should persist `nextCursor`, respect `hasMore`, retry safely on `429` with `Retry-After`, treat duplicate delivery idempotently by stable source identity/change ID, and reacquire a fresh cursor after stale-world responses. Bounded catch-up may require multiple polls/ticks to drain a long outage, but the cursor remains valid because normal reconciliation does not rotate world revision.
 
+Clock configuration is an admin/operator concern, not a connector concern. If operators try to change speed, mode, pause, catch-up, continuous activity, activity profile, or successor cadence while bounded realtime backlog remains, the simulator rejects the change with `clock_backlog_conflict` until explicit reconciliation drains the backlog. This prevents connector-visible historical records from being timestamped under a new configuration.
+
 Manual events remain connector-visible only after explicit trigger. Realtime reconciliation will not silently create manual-event source records.
 
 ## Role Alias Connections

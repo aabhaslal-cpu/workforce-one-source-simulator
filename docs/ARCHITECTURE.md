@@ -70,6 +70,8 @@ Clock state includes:
 
 All realtime progression passes through `reconcileSimulationClock(now)`. The operation runs inside the same storage mutation lock as world replacement, calculates bounded elapsed simulation time from server-owned wall time, advances eligible non-paused instances by the same delta, materializes newly due source changes, creates bounded deterministic successor instances when continuous activity is enabled, updates source-object projection and dataset metadata, persists the clock checkpoint, and commits atomically.
 
+Clock configuration updates first run the same bounded reconciliation under the current persisted clock configuration inside one atomic world mutation. If `wallTimeBacklogRemainingMs` remains and the request changes a time-affecting field (`mode`, `speedMultiplier`, `paused`, `maxCatchUpSeconds`, `continuousActivity`, `activityProfile`, `maxSuccessorInstancesPerReconciliation`, or `minSuccessorIntervalHours`), the service rejects the update with `409 clock_backlog_conflict` and rolls back the evaluation reconciliation. Operators must explicitly call `POST /v1/admin/clock/reconcile` until backlog reaches zero before changing those settings.
+
 Feed polling calls reconciliation before reading authorized ledger changes in realtime mode. `/api/cron/tick` calls the same operation and is only a convenience to keep the world warm; correctness does not depend on a permanently running process.
 
 ## Source Objects

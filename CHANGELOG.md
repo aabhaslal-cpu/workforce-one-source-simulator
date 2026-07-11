@@ -28,13 +28,14 @@
 - Benchmark output is compact and reports durations/counts only.
 - Realtime reconciliation no longer auto-triggers manual events; continuous activity now uses scheduled nonmanual lifecycle horizons plus persisted successor due times.
 - Bounded catch-up reports consumed wall time, remaining backlog, and whether the catch-up limit applied.
+- Clock/orchestration configuration updates now reject with `clock_backlog_conflict` while bounded realtime catch-up backlog remains, so historical intervals are never processed under the wrong speed, mode, pause state, activity profile, or successor cadence.
 - Reconciliation reports source-object create, update, delete, and total changed counts from projection changes.
 - Error responses include safe classifications and correlation IDs without credentials, stack traces, or database strings.
 
 ### Verification
 
-- Local suite: 72 Vitest tests total; 67 pass locally and 5 Postgres tests skip without `SIMULATOR_POSTGRES_TEST_URL`.
-- GitHub Actions provides Postgres and is expected to run all 72 tests plus Vercel config validation, route smoke tests, Docker build, and container readiness smoke. A real Vercel CLI build runs when `VERCEL_TOKEN` is configured.
+- Local suite: 78 Vitest tests total; 72 pass locally and 6 Postgres tests skip without `SIMULATOR_POSTGRES_TEST_URL`.
+- GitHub Actions provides Postgres and is expected to run all 78 tests plus Vercel config validation, route smoke tests, Docker build, and container readiness smoke. A real Vercel CLI build runs only when `VERCEL_TOKEN` is configured; a tokenless early exit is not Vercel deployment proof.
 
 ### Performance Snapshot
 
