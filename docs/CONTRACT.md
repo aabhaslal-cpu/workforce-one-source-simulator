@@ -19,8 +19,12 @@ The external feed contract is `SourceFeedBatchV1`.
 - The simulator must not send a trusted Workforce One tenant ID.
 - Workforce One derives tenant from its configured connection.
 - Every record has a stable source system, source ID, object type, timestamp, raw provider payload, source URL, ACL, correlation metadata, and schema version.
-- Cursors are opaque to clients.
+- `updatedAt` appears only after the simulation clock reaches the deterministic source-object update time.
+- Updated source-object versions preserve the same `sourceSystem` and `sourceId`.
+- Cursors are opaque to clients and are validated server-side.
 - Re-requesting the same cursor returns the same page while scenario and organization state are unchanged.
+- A cursor issued for one connection cannot be used for another connection.
+- Page size is bounded to 100 records.
 - The feed validates through Zod and the JSON Schema in `schemas/source-feed-batch.v1.json`.
 - Breaking changes require a new contract version.
 
@@ -30,9 +34,27 @@ Records are authored by actual generated people. `actorRef` is a generated perso
 
 ## Auth
 
-- Connection feed: `x-connection-secret` or `Authorization: Bearer <secret>`.
-- Admin controls: `x-admin-api-key` or `Authorization: Bearer <admin-key>`.
-- Admin and connection credentials must be different in production.
+- Connection feed and source deep links: `x-connection-secret` or `Authorization: Bearer <secret>`.
+- Admin controls and detailed catalog: `x-admin-api-key` or `Authorization: Bearer <admin-key>`.
+- Each connection credential resolves server-side to exactly one connection ID.
+- The authenticated connection ID must match the URL connection ID or the request returns 403.
+- Admin credentials must never work as connection credentials.
+- Admin and connection credentials must be different.
+- Known development credentials are rejected outside local development.
+
+## Source Deep Links
+
+Every emitted `sourceUrl` points to:
+
+```text
+GET /sim/{sourceSystem}/{sourceId}
+```
+
+The endpoint returns the current fictional source object in a simulator-owned view. It requires connection authentication, returns 404 for unknown source objects, and returns 403 when the authenticated connection cannot see the object.
+
+## Catalog Exposure
+
+The public catalog exposes only safe high-level metadata. Detailed people, teams, source identities, assignments, organization tree, and visibility comparison require admin authentication.
 
 ## Endpoints
 
