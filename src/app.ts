@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { SourceSimulator, HttpError, badRequest, type SimulatorOptions } from "./engine.js";
 import { scenarios } from "./data.js";
@@ -16,6 +16,9 @@ export interface AppOptions {
 }
 
 type RuntimeEnv = "development" | "test" | "preview" | "production";
+type ScenarioResetInput = { seed?: string; datasetSize?: DatasetSize; startTime?: string };
+type ScenarioAdvanceInput = { hours?: number; days?: number };
+type OrganizationGenerateInput = { seed?: string; config?: OrganizationConfig };
 
 const DEV_ADMIN_KEY = "dev-admin-key";
 const DEV_CONNECTION_PREFIX = "dev-connection-secret";
@@ -61,9 +64,9 @@ const DepartmentOrgConfigSchema = z
     directorsPerVp: z.number().int().min(0).max(MAX_DIRECTORS_PER_VP),
     managersPerDirector: z.number().int().min(0).max(MAX_MANAGERS_PER_DIRECTOR),
     icsPerManager: z.number().int().min(0).max(MAX_ICS_PER_MANAGER),
-    customDirectorsPerVp: OverrideDirectorsSchema.optional(),
-    customManagersPerDirector: OverrideManagersSchema.optional(),
-    customIcsPerManager: OverrideIcsSchema.optional(),
+    customDirectorsPerVp: OverrideDirectorsSchema.default({}),
+    customManagersPerDirector: OverrideManagersSchema.default({}),
+    customIcsPerManager: OverrideIcsSchema.default({}),
   })
   .strict();
 const OrganizationConfigSchema = z
@@ -168,12 +171,14 @@ export function createApp(options: AppOptions = {}) {
     await next();
   });
 
-  app.post("/v1/admin/scenarios/:scenarioId/reset", async (c) =>
-    c.json(simulator.resetScenario(c.req.param("scenarioId"), await readJsonBody(c.req.raw, ScenarioResetSchema))),
-  );
-  app.post("/v1/admin/scenarios/:scenarioId/advance", async (c) =>
-    c.json(simulator.advanceScenario(c.req.param("scenarioId"), await readJsonBody(c.req.raw, ScenarioAdvanceSchema))),
-  );
+  app.post("/v1/admin/scenarios/:scenarioId/reset", async (c) => {
+    const body = compactOptional(await readJsonBody(c.req.raw, ScenarioResetSchema)) as ScenarioResetInput;
+    return c.json(simulator.resetScenario(c.req.param("scenarioId"), body));
+  });
+  app.post("/v1/admin/scenarios/:scenarioId/advance", async (c) => {
+    const body = compactOptional(await readJsonBody(c.req.raw, ScenarioAdvanceSchema)) as ScenarioAdvanceInput;
+    return c.json(simulator.advanceScenario(c.req.param("scenarioId"), body));
+  });
   app.post("/v1/admin/scenarios/:scenarioId/trigger", async (c) => {
     const body = await readJsonBody(c.req.raw, TriggerSchema);
     return c.json(simulator.triggerScenarioEvent(c.req.param("scenarioId"), body.eventId));
@@ -200,13 +205,18 @@ export function createApp(options: AppOptions = {}) {
     const params = parseSchema(SnapshotParamsSchema, { snapshotId: c.req.param("snapshotId") });
     return c.json(simulator.restoreSnapshot(params.snapshotId));
   });
-  app.post("/v1/admin/organization/generate", async (c) => c.json(simulator.regenerateOrganization(await readJsonBody(c.req.raw, OrganizationGenerateSchema))));
+  app.post("/v1/admin/organization/generate", async (c) => {
+    const body = compactOptional(await readJsonBody(c.req.raw, OrganizationGenerateSchema)) as OrganizationGenerateInput;
+    return c.json(simulator.regenerateOrganization(body));
+  });
   app.post("/v1/admin/organization/reset", async (c) => {
     await readJsonBody(c.req.raw, EmptyBodySchema);
     return c.json(simulator.resetOrganization());
   });
   app.get("/v1/admin/organization/config", (c) => c.json(simulator.getOrganizationConfig()));
-  app.put("/v1/admin/organization/config", async (c) => c.json(simulator.putOrganizationConfig(await readJsonBody(c.req.raw, OrganizationConfigSchema))));
+  app.put("/v1/admin/organization/config", async (c) =>
+    c.json(simulator.putOrganizationConfig((await readJsonBody(c.req.raw, OrganizationConfigSchema)) as OrganizationConfig)),
+  );
   app.get("/v1/admin/people/:personId/records", (c) => c.json(simulator.recordsForPerson(c.req.param("personId"))));
   app.get("/v1/admin/people/:personId/compare/:otherPersonId", (c) =>
     c.json(simulator.comparePersonVisibility(c.req.param("personId"), c.req.param("otherPersonId"))),
@@ -238,23 +248,23 @@ function parseSchema<TSchema extends z.ZodTypeAny>(schema: TSchema, value: unkno
   return parsed.data;
 }
 
-function withAdmin(c: Parameters<Parameters<Hono["get"]>[1]>[0], auth: AuthConfig, handler: () => Response): Response {
+function compactOptional(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
+}
+
+function withAdmin(c: Context, auth: AuthConfig, handler: () => Response): Response {
   const response = authenticateAdmin(c, auth);
   return response ?? handler();
 }
 
-function authenticateAdmin(c: Parameters<Parameters<Hono["get"]>[1]>[0], auth: AuthConfig): Response | null {
+function authenticateAdmin(c: Context, auth: AuthConfig): Response | null {
   return hasSecret(c.req.header(), auth.adminKey, "x-admin-api-key") ? null : new Response(JSON.stringify({ error: "Unauthorized" }), {
     status: 401,
     headers: { "content-type": "application/json" },
   });
 }
 
-function authenticateConnection(
-  c: Parameters<Parameters<Hono["get"]>[1]>[0],
-  auth: AuthConfig,
-  requestedConnectionId?: string,
-): ConnectionAuthResult {
+function authenticateConnection(c: Context, auth: AuthConfig, requestedConnectionId?: string): ConnectionAuthResult {
   const credential = extractSecret(c.req.header(), "x-connection-secret");
   if (!credential || auth.revokedConnectionCredentials.has(credential)) return authFailure(401, "Unauthorized");
   const authenticatedConnectionId = auth.connectionCredentialToConnectionId.get(credential);
@@ -315,9 +325,6 @@ function validateAuthConfig(input: {
   }
   if (input.productionLike && input.adminKey === DEV_ADMIN_KEY) {
     throw new Error("Known development admin credential is rejected outside local development");
-  }
-  if ([...input.revokedConnectionCredentials].some((credential) => input.connectionCredentials[credential])) {
-    return;
   }
 }
 
