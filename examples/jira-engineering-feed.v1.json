@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "source-feed.v1",
+  "connectionId": "conn-engineering-manager",
+  "batchId": "batch-example-engineering",
+  "generatedAt": "2026-07-10T20:00:00.000Z",
+  "records": [
+    {
+      "schemaVersion": "source-record.v1",
+      "sourceSystem": "jira",
+      "sourceId": "jira-reliability-incident-example",
+      "objectType": "issue",
+      "occurredAt": "2026-07-10T19:00:00.000Z",
+      "title": "Stabilize ingestion latency regression",
+      "sourceUrl": "http://localhost:3000/sim/jira/jira-reliability-incident-example",
+      "actorRef": "person-engineering-manager",
+      "acl": { "visibility": "group", "groups": ["engineering-platform"], "users": [] },
+      "rawPayload": { "key": "ENG-1842", "status": "In Progress", "priority": "High" },
+      "changeId": "change-jira-reliability-incident-example-created",
+      "changeType": "created",
+      "changeSequence": 1,
+      "changeOccurredAt": "2026-07-10T19:00:00.000Z",
+      "correlation": {
+        "scenarioId": "reliability-incident",
+        "eventId": "incident-opened",
+        "templateId": "incident-jira",
+        "seedFingerprint": "example"
+      }
+    }
+  ],
+  "nextCursor": "opaque-v2-checkpoint-example",
+  "hasMore": false
+}

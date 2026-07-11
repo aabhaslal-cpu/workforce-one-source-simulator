@@ -1,0 +1,375 @@
+openapi: 3.1.0
+info:
+  title: Workforce One Source Simulator API
+  version: 0.1.0
+servers:
+  - url: http://localhost:3000
+paths:
+  /healthz:
+    get:
+      summary: Health check
+      responses:
+        '200': { description: OK }
+  /v1/catalog:
+    get:
+      summary: Safe public catalog metadata only
+      responses:
+        '200': { description: Public catalog without people, teams, identities, assignments, credentials, or source visibility }
+  /v1/catalog/sources:
+    get:
+      summary: List supported fictional source systems
+      responses:
+        '200': { description: Source systems }
+  /v1/catalog/scenarios:
+    get:
+      summary: List safe scenario metadata without source records
+      responses:
+        '200': { description: Scenario metadata }
+  /v1/catalog/seats:
+    get:
+      summary: List role templates retained from the original persona categories
+      responses:
+        '200': { description: Role templates }
+  /v1/catalog/people:
+    get:
+      summary: List generated people
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: People }
+        '401': { description: Unauthorized }
+  /v1/catalog/people/{personId}:
+    get:
+      summary: Inspect generated person, manager, direct reports, source identities, assignments, and team
+      security:
+        - adminKey: []
+      parameters:
+        - name: personId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Person detail }
+        '401': { description: Unauthorized }
+        '404': { description: Unknown person }
+  /v1/catalog/organization:
+    get:
+      summary: Organization summary, counts, validation, and config
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Organization summary }
+        '401': { description: Unauthorized }
+  /v1/catalog/organization/tree:
+    get:
+      summary: Expandable organization tree
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Organization tree }
+        '401': { description: Unauthorized }
+  /v1/catalog/teams:
+    get:
+      summary: List generated teams
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Teams }
+        '401': { description: Unauthorized }
+  /v1/catalog/teams/{teamId}:
+    get:
+      summary: Inspect team
+      security:
+        - adminKey: []
+      parameters:
+        - name: teamId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Team detail }
+        '401': { description: Unauthorized }
+        '404': { description: Unknown team }
+  /v1/connections/{connectionId}/manifest:
+    get:
+      summary: Connection manifest for the authenticated connection only
+      security:
+        - connectionBoundCredential: []
+      parameters:
+        - name: connectionId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Manifest }
+        '401': { description: Missing, unknown, revoked, or wrong credential type }
+        '403': { description: Credential is valid for a different connection ID }
+  /v1/connections/{connectionId}/records:
+    get:
+      summary: Cursor-paginated source feed for the authenticated connection only
+      security:
+        - connectionBoundCredential: []
+      parameters:
+        - name: connectionId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque v2 checkpoint cursor bound to this connection and representing consumed change IDs.
+          schema: { type: string, maxLength: 65536 }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100 }
+      responses:
+        '200':
+          description: SourceFeedBatchV1 with an always-present checkpoint cursor
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceFeedBatchV1'
+        '400': { description: Malformed pagination or cursor }
+        '401': { description: Missing, unknown, revoked, or wrong credential type }
+        '403': { description: Credential is valid for a different connection ID }
+  /sim/{sourceSystem}/{sourceId}:
+    get:
+      summary: Simulator-owned readable source object view
+      security:
+        - connectionBoundCredential: []
+      parameters:
+        - name: sourceSystem
+          in: path
+          required: true
+          schema: { type: string }
+        - name: sourceId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Current fictional source object }
+        '401': { description: Missing, unknown, revoked, or wrong credential type }
+        '403': { description: Source object is not visible to this connection }
+        '404': { description: Unknown source object }
+  /v1/admin/organization/generate:
+    post:
+      summary: Generate organization with optional seed/config overrides
+      security:
+        - adminKey: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Organization summary }
+        '400': { description: Invalid generation request or organization bounds }
+  /v1/admin/organization/reset:
+    post:
+      summary: Reset organization to default template
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Organization summary }
+  /v1/admin/organization/config:
+    get:
+      summary: Current organization config
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Organization config }
+    put:
+      summary: Replace organization config and regenerate
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Organization summary }
+        '400': { description: Invalid config or organization bounds }
+  /v1/admin/people/{personId}/records:
+    get:
+      summary: Inspect source records visible to one person
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Person-visible records }
+  /v1/admin/people/{personId}/compare/{otherPersonId}:
+    get:
+      summary: Compare visible records between two people
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Visibility comparison }
+  /v1/admin/scenarios/{scenarioId}/reset:
+    post:
+      summary: Reset scenario
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Scenario state }
+        '400': { description: Invalid JSON or reset payload }
+  /v1/admin/scenarios/{scenarioId}/advance:
+    post:
+      summary: Advance scenario clock within bounded limits
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Scenario state }
+        '400': { description: Invalid JSON or time advancement bounds }
+  /v1/admin/scenarios/{scenarioId}/trigger:
+    post:
+      summary: Trigger named scenario event
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Scenario state }
+        '400': { description: Invalid JSON or trigger payload }
+  /v1/admin/scenarios/{scenarioId}/pause:
+    post:
+      summary: Pause scenario
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Scenario state }
+  /v1/admin/scenarios/{scenarioId}/resume:
+    post:
+      summary: Resume scenario
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Scenario state }
+  /v1/admin/scenarios/{scenarioId}/state:
+    get:
+      summary: Inspect scenario state
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Scenario state }
+  /v1/admin/scenarios/{scenarioId}/events:
+    get:
+      summary: Inspect simulator event log
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Event log }
+  /v1/admin/records:
+    get:
+      summary: Inspect generated records
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Records }
+  /v1/admin/connections:
+    get:
+      summary: Inspect configured connections without exposing credential material
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Connections }
+  /v1/admin/snapshots:
+    get:
+      summary: List snapshots
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Snapshots }
+    post:
+      summary: Create snapshot
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Snapshot }
+        '400': { description: Invalid snapshot payload }
+  /v1/admin/snapshots/{snapshotId}/restore:
+    post:
+      summary: Restore snapshot
+      security:
+        - adminKey: []
+      parameters:
+        - name: snapshotId
+          in: path
+          required: true
+          schema: { type: string, maxLength: 128 }
+      responses:
+        '200': { description: Restored state }
+        '400': { description: Invalid restore payload }
+        '404': { description: Unknown snapshot }
+components:
+  securitySchemes:
+    adminKey:
+      type: apiKey
+      in: header
+      name: x-admin-api-key
+    connectionBoundCredential:
+      type: apiKey
+      in: header
+      name: x-connection-secret
+  schemas:
+    SourceFeedBatchV1:
+      type: object
+      required: [schemaVersion, connectionId, batchId, generatedAt, records, nextCursor, hasMore]
+      properties:
+        schemaVersion: { const: source-feed.v1 }
+        connectionId: { type: string }
+        batchId: { type: string }
+        generatedAt: { type: string, format: date-time }
+        records:
+          type: array
+          items:
+            $ref: '#/components/schemas/SourceRecord'
+        nextCursor:
+          type: string
+          minLength: 1
+          description: Opaque checkpoint cursor returned even when hasMore is false.
+        hasMore: { type: boolean }
+    SourceRecord:
+      type: object
+      required:
+        - schemaVersion
+        - sourceSystem
+        - sourceId
+        - objectType
+        - occurredAt
+        - title
+        - sourceUrl
+        - acl
+        - rawPayload
+        - changeId
+        - changeType
+        - changeSequence
+        - changeOccurredAt
+        - correlation
+      properties:
+        schemaVersion: { const: source-record.v1 }
+        sourceSystem: { type: string }
+        sourceId: { type: string }
+        objectType: { type: string }
+        occurredAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        title: { type: string }
+        sourceUrl: { type: string, format: uri-reference }
+        actorRef: { type: string }
+        acl:
+          type: object
+          required: [visibility, groups, users]
+          properties:
+            visibility: { enum: [public, group, restricted, private] }
+            groups:
+              type: array
+              items: { type: string }
+            users:
+              type: array
+              items: { type: string }
+        rawPayload: { type: object }
+        changeId: { type: string }
+        changeType: { enum: [created, updated, deleted] }
+        changeSequence: { type: integer, minimum: 1 }
+        changeOccurredAt: { type: string, format: date-time }
+        correlation:
+          type: object
+          required: [scenarioId, eventId, templateId, seedFingerprint]
+          properties:
+            scenarioId: { type: string }
+            eventId: { type: string }
+            templateId: { type: string }
+            seedFingerprint: { type: string }

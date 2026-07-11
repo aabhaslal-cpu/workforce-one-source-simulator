@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "source-feed.v1",
+  "connectionId": "conn-customer-success-director",
+  "batchId": "batch-example-cs",
+  "generatedAt": "2026-07-10T20:00:00.000Z",
+  "records": [
+    {
+      "schemaVersion": "source-record.v1",
+      "sourceSystem": "salesforce",
+      "sourceId": "salesforce-renewal-risk-example",
+      "objectType": "opportunity",
+      "occurredAt": "2026-07-10T17:30:00.000Z",
+      "title": "Northstar Medical renewal risk",
+      "sourceUrl": "http://localhost:3000/sim/salesforce/salesforce-renewal-risk-example",
+      "actorRef": "person-cs-manager",
+      "acl": { "visibility": "group", "groups": ["cs-leadership"], "users": [] },
+      "rawPayload": { "account": "Northstar Medical", "stage": "Renewal Risk", "closeDate": "2026-08-15" },
+      "changeId": "change-salesforce-renewal-risk-example-created",
+      "changeType": "created",
+      "changeSequence": 1,
+      "changeOccurredAt": "2026-07-10T17:30:00.000Z",
+      "correlation": {
+        "scenarioId": "renewal-risk",
+        "eventId": "vp-risk",
+        "templateId": "renewal-vp-brief",
+        "seedFingerprint": "example"
+      }
+    }
+  ],
+  "nextCursor": "opaque-v2-checkpoint-example",
+  "hasMore": false
+}

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "source-feed.v1",
+  "connectionId": "conn-product-manager",
+  "batchId": "batch-example-product",
+  "generatedAt": "2026-07-10T20:00:00.000Z",
+  "records": [
+    {
+      "schemaVersion": "source-record.v1",
+      "sourceSystem": "slack",
+      "sourceId": "slack-product-launch-readiness-example",
+      "objectType": "message",
+      "occurredAt": "2026-07-10T18:00:00.000Z",
+      "updatedAt": "2026-07-10T18:20:00.000Z",
+      "title": "Launch readiness thread",
+      "sourceUrl": "http://localhost:3000/sim/slack/slack-product-launch-readiness-example",
+      "actorRef": "person-product-manager",
+      "acl": { "visibility": "group", "groups": ["product-launch-team"], "users": [] },
+      "rawPayload": { "channel": "#launch-readiness", "threadTs": "1720634400.000", "text": "Launch readiness has a dependency risk." },
+      "changeId": "change-slack-product-launch-readiness-example-updated",
+      "changeType": "updated",
+      "changeSequence": 2,
+      "changeOccurredAt": "2026-07-10T18:20:00.000Z",
+      "correlation": {
+        "scenarioId": "product-launch-readiness",
+        "eventId": "baseline",
+        "templateId": "launch-slack-thread",
+        "seedFingerprint": "example"
+      }
+    }
+  ],
+  "nextCursor": "opaque-v2-checkpoint-example",
+  "hasMore": false
+}
