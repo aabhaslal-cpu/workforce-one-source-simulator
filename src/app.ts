@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
-import { SourceSimulator, HttpError, badRequest, type SimulatorOptions } from "./engine.js";
+import { SourceSimulator, HttpError, badRequest, validateOrganizationConfigCompatibility, type SimulatorOptions } from "./engine.js";
 import { scenarios } from "./data.js";
 import { previewOrganizationCounts, roleTemplates } from "./organization.js";
 import { MemorySimulatorStorage, SQLiteSimulatorStorage, type SimulatorStorage } from "./storage.js";
@@ -86,12 +86,19 @@ const OrganizationConfigSchema = z
     if (counts.totalPeople > MAX_TOTAL_PEOPLE) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: `organization may not generate more than ${MAX_TOTAL_PEOPLE} people` });
     }
+    for (const issue of validateOrganizationConfigCompatibility(config as OrganizationConfig)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `organization config is incompatible with enabled scenarios: ${issue}`,
+      });
+    }
   });
 const OrganizationGenerateSchema = z.object({ seed: BoundedSeedSchema.optional(), config: OrganizationConfigSchema.optional() }).strict();
 
 type AuthConfig = {
   adminKey: string;
   connectionCredentialToConnectionId: Map<string, string>;
+  dynamicDevelopmentCredentials: boolean;
   revokedConnectionCredentials: Set<string>;
 };
 
@@ -99,6 +106,7 @@ type ConnectionAuthResult = { ok: true; connectionId: string } | { ok: false; re
 
 export function createApp(options: AppOptions = {}) {
   const runtimeEnv = options.runtimeEnv ?? resolveRuntimeEnv(process.env);
+  enforceProductionStorageOptions(runtimeEnv, options);
   const simulatorOptions: SimulatorOptions = {};
   if (process.env.SIMULATOR_DEFAULT_SEED) simulatorOptions.seed = process.env.SIMULATOR_DEFAULT_SEED;
   const configuredDatasetSize = parseDatasetSize(process.env.SIMULATOR_DEFAULT_DATASET_SIZE);
@@ -108,6 +116,7 @@ export function createApp(options: AppOptions = {}) {
   if (!options.simulator && !options.storage) simulatorOptions.storage = createStorageForRuntime(runtimeEnv);
 
   const simulator = options.simulator ?? new SourceSimulator(simulatorOptions);
+  enforceProductionSimulatorStorage(runtimeEnv, simulator);
   const auth = buildAuthConfig(simulator, options, runtimeEnv);
   const app = new Hono();
 
@@ -142,20 +151,20 @@ export function createApp(options: AppOptions = {}) {
   app.get("/v1/catalog/teams/:teamId", (c) => withAdmin(c, auth, () => c.json(simulator.team(c.req.param("teamId")))));
 
   app.get("/v1/connections/:connectionId/manifest", (c) => {
-    const authenticated = authenticateConnection(c, auth, c.req.param("connectionId"));
+    const authenticated = authenticateConnection(c, auth, simulator, c.req.param("connectionId"));
     if (!authenticated.ok) return authenticated.response;
     return c.json(simulator.manifest(authenticated.connectionId));
   });
 
   app.get("/v1/connections/:connectionId/records", (c) => {
-    const authenticated = authenticateConnection(c, auth, c.req.param("connectionId"));
+    const authenticated = authenticateConnection(c, auth, simulator, c.req.param("connectionId"));
     if (!authenticated.ok) return authenticated.response;
     const pagination = parseSchema(PaginationSchema, { cursor: c.req.query("cursor"), limit: c.req.query("limit") });
     return c.json(simulator.feed(authenticated.connectionId, pagination.cursor, pagination.limit));
   });
 
   app.get("/sim/:sourceSystem/:sourceId", (c) => {
-    const authenticated = authenticateConnection(c, auth);
+    const authenticated = authenticateConnection(c, auth, simulator);
     if (!authenticated.ok) return authenticated.response;
     const record = simulator.findRecordForConnection(authenticated.connectionId, c.req.param("sourceSystem"), c.req.param("sourceId"));
     const accept = c.req.header("accept") ?? "";
@@ -264,11 +273,15 @@ function authenticateAdmin(c: Context, auth: AuthConfig): Response | null {
   });
 }
 
-function authenticateConnection(c: Context, auth: AuthConfig, requestedConnectionId?: string): ConnectionAuthResult {
+function authenticateConnection(c: Context, auth: AuthConfig, simulator: SourceSimulator, requestedConnectionId?: string): ConnectionAuthResult {
   const credential = extractSecret(c.req.header(), "x-connection-secret");
   if (!credential || auth.revokedConnectionCredentials.has(credential)) return authFailure(401, "Unauthorized");
-  const authenticatedConnectionId = auth.connectionCredentialToConnectionId.get(credential);
+  let authenticatedConnectionId = auth.connectionCredentialToConnectionId.get(credential);
+  if (!authenticatedConnectionId && auth.dynamicDevelopmentCredentials && credential.startsWith(`${DEV_CONNECTION_PREFIX}:`)) {
+    authenticatedConnectionId = credential.slice(`${DEV_CONNECTION_PREFIX}:`.length);
+  }
   if (!authenticatedConnectionId) return authFailure(401, "Unauthorized");
+  if (!simulator.hasConnection(authenticatedConnectionId)) return authFailure(401, "Unauthorized");
   if (requestedConnectionId && requestedConnectionId !== authenticatedConnectionId) return authFailure(403, "Forbidden");
   return { ok: true, connectionId: authenticatedConnectionId };
 }
@@ -294,8 +307,9 @@ function buildAuthConfig(simulator: SourceSimulator, options: AppOptions, runtim
   if (!adminKey) throw new Error("SIMULATOR_ADMIN_API_KEY is required outside local development");
 
   const configuredCredentials = options.connectionCredentials ?? parseConnectionCredentials(process.env.SIMULATOR_CONNECTION_CREDENTIALS);
-  const connectionCredentials = configuredCredentials ?? (productionLike ? undefined : developmentConnectionCredentials(simulator.connectionIds()));
-  if (!connectionCredentials || Object.keys(connectionCredentials).length === 0) {
+  const dynamicDevelopmentCredentials = !configuredCredentials && !productionLike;
+  const connectionCredentials = configuredCredentials ?? {};
+  if (!dynamicDevelopmentCredentials && Object.keys(connectionCredentials).length === 0) {
     throw new Error("Connection-bound credentials are required outside local development");
   }
 
@@ -304,7 +318,12 @@ function buildAuthConfig(simulator: SourceSimulator, options: AppOptions, runtim
     ...(options.revokedConnectionCredentials ?? []),
   ]);
   validateAuthConfig({ adminKey, connectionCredentials, revokedConnectionCredentials, simulator, productionLike });
-  return { adminKey, connectionCredentialToConnectionId: new Map(Object.entries(connectionCredentials)), revokedConnectionCredentials };
+  return {
+    adminKey,
+    connectionCredentialToConnectionId: new Map(Object.entries(connectionCredentials)),
+    dynamicDevelopmentCredentials,
+    revokedConnectionCredentials,
+  };
 }
 
 function validateAuthConfig(input: {
@@ -328,10 +347,6 @@ function validateAuthConfig(input: {
   }
 }
 
-function developmentConnectionCredentials(connectionIds: string[]): Record<string, string> {
-  return Object.fromEntries(connectionIds.map((connectionId) => [`${DEV_CONNECTION_PREFIX}:${connectionId}`, connectionId]));
-}
-
 function parseConnectionCredentials(value: string | undefined): Record<string, string> | undefined {
   if (!value?.trim()) return undefined;
   const parsed = JSON.parse(value) as unknown;
@@ -351,6 +366,27 @@ function isKnownDevelopmentConnectionCredential(value: string): boolean {
   return value === DEV_CONNECTION_PREFIX || value.startsWith(`${DEV_CONNECTION_PREFIX}:`);
 }
 
+function enforceProductionStorageOptions(runtimeEnv: RuntimeEnv, options: AppOptions): void {
+  if (!isProductionLike(runtimeEnv)) return;
+  if (options.storage) {
+    rejectProductionStorageKind(options.storage.kind, "Injected storage");
+  }
+  if (options.simulator) {
+    rejectProductionStorageKind(options.simulator.storageKind(), "Injected simulator storage");
+  }
+}
+
+function enforceProductionSimulatorStorage(runtimeEnv: RuntimeEnv, simulator: SourceSimulator): void {
+  if (!isProductionLike(runtimeEnv)) return;
+  rejectProductionStorageKind(simulator.storageKind(), "Simulator storage");
+}
+
+function rejectProductionStorageKind(kind: SimulatorStorage["kind"], label: string): void {
+  if (kind === "memory") throw new Error(`${label} uses memory storage, which is forbidden in production-like environments`);
+  if (kind === "sqlite") throw new Error(`${label} uses SQLite storage, which is forbidden in production-like environments`);
+  if (kind !== "postgres") throw new Error(`${label} uses unknown storage, which is forbidden in production-like environments`);
+}
+
 function createStorageForRuntime(runtimeEnv: RuntimeEnv): SimulatorStorage {
   const productionLike = isProductionLike(runtimeEnv);
   const driver = process.env.SIMULATOR_STORAGE_DRIVER;
@@ -360,14 +396,20 @@ function createStorageForRuntime(runtimeEnv: RuntimeEnv): SimulatorStorage {
     }
     return new MemorySimulatorStorage();
   }
+  if (driver === "sqlite" && productionLike) {
+    throw new Error("SQLite storage is forbidden in production-like environments");
+  }
   if (driver === "sqlite" || (!productionLike && !process.env.DATABASE_URL)) {
     return new SQLiteSimulatorStorage(process.env.SIMULATOR_SQLITE_PATH ?? ".simulator/source-simulator.sqlite");
   }
-  if (process.env.DATABASE_URL?.startsWith("postgres")) {
+  if (productionLike && process.env.DATABASE_URL?.startsWith("postgres")) {
     throw new Error("Postgres durable storage is required for this environment but the adapter is not yet proven; refusing memory fallback");
   }
   if (productionLike) {
-    throw new Error("Durable storage is required in production-like environments");
+    throw new Error("Durable Postgres storage is required in production-like environments");
+  }
+  if (process.env.DATABASE_URL?.startsWith("postgres")) {
+    throw new Error("Postgres durable storage is configured but the adapter is not yet proven");
   }
   return new SQLiteSimulatorStorage(process.env.SIMULATOR_SQLITE_PATH ?? ".simulator/source-simulator.sqlite");
 }
