@@ -27,14 +27,25 @@
       },
       "additionalProperties": false
     },
+    "correlation": {
+      "type": "object",
+      "required": ["scenarioId", "eventId", "templateId", "seedFingerprint"],
+      "properties": {
+        "scenarioId": { "type": "string", "minLength": 1 },
+        "eventId": { "type": "string", "minLength": 1 },
+        "templateId": { "type": "string", "minLength": 1 },
+        "seedFingerprint": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
     "sourceRecord": {
       "type": "object",
       "required": ["schemaVersion", "sourceSystem", "sourceId", "objectType", "occurredAt", "title", "sourceUrl", "acl", "rawPayload", "correlation"],
       "properties": {
         "schemaVersion": { "const": "source-record.v1" },
         "sourceSystem": { "type": "string" },
-        "sourceId": { "type": "string" },
-        "objectType": { "type": "string" },
+        "sourceId": { "type": "string", "minLength": 1 },
+        "objectType": { "type": "string", "minLength": 1 },
         "occurredAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" },
         "title": { "type": "string" },
@@ -42,7 +53,7 @@
         "actorRef": { "type": "string" },
         "acl": { "$ref": "#/$defs/acl" },
         "rawPayload": { "type": "object" },
-        "correlation": { "type": "object" }
+        "correlation": { "$ref": "#/$defs/correlation" }
       },
       "additionalProperties": false
     }
