@@ -15,7 +15,12 @@
       "actorRef": "person-engineering-manager",
       "acl": { "visibility": "group", "groups": ["engineering-platform"], "users": [] },
       "rawPayload": { "key": "ENG-1842", "status": "In Progress", "priority": "High" },
-      "correlation": { "scenarioId": "reliability-incident", "eventId": "incident-opened", "seedFingerprint": "example" }
+      "correlation": {
+        "scenarioId": "reliability-incident",
+        "eventId": "incident-opened",
+        "templateId": "incident-jira",
+        "seedFingerprint": "example"
+      }
     }
   ],
   "nextCursor": null,
