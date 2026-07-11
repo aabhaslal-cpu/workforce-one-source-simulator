@@ -15,17 +15,19 @@ The simulator owns fictional source data only. Workforce One owns interpretation
 
 ## Runtime Components
 
-- `src/app.ts`: HTTP API, auth boundaries, operator console.
-- `src/engine.ts`: deterministic scenario engine, records, cursors, snapshots, organization-aware visibility.
+- `src/app.ts`: HTTP API, connection-bound auth, admin auth, request validation, operator console, source deep links.
+- `src/engine.ts`: deterministic scenario engine, records, cursors, snapshots, temporal source mutations, organization-aware visibility.
 - `src/domain.ts`: shared domain types.
 - `src/organization.ts`: deterministic organization generator, role templates, reporting tree, and person-level connections.
 - `src/data.ts`: fictional tenant and M1 scenario templates.
 - `src/contracts.ts`: SourceFeedBatchV1 Zod schemas.
-- `src/storage.ts`: storage interface and in-memory implementation.
+- `src/storage.ts`: storage interface, in-memory test adapter, and durable local SQLite adapter.
 
 ## Determinism
 
 Record identity is derived from seed, organization seed, scenario, event, source system, object type, and template ID. The same seed, organization configuration, scenario state, and trigger sequence produce the same organization and records. Different seeds produce different stable people and source IDs while preserving valid structure.
+
+Source updates are deterministic timeline mutations. A record with an update time keeps the same source ID and initial payload until the simulation clock reaches the update time; only then does `updatedAt` and the updated simulator payload metadata appear.
 
 ## Organization
 
@@ -57,8 +59,19 @@ The event log is for operator inspection only and is not part of the Workforce O
 
 ## Permissions
 
-Connections map server-side to a concrete generated person, allowed source systems, and allowed groups. Clients cannot choose arbitrary tenant, department, person, or group scope. Reporting hierarchy does not automatically grant visibility; ACLs and source memberships do.
+Connections map server-side to a concrete generated person, allowed source systems, and allowed groups. Each connection credential resolves to exactly one connection ID. The URL `connectionId` must match the authenticated connection ID or the API returns 403.
+
+Clients cannot choose arbitrary tenant, department, person, role, or group scope. Reporting hierarchy does not automatically grant visibility; ACLs and source memberships do.
+
+## Public vs Admin Catalog
+
+Unauthenticated catalog routes expose only safe high-level metadata: supported source systems, contract version, scenario names, role-template count, and aggregate organization counts. Detailed people, teams, source identities, assignments, organization tree, and visibility comparison require admin authentication.
 
 ## Storage
 
-Milestone 1 uses an in-process storage interface so the engine is not coupled to a database. Migration files document the intended durable shape. Milestone 3 should complete deployment-grade Postgres verification and can pull SQLite local durability forward if needed.
+The engine talks to a storage interface. Milestone 1 includes:
+
+- `MemorySimulatorStorage` for tests and explicitly selected local ephemeral development only.
+- `SQLiteSimulatorStorage` for durable local scenario state, organization configuration, and snapshots.
+
+Production-like runtimes must fail closed when durable storage is unavailable. This draft does not claim proven production Postgres readiness.
