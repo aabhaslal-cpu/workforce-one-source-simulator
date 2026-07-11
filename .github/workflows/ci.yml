@@ -55,7 +55,7 @@ jobs:
             echo "VERCEL_TOKEN not configured; repository-owned Vercel config validation already passed."
             exit 0
           fi
-          npx -y vercel@39.2.5 build --yes --token "$VERCEL_TOKEN"
+          pnpm run vercel:build -- --token "$VERCEL_TOKEN"
       - name: Route smoke test
         env:
           PORT: 3000
@@ -87,6 +87,18 @@ jobs:
           curl -fsS http://127.0.0.1:3000/v1/catalog >/dev/null
           curl -fsS -H "Authorization: Bearer ci-cron-secret" http://127.0.0.1:3000/api/cron/tick >/dev/null
           curl -fsS -H "x-connection-secret: ci-product-manager" "http://127.0.0.1:3000/v1/connections/conn-product-manager/records?limit=1" >/dev/null
+          node - <<'NODE'
+          const base = "http://127.0.0.1:3000";
+          const headers = { "x-connection-secret": "ci-product-manager" };
+          const feed = await fetch(`${base}/v1/connections/conn-product-manager/records?limit=1`, { headers });
+          if (!feed.ok) throw new Error(`feed smoke failed: ${feed.status}`);
+          const body = await feed.json();
+          const sourceUrl = body.records?.[0]?.sourceUrl;
+          if (!sourceUrl) throw new Error("feed smoke did not return a sourceUrl");
+          const deepLink = new URL(sourceUrl);
+          const resolved = await fetch(`${base}${deepLink.pathname}`, { headers });
+          if (!resolved.ok) throw new Error(`deep link smoke failed: ${resolved.status}`);
+          NODE
       - run: docker build -t workforce-one-source-simulator:ci .
       - name: Container smoke test
         run: |

@@ -63,6 +63,9 @@ Supports:
 - recent appended source changes
 - switch manual/realtime mode
 - set bounded speed multiplier
+- select continuous activity profile
+- set maximum successors per reconciliation
+- set minimum successor interval hours
 - pause/resume global clock
 - reconcile now
 - enable/disable continuous activity

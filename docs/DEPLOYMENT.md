@@ -85,7 +85,7 @@ Postgres is implemented and CI-proven for the simulator storage, clock, orchestr
 
 ## Vercel
 
-`api/index.ts` exports the Hono web-standard fetch handler. `vercel.json` uses one canonical execution model:
+`api/index.ts` exports a Web Standard function object with `fetch(request, env, executionContext)`. `vercel.json` uses one canonical execution model:
 
 - frozen pnpm install
 - `pnpm run build`
@@ -108,11 +108,20 @@ Required Vercel environment variables:
 - `SIMULATOR_RATE_LIMITS`
 - `CRON_SECRET`
 
-Vercel correctness does not depend on a warm function. Feed polling and cron both call the same persisted clock reconciliation path, and organization/connection state is refreshed before permission-sensitive operations.
+Vercel correctness does not depend on a warm function. Feed polling and cron both call the same persisted clock reconciliation path, and canonical reconciliation reads the organization config from the locked world snapshot before materializing records.
+
+When `VERCEL_TOKEN` is not available to CI, run the owner verification before marking Vercel deployment fully proven:
+
+```bash
+VERCEL_TOKEN=... pnpm run vercel:build -- --token "$VERCEL_TOKEN"
+find .vercel/output -maxdepth 3 -type f | sort
+```
+
+Then smoke-test a protected preview or generated function for `/`, `/console`, `/healthz`, `/readyz`, `/v1/catalog`, `/v1/connections/{connectionId}/records`, `/sim/{sourceSystem}/{sourceId}`, and `/api/cron/tick`, including `CRON_SECRET` bearer authentication. Record the exact build or preview evidence in PR #7.
 
 ## CI
 
-GitHub Actions runs `pnpm install --frozen-lockfile`, `pnpm run verify`, `git diff --check`, Vercel config validation, route smoke tests, Docker build, and container readiness smoke with a Postgres 16 service. The workflow sets `SIMULATOR_POSTGRES_TEST_URL`, so Postgres parity, clock persistence, and distributed limiter tests run in CI. If `VERCEL_TOKEN` is configured, CI also runs `vercel build`; otherwise the repository-owned Vercel config validation remains the always-on check.
+GitHub Actions runs `pnpm install --frozen-lockfile`, `pnpm run verify`, `git diff --check`, Vercel config validation, route smoke tests, Docker build, and container readiness smoke with a Postgres 16 service. The workflow sets `SIMULATOR_POSTGRES_TEST_URL`, so Postgres parity, clock persistence, distributed limiter, and multi-instance organization tests run in CI. If `VERCEL_TOKEN` is configured, CI also runs `vercel build`; otherwise the repository-owned Vercel config validation remains the always-on check and owner-run deployment verification remains required.
 
 ## Container
 

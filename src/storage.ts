@@ -1017,38 +1017,35 @@ export class PostgresSimulatorStorage implements SimulatorStorage {
          WHERE expires_at_ms < $1
          AND (scope, identity_key) IN (
            SELECT scope, identity_key FROM rate_limit_buckets WHERE expires_at_ms < $1 LIMIT 100
-         )`,
+        )`,
         [cleanupBefore],
       );
-      const existing = (
+      const bucket = (
         await client.query<{ window_started_at_ms: string; request_count: number }>(
-          "SELECT window_started_at_ms, request_count FROM rate_limit_buckets WHERE scope = $1 AND identity_key = $2 FOR UPDATE",
-          [input.scope, input.identityKey],
-        )
-      ).rows[0];
-      if (!existing || input.nowMs - Number(existing.window_started_at_ms) >= input.windowMs) {
-        await client.query(
           `INSERT INTO rate_limit_buckets (scope, identity_key, window_started_at_ms, request_count, expires_at_ms)
            VALUES ($1, $2, $3, 1, $4)
            ON CONFLICT (scope, identity_key)
-           DO UPDATE SET window_started_at_ms = EXCLUDED.window_started_at_ms,
-                         request_count = EXCLUDED.request_count,
-                         expires_at_ms = EXCLUDED.expires_at_ms`,
-          [input.scope, input.identityKey, input.nowMs, input.nowMs + input.windowMs],
-        );
-        return { allowed: true };
-      }
-      const nextCount = existing.request_count + 1;
-      await client.query(
-        `UPDATE rate_limit_buckets
-         SET request_count = $3, expires_at_ms = $4
-         WHERE scope = $1 AND identity_key = $2`,
-        [input.scope, input.identityKey, nextCount, Number(existing.window_started_at_ms) + input.windowMs],
-      );
-      if (nextCount <= input.limit) return { allowed: true };
+           DO UPDATE SET
+             window_started_at_ms = CASE
+               WHEN $3 - rate_limit_buckets.window_started_at_ms >= $5 THEN $3
+               ELSE rate_limit_buckets.window_started_at_ms
+             END,
+             request_count = CASE
+               WHEN $3 - rate_limit_buckets.window_started_at_ms >= $5 THEN 1
+               ELSE rate_limit_buckets.request_count + 1
+             END,
+             expires_at_ms = CASE
+               WHEN $3 - rate_limit_buckets.window_started_at_ms >= $5 THEN $4
+               ELSE rate_limit_buckets.window_started_at_ms + $5
+             END
+           RETURNING window_started_at_ms, request_count`,
+          [input.scope, input.identityKey, input.nowMs, input.nowMs + input.windowMs, input.windowMs],
+        )
+      ).rows[0]!;
+      if (bucket.request_count <= input.limit) return { allowed: true };
       return {
         allowed: false,
-        retryAfterSeconds: Math.max(1, Math.ceil((input.windowMs - (input.nowMs - Number(existing.window_started_at_ms))) / 1_000)),
+        retryAfterSeconds: Math.max(1, Math.ceil((input.windowMs - (input.nowMs - Number(bucket.window_started_at_ms))) / 1_000)),
       };
     }, "check rate limit");
   }

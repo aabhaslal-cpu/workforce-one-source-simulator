@@ -140,6 +140,9 @@ const ClockUpdateSchema = z
     paused: z.boolean().optional(),
     continuousActivity: z.boolean().optional(),
     maxCatchUpSeconds: z.number().int().min(1).max(60 * 60 * 24 * 7).optional(),
+    activityProfile: z.enum(["quiet", "standard", "intense"]).optional(),
+    maxSuccessorInstancesPerReconciliation: z.number().int().min(0).max(100).optional(),
+    minSuccessorIntervalHours: z.number().int().min(0).max(24 * 30).optional(),
   })
   .strict();
 
@@ -1065,6 +1068,9 @@ const consoleHtml = `<!doctype html>
         <label>Mode <select id="clockMode"><option>manual</option><option>realtime</option></select></label>
         <label>Speed <input id="clockSpeed" type="number" min="1" max="1440" value="30" /></label>
         <label>Continuous <select id="clockContinuous"><option value="true">enabled</option><option value="false">disabled</option></select></label>
+        <label>Profile <select id="activityProfile"><option>standard</option><option>quiet</option><option>intense</option></select></label>
+        <label>Max successors <input id="maxSuccessors" type="number" min="0" max="100" value="6" /></label>
+        <label>Min interval h <input id="minSuccessorInterval" type="number" min="0" max="720" value="12" /></label>
         <button onclick="clockStatus()">Clock Status</button>
         <button onclick="updateClock()">Apply Clock</button>
         <button onclick="pauseClock()">Pause</button>
@@ -1153,7 +1159,10 @@ async function updateClock() {
     body: JSON.stringify({
       mode: document.getElementById('clockMode').value,
       speedMultiplier: Number(document.getElementById('clockSpeed').value),
-      continuousActivity: document.getElementById('clockContinuous').value === 'true'
+      continuousActivity: document.getElementById('clockContinuous').value === 'true',
+      activityProfile: document.getElementById('activityProfile').value,
+      maxSuccessorInstancesPerReconciliation: Number(document.getElementById('maxSuccessors').value),
+      minSuccessorIntervalHours: Number(document.getElementById('minSuccessorInterval').value)
     })
   }));
 }

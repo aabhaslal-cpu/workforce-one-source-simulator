@@ -30,9 +30,11 @@ The source-change ledger is occurred-only. Dataset generation creates completed 
 
 Realtime continuous activity does not create a second dataset or a separate company. It reuses the same persisted organization, scenario packs, source ledger, source-object projection, and permission model.
 
-When enabled, reconciliation may create bounded deterministic successor instances for completed instances. Successor instance IDs, seeds, start times, and account/product/project/service/workstream context are derived from persisted orchestration state. Repeating reconciliation for the same wall time does not duplicate successors or ledger rows.
+When enabled, reconciliation may create bounded deterministic successor instances for completed instances. Successor instance IDs, seeds, start times, due times, and account/product/project/service/workstream context are derived from persisted orchestration state. Repeating reconciliation for the same wall time does not duplicate successors or ledger rows.
 
-The major cross-functional release pack remains the all-source storyline for continuous activity and spans Product, Engineering, Customer Success, all four role levels, and all 12 source systems.
+Manual events remain manual in continuous mode. Lifecycle completion is based on scheduled nonmanual events and their delayed visible/update/delete horizons, so background successor generation does not depend on silently triggering manual story beats.
+
+The major cross-functional release pack remains the broadest cross-functional storyline and spans Product, Engineering, Customer Success, all four role levels, and the source systems used by its scheduled and manually triggered events.
 
 The benchmark harness creates one additional manual-trigger instance while measuring each dataset size, so benchmark count rows show 11, 81, and 401 instances.
 

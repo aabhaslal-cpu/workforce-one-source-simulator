@@ -9,7 +9,7 @@
 - Persisted simulation clock and continuous orchestration state in memory, SQLite, and Postgres.
 - Admin clock APIs and Vercel cron tick endpoint backed by one canonical reconciliation operation.
 - Feed-triggered realtime reconciliation so source feeds can advance the company world after cold starts or missed cron delivery.
-- Deterministic continuous successor activity using the existing 10 scenario packs, including the all-source major cross-functional release storyline.
+- Deterministic continuous successor activity using the existing 10 scenario packs while preserving manual-trigger-only story beats.
 - Postgres-backed distributed production rate limiting for admin, cron, and connection identities.
 - Storage health checks for memory, SQLite, and Postgres.
 - Structured request telemetry with request ID, connection ID, world revision, cursor metadata, operation, status, duration, and safe error classification.
@@ -26,12 +26,15 @@
 - Postgres benchmarks now require a separate `SIMULATOR_BENCHMARK_DATABASE_URL` and reject reuse of the live `DATABASE_URL`.
 - OpenAPI now includes operational, clock, cron, failure-mode, benchmark, and connector-kit endpoints.
 - Benchmark output is compact and reports durations/counts only.
+- Realtime reconciliation no longer auto-triggers manual events; continuous activity now uses scheduled nonmanual lifecycle horizons plus persisted successor due times.
+- Bounded catch-up reports consumed wall time, remaining backlog, and whether the catch-up limit applied.
+- Reconciliation reports source-object create, update, delete, and total changed counts from projection changes.
 - Error responses include safe classifications and correlation IDs without credentials, stack traces, or database strings.
 
 ### Verification
 
-- Local suite: 65 Vitest tests total; 62 pass locally and 3 Postgres tests skip without `SIMULATOR_POSTGRES_TEST_URL`.
-- GitHub Actions provides Postgres and is expected to run all 65 tests plus Vercel config validation, route smoke tests, Docker build, and container readiness smoke. A real Vercel CLI build runs when `VERCEL_TOKEN` is configured.
+- Local suite: 72 Vitest tests total; 67 pass locally and 5 Postgres tests skip without `SIMULATOR_POSTGRES_TEST_URL`.
+- GitHub Actions provides Postgres and is expected to run all 72 tests plus Vercel config validation, route smoke tests, Docker build, and container readiness smoke. A real Vercel CLI build runs when `VERCEL_TOKEN` is configured.
 
 ### Performance Snapshot
 

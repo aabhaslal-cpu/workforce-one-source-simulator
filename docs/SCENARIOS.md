@@ -46,7 +46,9 @@ When an operator manually triggers an event, that event occurs at the instance's
 
 ## Realtime Continuous Mode
 
-In realtime continuous mode, reconciliation may deterministically occur manual-labeled story beats at their configured scenario time so unattended company activity can complete and create successors. Explicit manual API triggers still occur at the instance's current time and remain idempotent.
+Realtime reconciliation never inserts manual event IDs and never assigns occurrence times to untriggered manual events. Manual events occur only through the explicit trigger API, remain idempotent, and keep the selected instance's current simulation time as the occurrence time.
+
+Continuous mode determines lifecycle completion from scheduled nonmanual events plus their delayed visible/update/delete horizons. Completed instances become eligible for successors after their persisted successor due time; due successors are created in deterministic bounded batches.
 
 Continuous mode reuses these same 10 packs. It does not add hidden Workforce One-specific scenario logic.
 

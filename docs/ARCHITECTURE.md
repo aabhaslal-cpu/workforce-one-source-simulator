@@ -92,7 +92,7 @@ Scenario instances advance, pause, reset, delete, and trigger events independent
 
 Automatically scheduled events occur at `startedAt + atHour`. Manual triggers occur at the selected instance's `currentTime`, even when that is earlier than the template's `atHour`. The persisted event occurrence time is the source of truth for created, updated, and deleted source timestamps.
 
-For unattended realtime continuous activity, manual-labeled story beats are deterministically occurred at their configured scenario time by reconciliation. Explicit manual API triggers still occur at the instance's current simulation time and remain idempotent.
+Realtime reconciliation never auto-triggers manual-labeled story beats. Manual events occur only through the explicit trigger API and keep the selected instance's current simulation time as their persisted occurrence time. Continuous orchestration uses a deterministic lifecycle horizon based on scheduled nonmanual activity and delayed update/delete windows, so successor generation does not depend on silently reclassifying manual events as automatic.
 
 ## Continuous Activity
 

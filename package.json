@@ -16,6 +16,7 @@
     "lint": "eslint .",
     "format:check": "prettier --check .",
     "vercel:validate": "node scripts/validate-vercel-config.mjs",
+    "vercel:build": "npx -y vercel@39.2.5 build --yes",
     "verify": "pnpm run typecheck && pnpm run test && pnpm run lint && pnpm run build"
   },
   "dependencies": {

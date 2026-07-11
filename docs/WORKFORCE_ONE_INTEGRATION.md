@@ -38,7 +38,9 @@ The source-change ledger contains occurred changes only. Workforce One should no
 
 Manual trigger source changes are timestamped from the scenario instance's current simulation time. Connector consumers should treat them like any other occurred source change and continue from the returned cursor.
 
-In realtime mode, polling `/records` may reconcile the simulator clock before reading the ledger. Consumers should persist `nextCursor`, respect `hasMore`, retry safely on `429` with `Retry-After`, treat duplicate delivery idempotently by stable source identity/change ID, and reacquire a fresh cursor after stale-world responses.
+In realtime mode, polling `/records` may reconcile the simulator clock before reading the ledger. Consumers should persist `nextCursor`, respect `hasMore`, retry safely on `429` with `Retry-After`, treat duplicate delivery idempotently by stable source identity/change ID, and reacquire a fresh cursor after stale-world responses. Bounded catch-up may require multiple polls/ticks to drain a long outage, but the cursor remains valid because normal reconciliation does not rotate world revision.
+
+Manual events remain connector-visible only after explicit trigger. Realtime reconciliation will not silently create manual-event source records.
 
 ## Role Alias Connections
 

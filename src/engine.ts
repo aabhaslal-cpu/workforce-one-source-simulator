@@ -87,6 +87,11 @@ const DEFAULT_MAX_CATCH_UP_SECONDS = 60 * 60 * 6;
 const DEFAULT_MAX_SUCCESSORS_PER_RECONCILIATION = 6;
 const DEFAULT_MIN_SUCCESSOR_INTERVAL_HOURS = 12;
 const MAX_CLOCK_SPEED_MULTIPLIER = 24 * 60;
+const ACTIVITY_PROFILE_DEFAULTS: Record<ContinuousOrchestrationState["activityProfile"], { maxSuccessorInstancesPerReconciliation: number; minSuccessorIntervalHours: number }> = {
+  quiet: { maxSuccessorInstancesPerReconciliation: 2, minSuccessorIntervalHours: 24 },
+  standard: { maxSuccessorInstancesPerReconciliation: DEFAULT_MAX_SUCCESSORS_PER_RECONCILIATION, minSuccessorIntervalHours: DEFAULT_MIN_SUCCESSOR_INTERVAL_HOURS },
+  intense: { maxSuccessorInstancesPerReconciliation: 20, minSuccessorIntervalHours: 4 },
+};
 const INSTANCE_ACCOUNTS = ["Northstar Medical", "Summit Foods", "Cobalt Bank", "Beacon Retail", "Atlas Logistics", "Pioneer Health"];
 const INSTANCE_PRODUCTS = ["Workflow Hub", "Operations Control", "Connector Gateway", "Analytics Studio", "Customer Console", "Identity Fabric"];
 const INSTANCE_PROJECTS = ["Aurora", "Beacon", "Comet", "Delta", "Evergreen", "Foundry"];
@@ -112,6 +117,9 @@ export interface ClockUpdateInput {
   paused?: boolean;
   continuousActivity?: boolean;
   maxCatchUpSeconds?: number;
+  activityProfile?: ContinuousOrchestrationState["activityProfile"];
+  maxSuccessorInstancesPerReconciliation?: number;
+  minSuccessorIntervalHours?: number;
 }
 
 export interface ReconcileSimulationClockInput {
@@ -233,39 +241,39 @@ export class SourceSimulator {
 
   async updateClock(input: ClockUpdateInput, now = new Date().toISOString()): Promise<SimulationClockState> {
     validateClockUpdate(input);
-    if (input.mode === "realtime" || input.speedMultiplier !== undefined || input.paused === false) {
-      await this.reconcileSimulationClock({ now, trigger: "admin" });
-    }
-    const output = await this.storage.mutateWorld<{ clock: SimulationClockState; worldRevision: string }>((snapshot) => {
-      const clock = validateClockState(snapshot.clockState ?? buildDefaultClockState(now));
-      const currentSimulationTime = maxIso(clock.lastReconciledSimulationTime, maxCurrentTime(snapshot.scenarioInstanceStates));
-      const nextMode = input.mode ?? clock.mode;
-      const nextPaused = input.paused ?? clock.paused;
+    const normalizedNow = new Date(now).toISOString();
+    const output = await this.storage.mutateWorld<{ clock: SimulationClockState; worldRevision: string; organizationConfig: OrganizationConfig }>((snapshot) => {
+      const reconciled = this.computeReconciliation(snapshot, normalizedNow, "admin");
+      const replacement = reconciled.replacement;
+      const reconciledClock = validateClockState(replacement.clockState ?? reconciled.clock);
+      const currentSimulationTime = maxIso(reconciledClock.lastReconciledSimulationTime, maxCurrentTime(replacement.scenarioInstanceStates));
+      const nextMode = input.mode ?? reconciledClock.mode;
+      const nextPaused = input.paused ?? reconciledClock.paused;
       const nextClock = validateClockState({
-        ...clock,
+        ...reconciledClock,
         mode: nextMode,
-        speedMultiplier: input.speedMultiplier ?? clock.speedMultiplier,
+        speedMultiplier: input.speedMultiplier ?? reconciledClock.speedMultiplier,
         paused: nextPaused,
-        continuousActivity: input.continuousActivity ?? clock.continuousActivity,
-        maxCatchUpSeconds: input.maxCatchUpSeconds ?? clock.maxCatchUpSeconds,
-        wallClockAnchor: now,
+        continuousActivity: input.continuousActivity ?? reconciledClock.continuousActivity,
+        maxCatchUpSeconds: input.maxCatchUpSeconds ?? reconciledClock.maxCatchUpSeconds,
+        wallClockAnchor: reconciled.report.reconciledWallTime,
         simulationClockAnchor: currentSimulationTime,
-        lastReconciledWallTime: now,
+        lastReconciledWallTime: reconciled.report.reconciledWallTime,
         lastReconciledSimulationTime: currentSimulationTime,
       });
-      const nextOrchestration = {
-        ...validateOrchestrationState(snapshot.orchestrationState ?? buildDefaultOrchestrationState(now, { enabled: nextClock.continuousActivity })),
-        enabled: nextClock.continuousActivity,
-      };
+      replacement.clockState = nextClock;
+      replacement.orchestrationState = this.applyOrchestrationUpdate(
+        replacement.orchestrationState ?? reconciled.orchestration,
+        input,
+        nextClock.continuousActivity,
+      );
       return {
-        replacement: this.buildAppendReplacement(snapshot, snapshot.scenarioInstanceStates, [], snapshot.worldRevision ?? this.knownWorldRevision ?? stableId("world", "clock"), {
-          clockState: nextClock,
-          orchestrationState: nextOrchestration,
-        }),
-        result: { clock: nextClock, worldRevision: snapshot.worldRevision ?? this.knownWorldRevision ?? "" },
+        replacement,
+        result: { clock: nextClock, worldRevision: reconciled.worldRevision, organizationConfig: reconciled.organization.config },
       };
     });
     this.observeWorldRevision(output.worldRevision);
+    this.observeOrganization(output.organizationConfig);
     return output.clock;
   }
 
@@ -280,90 +288,15 @@ export class SourceSimulator {
   async reconcileSimulationClock(input: ReconcileSimulationClockInput = {}): Promise<SimulationReconciliationReport> {
     const now = new Date(input.now ?? new Date().toISOString()).toISOString();
     const trigger = input.trigger ?? "manual";
-    const output = await this.storage.mutateWorld<{ report: SimulationReconciliationReport; worldRevision: string }>((snapshot) => {
-      const worldRevision = snapshot.worldRevision;
-      if (!worldRevision) throw new Error("Simulator world revision has not been initialized");
-      const clock = validateClockState(snapshot.clockState ?? buildDefaultClockState(now));
-      const orchestration = validateOrchestrationState(
-        snapshot.orchestrationState ?? buildDefaultOrchestrationState(now, { enabled: clock.continuousActivity }),
-      );
-      const previousWallTime = clock.lastReconciledWallTime;
-      const previousSimulationTime = clock.lastReconciledSimulationTime;
-      if (clock.mode !== "realtime" || clock.paused || Date.parse(now) <= Date.parse(previousWallTime)) {
-        const report = buildReconciliationReport({
-          trigger,
-          previousWallTime,
-          reconciledWallTime: now,
-          previousSimulationTime,
-          reconciledSimulationTime: previousSimulationTime,
-          simulationDeltaMs: 0,
-          instancesAdvanced: 0,
-          instancesCreated: 0,
-          changesAppended: 0,
-          objectsChanged: 0,
-          worldRevision,
-          alreadyCurrent: true,
-        });
-        const nextClock = { ...clock, lastReconciliationReport: report };
-        return {
-          replacement: this.buildAppendReplacement(snapshot, snapshot.scenarioInstanceStates, [], worldRevision, {
-            clockState: nextClock,
-            orchestrationState: orchestration,
-          }),
-          result: { report, worldRevision },
-        };
-      }
-
-      const elapsedWallMs = Date.parse(now) - Date.parse(previousWallTime);
-      const boundedWallMs = Math.min(elapsedWallMs, clock.maxCatchUpSeconds * 1_000);
-      const simulationDeltaMs = Math.floor(boundedWallMs * clock.speedMultiplier);
-      const reconciledSimulationTime = addMilliseconds(previousSimulationTime, simulationDeltaMs);
-      const advancedStates = snapshot.scenarioInstanceStates.map((state) => {
-        if (state.paused || state.completionState === "completed") return state;
-        const scenario = this.requireScenario(state.scenarioPackId);
-        return advanceInstanceForRealtime(this.organization, scenario, state, addMilliseconds(state.currentTime, simulationDeltaMs));
-      });
-      const successorOutput = this.createDueSuccessors(advancedStates, orchestration, reconciledSimulationTime);
-      const nextStates = successorOutput.states;
-      const changedStateIds = new Set<string>();
-      for (const [index, state] of advancedStates.entries()) {
-        if (state !== snapshot.scenarioInstanceStates[index]) changedStateIds.add(state.scenarioInstanceId);
-      }
-      for (const state of successorOutput.createdStates) changedStateIds.add(state.scenarioInstanceId);
-      const changedStates = nextStates.filter((state) => changedStateIds.has(state.scenarioInstanceId));
-      const beforeChanges = snapshot.sourceChanges.length;
-      const beforeObjects = snapshot.sourceObjects.length;
-      const nextClock = validateClockState({
-        ...clock,
-        wallClockAnchor: now,
-        simulationClockAnchor: reconciledSimulationTime,
-        lastReconciledWallTime: now,
-        lastReconciledSimulationTime: reconciledSimulationTime,
-        reconciliationCount: clock.reconciliationCount + 1,
-        totalSimulationTimeAdvancedMs: clock.totalSimulationTimeAdvancedMs + simulationDeltaMs,
-      });
-      const replacement = this.buildAppendReplacement(snapshot, nextStates, changedStates, worldRevision, {
-        clockState: nextClock,
-        orchestrationState: successorOutput.orchestration,
-      });
-      const report = buildReconciliationReport({
-        trigger,
-        previousWallTime,
-        reconciledWallTime: now,
-        previousSimulationTime,
-        reconciledSimulationTime,
-        simulationDeltaMs,
-        instancesAdvanced: changedStates.filter((state) => !successorOutput.createdStates.some((created) => created.scenarioInstanceId === state.scenarioInstanceId)).length,
-        instancesCreated: successorOutput.createdStates.length,
-        changesAppended: replacement.sourceChanges.length - beforeChanges,
-        objectsChanged: Math.max(0, replacement.sourceObjects.length - beforeObjects),
-        worldRevision,
-        alreadyCurrent: simulationDeltaMs === 0,
-      });
-      replacement.clockState = { ...nextClock, lastReconciliationReport: report };
-      return { replacement, result: { report, worldRevision } };
+    const output = await this.storage.mutateWorld<{ report: SimulationReconciliationReport; worldRevision: string; organizationConfig: OrganizationConfig }>((snapshot) => {
+      const reconciled = this.computeReconciliation(snapshot, now, trigger);
+      return {
+        replacement: reconciled.replacement,
+        result: { report: reconciled.report, worldRevision: reconciled.worldRevision, organizationConfig: reconciled.organization.config },
+      };
     });
     this.observeWorldRevision(output.worldRevision);
+    this.observeOrganization(output.organizationConfig);
     return output.report;
   }
 
@@ -905,31 +838,146 @@ export class SourceSimulator {
     return fallback;
   }
 
+  private computeReconciliation(
+    snapshot: WorldSnapshot,
+    now: string,
+    trigger: SimulationReconciliationReport["trigger"],
+  ): {
+    replacement: WorldReplacement;
+    report: SimulationReconciliationReport;
+    worldRevision: string;
+    clock: SimulationClockState;
+    orchestration: ContinuousOrchestrationState;
+    organization: GeneratedOrganization;
+  } {
+    const worldRevision = snapshot.worldRevision;
+    if (!worldRevision) throw new Error("Simulator world revision has not been initialized");
+    const organization = buildCompatibleOrganization(snapshot.organizationConfig ?? this.organizationConfig);
+    const clock = validateClockState(snapshot.clockState ?? buildDefaultClockState(now));
+    const orchestration = validateOrchestrationState(
+      snapshot.orchestrationState ?? buildDefaultOrchestrationState(now, { enabled: clock.continuousActivity }),
+    );
+    const previousWallTime = clock.lastReconciledWallTime;
+    const previousSimulationTime = maxIso(clock.lastReconciledSimulationTime, maxCurrentTime(snapshot.scenarioInstanceStates));
+    const elapsedWallMs = Math.max(0, Date.parse(now) - Date.parse(previousWallTime));
+    const shouldAdvanceSimulation = clock.mode === "realtime" && !clock.paused && elapsedWallMs > 0;
+    const catchUpLimitMs = clock.maxCatchUpSeconds * 1_000;
+    const wallTimeConsumedMs = shouldAdvanceSimulation ? Math.min(elapsedWallMs, catchUpLimitMs) : elapsedWallMs;
+    const wallTimeBacklogRemainingMs = shouldAdvanceSimulation ? Math.max(0, elapsedWallMs - wallTimeConsumedMs) : 0;
+    const catchUpLimited = wallTimeBacklogRemainingMs > 0;
+    const simulationDeltaMs = shouldAdvanceSimulation ? Math.floor(wallTimeConsumedMs * clock.speedMultiplier) : 0;
+    const reconciledWallTime = wallTimeConsumedMs > 0 ? addMilliseconds(previousWallTime, wallTimeConsumedMs) : previousWallTime;
+    const reconciledSimulationTime = addMilliseconds(previousSimulationTime, simulationDeltaMs);
+    const advancedStates = snapshot.scenarioInstanceStates.map((state) => {
+      if (simulationDeltaMs <= 0 || state.paused || state.completionState === "completed") return state;
+      const scenario = this.requireScenario(state.scenarioPackId);
+      return advanceInstanceForRealtime(organization, scenario, state, addMilliseconds(state.currentTime, simulationDeltaMs));
+    });
+    const successorOutput = clock.mode === "realtime" && !clock.paused
+      ? this.createDueSuccessors(advancedStates, organization, orchestration, reconciledSimulationTime)
+      : { states: advancedStates, createdStates: [], orchestration };
+    const nextStates = successorOutput.states;
+    const changedStateIds = new Set<string>();
+    for (const [index, state] of advancedStates.entries()) {
+      if (state !== snapshot.scenarioInstanceStates[index]) changedStateIds.add(state.scenarioInstanceId);
+    }
+    for (const state of successorOutput.createdStates) changedStateIds.add(state.scenarioInstanceId);
+    const changedStates = nextStates.filter((state) => changedStateIds.has(state.scenarioInstanceId));
+    const beforeChanges = snapshot.sourceChanges.length;
+    const nextClock = validateClockState({
+      ...clock,
+      wallClockAnchor: reconciledWallTime,
+      simulationClockAnchor: reconciledSimulationTime,
+      lastReconciledWallTime: reconciledWallTime,
+      lastReconciledSimulationTime: reconciledSimulationTime,
+      reconciliationCount: clock.reconciliationCount + 1,
+      totalSimulationTimeAdvancedMs: clock.totalSimulationTimeAdvancedMs + simulationDeltaMs,
+    });
+    const replacement = this.buildAppendReplacement(snapshot, nextStates, changedStates, worldRevision, {
+      clockState: nextClock,
+      orchestrationState: successorOutput.orchestration,
+    }, organization);
+    const objectDelta = countSourceObjectProjectionChanges(snapshot.sourceObjects, replacement.sourceObjects);
+    const changesAppended = replacement.sourceChanges.length - beforeChanges;
+    const report = buildReconciliationReport({
+      trigger,
+      previousWallTime,
+      reconciledWallTime,
+      previousSimulationTime,
+      reconciledSimulationTime,
+      simulationDeltaMs,
+      wallTimeConsumedMs,
+      wallTimeBacklogRemainingMs,
+      catchUpLimited,
+      instancesAdvanced: changedStates.filter((state) => !successorOutput.createdStates.some((created) => created.scenarioInstanceId === state.scenarioInstanceId)).length,
+      instancesCreated: successorOutput.createdStates.length,
+      changesAppended,
+      objectsCreated: objectDelta.created,
+      objectsUpdated: objectDelta.updated,
+      objectsDeleted: objectDelta.deleted,
+      objectsChanged: objectDelta.changed,
+      worldRevision,
+      alreadyCurrent: simulationDeltaMs === 0 && changesAppended === 0 && successorOutput.createdStates.length === 0 && wallTimeBacklogRemainingMs === 0,
+    });
+    replacement.clockState = { ...nextClock, lastReconciliationReport: report };
+    return { replacement, report, worldRevision, clock: replacement.clockState, orchestration: successorOutput.orchestration, organization };
+  }
+
+  private applyOrchestrationUpdate(
+    state: ContinuousOrchestrationState,
+    input: ClockUpdateInput,
+    enabled: boolean,
+  ): ContinuousOrchestrationState {
+    const profile = input.activityProfile ?? state.activityProfile;
+    const profileDefaults = input.activityProfile && input.maxSuccessorInstancesPerReconciliation === undefined && input.minSuccessorIntervalHours === undefined
+      ? ACTIVITY_PROFILE_DEFAULTS[profile]
+      : undefined;
+    return validateOrchestrationState({
+      ...state,
+      enabled,
+      activityProfile: profile,
+      maxSuccessorInstancesPerReconciliation:
+        input.maxSuccessorInstancesPerReconciliation ??
+        profileDefaults?.maxSuccessorInstancesPerReconciliation ??
+        state.maxSuccessorInstancesPerReconciliation,
+      minSuccessorIntervalHours:
+        input.minSuccessorIntervalHours ?? profileDefaults?.minSuccessorIntervalHours ?? state.minSuccessorIntervalHours,
+    });
+  }
+
   private createDueSuccessors(
     states: ScenarioInstanceState[],
+    organization: GeneratedOrganization,
     orchestration: ContinuousOrchestrationState,
     reconciledSimulationTime: string,
   ): { states: ScenarioInstanceState[]; createdStates: ScenarioInstanceState[]; orchestration: ContinuousOrchestrationState } {
     if (!orchestration.enabled) return { states, createdStates: [], orchestration };
     const existingIds = new Set(states.map((state) => state.scenarioInstanceId));
+    const successorDueTimesByCompletedInstanceId = { ...orchestration.successorDueTimesByCompletedInstanceId };
     const eligible = states
       .filter((state) => state.completionState === "completed" && !orchestration.successorByCompletedInstanceId[state.scenarioInstanceId])
-      .sort((left, right) => left.scenarioInstanceId.localeCompare(right.scenarioInstanceId));
+      .map((state) => {
+        const dueTime = successorDueTimesByCompletedInstanceId[state.scenarioInstanceId] ?? addHours(state.currentTime, orchestration.minSuccessorIntervalHours);
+        successorDueTimesByCompletedInstanceId[state.scenarioInstanceId] = dueTime;
+        return { state, dueTime };
+      })
+      .sort((left, right) => Date.parse(left.dueTime) - Date.parse(right.dueTime) || left.state.scenarioInstanceId.localeCompare(right.state.scenarioInstanceId));
     const createdStates: ScenarioInstanceState[] = [];
     const successorByCompletedInstanceId = { ...orchestration.successorByCompletedInstanceId };
     const generationCounters = { ...orchestration.generationCounters };
-    for (const completedState of eligible) {
+    for (const { state: completedState, dueTime } of eligible) {
+      if (Date.parse(dueTime) > Date.parse(reconciledSimulationTime)) continue;
       if (createdStates.length >= orchestration.maxSuccessorInstancesPerReconciliation) break;
       const scenario = this.requireScenario(completedState.scenarioPackId);
       const nextCounter = (generationCounters[scenario.id] ?? 0) + 1;
-      const startTime = maxIso(reconciledSimulationTime, addHours(completedState.currentTime, orchestration.minSuccessorIntervalHours));
+      const startTime = dueTime;
       const seed = stableId("successor-seed", completedState.seed, completedState.scenarioInstanceId, String(nextCounter));
       const scenarioInstanceId = `${scenario.id}-continuous-${String(nextCounter).padStart(4, "0")}`;
       if (existingIds.has(scenarioInstanceId)) {
         generationCounters[scenario.id] = nextCounter;
         continue;
       }
-      const created = createScenarioInstanceState(this.organization, scenario, {
+      const created = createScenarioInstanceState(organization, scenario, {
         scenarioPackId: scenario.id,
         scenarioInstanceId,
         instanceIndex: nextCounter,
@@ -949,7 +997,21 @@ export class SourceSimulator {
       existingIds.add(created.scenarioInstanceId);
       createdStates.push(created);
     }
-    if (createdStates.length === 0) return { states, createdStates, orchestration };
+    if (createdStates.length === 0) {
+      return {
+        states,
+        createdStates,
+        orchestration: validateOrchestrationState({
+          ...orchestration,
+          successorDueTimesByCompletedInstanceId,
+          generationCounters,
+          successorByCompletedInstanceId,
+          nextScheduledInstanceTime:
+            nextPendingSuccessorTime(successorDueTimesByCompletedInstanceId, successorByCompletedInstanceId) ??
+            addHours(reconciledSimulationTime, orchestration.minSuccessorIntervalHours),
+        }),
+      };
+    }
     const recentSuccessorInstanceIds = [...orchestration.recentSuccessorInstanceIds, ...createdStates.map((state) => state.scenarioInstanceId)].slice(-25);
     return {
       states: [...states, ...createdStates],
@@ -959,9 +1021,10 @@ export class SourceSimulator {
         cycleNumber: orchestration.cycleNumber + createdStates.length,
         generationCounters,
         successorByCompletedInstanceId,
+        successorDueTimesByCompletedInstanceId,
         lastCreatedInstanceId: createdStates[createdStates.length - 1]!.scenarioInstanceId,
         recentSuccessorInstanceIds,
-        nextScheduledInstanceTime: addHours(reconciledSimulationTime, orchestration.minSuccessorIntervalHours),
+        nextScheduledInstanceTime: nextPendingSuccessorTime(successorDueTimesByCompletedInstanceId, successorByCompletedInstanceId) ?? addHours(reconciledSimulationTime, orchestration.minSuccessorIntervalHours),
       },
     };
   }
@@ -1009,11 +1072,12 @@ export class SourceSimulator {
     changedStates: ScenarioInstanceState[],
     worldRevision: string,
     runtimeState: { clockState?: SimulationClockState; orchestrationState?: ContinuousOrchestrationState } = {},
+    organization: GeneratedOrganization = this.organization,
   ): WorldReplacement {
     const existingChanges = snapshot.sourceChanges;
     const existingChangeIds = new Set(existingChanges.map((change) => change.changeId));
     const newChanges = changedStates
-      .flatMap((state) => this.changesForInstanceState(state, worldRevision))
+      .flatMap((state) => this.changesForInstanceState(state, worldRevision, organization))
       .filter((change) => !existingChangeIds.has(change.changeId))
       .sort(compareLedgerDrafts);
     const nextSequence = (existingChanges.at(-1)?.ledgerSequence ?? 0) + 1;
@@ -1027,7 +1091,7 @@ export class SourceSimulator {
       worldRevision,
       sourceChanges,
       sourceObjects,
-      datasetMetadata: this.buildDatasetMetadata(instanceStates, sourceChanges, sourceObjects, worldRevision),
+      datasetMetadata: this.buildDatasetMetadata(instanceStates, sourceChanges, sourceObjects, worldRevision, organization.config),
       ...(runtimeState.clockState ?? snapshot.clockState ? { clockState: runtimeState.clockState ?? snapshot.clockState } : {}),
       ...(runtimeState.orchestrationState ?? snapshot.orchestrationState
         ? { orchestrationState: runtimeState.orchestrationState ?? snapshot.orchestrationState }
@@ -1064,8 +1128,9 @@ export class SourceSimulator {
     worldRevision: string,
     input: { organizationConfig?: OrganizationConfig; clockState?: SimulationClockState; orchestrationState?: ContinuousOrchestrationState } = {},
   ): WorldReplacement {
+    const organization = input.organizationConfig ? buildCompatibleOrganization(input.organizationConfig) : this.organization;
     const changes = assignLedgerSequences(
-      instanceStates.flatMap((state) => this.changesForInstanceState(state, worldRevision)),
+      instanceStates.flatMap((state) => this.changesForInstanceState(state, worldRevision, organization)),
       1,
     );
     const sourceObjects = this.projectCurrentSourceObjects(changes);
@@ -1075,7 +1140,7 @@ export class SourceSimulator {
       worldRevision,
       sourceChanges: changes,
       sourceObjects,
-      datasetMetadata: this.buildDatasetMetadata(instanceStates, changes, sourceObjects, worldRevision),
+      datasetMetadata: this.buildDatasetMetadata(instanceStates, changes, sourceObjects, worldRevision, organization.config),
       ...(input.clockState ? { clockState: input.clockState } : {}),
       ...(input.orchestrationState ? { orchestrationState: input.orchestrationState } : {}),
     };
@@ -1094,21 +1159,28 @@ export class SourceSimulator {
     if (worldRevision) this.knownWorldRevision = worldRevision;
   }
 
+  private observeOrganization(config: OrganizationConfig | undefined): void {
+    if (!config) return;
+    this.organizationConfig = cloneOrganizationConfig(config);
+    this.organization = buildCompatibleOrganization(this.organizationConfig);
+    this.connections = createConnections(this.organization);
+  }
+
   private currentWorldMutationOptions(): { expectedWorldRevision?: string } {
     return this.knownWorldRevision ? { expectedWorldRevision: this.knownWorldRevision } : {};
   }
 
-  private changesForInstanceState(state: ScenarioInstanceState, worldRevision: string): SourceChangeLedgerEntry[] {
+  private changesForInstanceState(state: ScenarioInstanceState, worldRevision: string, organization: GeneratedOrganization = this.organization): SourceChangeLedgerEntry[] {
     const scenario = this.requireScenario(state.scenarioPackId);
     return scenario.events.flatMap((event) => {
       if (!hasEventOccurred(state, event)) return [];
       return event.records.flatMap((template) => {
-        const records = [materializeRecord(this.baseUrl, state, scenario, event, template, this.organization, state, "created")];
+        const records = [materializeRecord(this.baseUrl, state, scenario, event, template, organization, state, "created")];
         if (template.updatedAfterHours !== undefined) {
-          records.push(materializeRecord(this.baseUrl, state, scenario, event, template, this.organization, state, "updated"));
+          records.push(materializeRecord(this.baseUrl, state, scenario, event, template, organization, state, "updated"));
         }
         if (template.deletedAfterHours !== undefined) {
-          records.push(materializeRecord(this.baseUrl, state, scenario, event, template, this.organization, state, "deleted"));
+          records.push(materializeRecord(this.baseUrl, state, scenario, event, template, organization, state, "deleted"));
         }
         return records
           .filter((record) => Date.parse(record.changeOccurredAt) <= Date.parse(state.currentTime))
@@ -1122,13 +1194,14 @@ export class SourceSimulator {
     changes: SourceChangeLedgerEntry[],
     objects: SourceObjectProjection[],
     worldRevision: string,
+    organizationConfig: OrganizationConfig = this.organizationConfig,
   ): DatasetMetadata {
     const firstState = instanceStates[0];
     const countsBySourceSystem = Object.fromEntries(sourceSystems.map((source) => [source, 0])) as DatasetMetadata["countsBySourceSystem"];
     for (const change of changes) countsBySourceSystem[change.sourceSystem] += 1;
     return {
       schemaVersion: "dataset-metadata.v1",
-      datasetId: stableId("dataset", this.stateFingerprintFor(instanceStates, this.organizationConfig), String(changes.length)),
+      datasetId: stableId("dataset", this.stateFingerprintFor(instanceStates, organizationConfig), String(changes.length)),
       seed: firstState?.seed ?? this.defaultSeed,
       datasetSize: firstState?.datasetSize ?? this.defaultDatasetSize,
       generatedAt: maxCurrentTime(instanceStates),
@@ -1306,7 +1379,7 @@ function finalizeInstanceState(
       eventOccurrenceTimes[event.id] = scheduledAt;
     }
   }
-  const allEventsOccurred = scenario.events.every((event) => eventIds.has(event.id));
+  const lifecycleComplete = isScenarioLifecycleComplete(scenario, state.currentTime, state.startedAt);
   const eventLog = scenario.events
     .filter((event) => eventIds.has(event.id))
     .map((event) => logEntry(scenario.id, state.scenarioInstanceId, event, eventOccurrenceTimes[event.id] ?? addHours(state.startedAt, event.atHour)));
@@ -1315,7 +1388,7 @@ function finalizeInstanceState(
     triggeredEventIds: [...eventIds],
     eventOccurrenceTimes,
     eventLog: eventLog.sort((left, right) => Date.parse(left.occurredAt) - Date.parse(right.occurredAt) || left.eventId.localeCompare(right.eventId)),
-    completionState: allEventsOccurred ? "completed" : "active",
+    completionState: lifecycleComplete ? "completed" : "active",
   };
 }
 
@@ -1329,6 +1402,7 @@ function advanceInstanceForRealtime(
   const eventOccurrenceTimes = { ...(state.eventOccurrenceTimes ?? {}) };
   const currentMs = Date.parse(currentTime);
   for (const event of scenario.events) {
+    if (event.manual) continue;
     const scheduledAt = addHours(state.startedAt, event.atHour);
     if (Date.parse(scheduledAt) <= currentMs) {
       triggeredEventIds.add(event.id);
@@ -1506,6 +1580,31 @@ function sourceKey(sourceSystem: string, sourceId: string): string {
   return `${sourceSystem}:${sourceId}`;
 }
 
+function countSourceObjectProjectionChanges(before: SourceObjectProjection[], after: SourceObjectProjection[]): { created: number; updated: number; deleted: number; changed: number } {
+  const beforeByKey = new Map(before.map((object) => [object.sourceKey, object]));
+  let created = 0;
+  let updated = 0;
+  let deleted = 0;
+  for (const object of after) {
+    const previous = beforeByKey.get(object.sourceKey);
+    if (previous?.currentChangeId === object.currentChangeId && previous.currentChangeType === object.currentChangeType) continue;
+    if (object.currentChangeType === "created") created += 1;
+    else if (object.currentChangeType === "updated") updated += 1;
+    else if (object.currentChangeType === "deleted") deleted += 1;
+  }
+  return { created, updated, deleted, changed: created + updated + deleted };
+}
+
+function nextPendingSuccessorTime(
+  dueTimesByCompletedInstanceId: Record<string, string>,
+  successorByCompletedInstanceId: Record<string, string>,
+): string | undefined {
+  return Object.entries(dueTimesByCompletedInstanceId)
+    .filter(([completedInstanceId]) => !successorByCompletedInstanceId[completedInstanceId])
+    .map(([, dueTime]) => dueTime)
+    .sort()[0];
+}
+
 function compareLedgerDrafts(left: SourceChangeLedgerEntry, right: SourceChangeLedgerEntry): number {
   return (
     Date.parse(left.changeOccurredAt) - Date.parse(right.changeOccurredAt) ||
@@ -1540,9 +1639,15 @@ const SimulationReconciliationReportSchema = z
     previousSimulationTime: z.string().datetime(),
     reconciledSimulationTime: z.string().datetime(),
     simulationDeltaMs: z.number().int().min(0),
+    wallTimeConsumedMs: z.number().int().min(0).default(0),
+    wallTimeBacklogRemainingMs: z.number().int().min(0).default(0),
+    catchUpLimited: z.boolean().default(false),
     instancesAdvanced: z.number().int().min(0),
     instancesCreated: z.number().int().min(0),
     changesAppended: z.number().int().min(0),
+    objectsCreated: z.number().int().min(0).default(0),
+    objectsUpdated: z.number().int().min(0).default(0),
+    objectsDeleted: z.number().int().min(0).default(0),
     objectsChanged: z.number().int().min(0),
     worldRevision: z.string().min(1),
     alreadyCurrent: z.boolean(),
@@ -1575,6 +1680,7 @@ const ContinuousOrchestrationStateSchema = z
     cycleNumber: z.number().int().min(0),
     generationCounters: z.record(z.string(), z.number().int().min(0)),
     successorByCompletedInstanceId: z.record(z.string(), z.string()),
+    successorDueTimesByCompletedInstanceId: z.record(z.string(), z.string().datetime()).default({}),
     nextScheduledInstanceTime: z.string().datetime(),
     lastCreatedInstanceId: z.string().optional(),
     recentSuccessorInstanceIds: z.array(z.string()).max(100),
@@ -1615,6 +1721,7 @@ function buildDefaultOrchestrationState(
     cycleNumber: 0,
     generationCounters: {},
     successorByCompletedInstanceId: {},
+    successorDueTimesByCompletedInstanceId: {},
     nextScheduledInstanceTime: new Date(now).toISOString(),
     recentSuccessorInstanceIds: [],
     maxSuccessorInstancesPerReconciliation: input.maxSuccessorInstancesPerReconciliation ?? DEFAULT_MAX_SUCCESSORS_PER_RECONCILIATION,
@@ -1643,6 +1750,21 @@ function validateClockUpdate(input: ClockUpdateInput): void {
   }
   if (input.maxCatchUpSeconds !== undefined && (!Number.isInteger(input.maxCatchUpSeconds) || input.maxCatchUpSeconds < 1 || input.maxCatchUpSeconds > 60 * 60 * 24 * 7)) {
     throw badRequest("Clock catch-up window is out of bounds", "clock_validation_error");
+  }
+  if (input.activityProfile !== undefined && !(input.activityProfile in ACTIVITY_PROFILE_DEFAULTS)) {
+    throw badRequest("Clock activity profile is out of bounds", "clock_validation_error");
+  }
+  if (
+    input.maxSuccessorInstancesPerReconciliation !== undefined &&
+    (!Number.isInteger(input.maxSuccessorInstancesPerReconciliation) || input.maxSuccessorInstancesPerReconciliation < 0 || input.maxSuccessorInstancesPerReconciliation > 100)
+  ) {
+    throw badRequest("Clock successor creation bound is out of bounds", "clock_validation_error");
+  }
+  if (
+    input.minSuccessorIntervalHours !== undefined &&
+    (!Number.isInteger(input.minSuccessorIntervalHours) || input.minSuccessorIntervalHours < 0 || input.minSuccessorIntervalHours > 24 * 30)
+  ) {
+    throw badRequest("Clock successor interval is out of bounds", "clock_validation_error");
   }
 }
 
@@ -1722,6 +1844,25 @@ function hasEventOccurred(state: ScenarioInstanceState, event: ScenarioEventTemp
 
 function eventOccurredAt(state: ScenarioInstanceState, event: ScenarioEventTemplate): string {
   return state.eventOccurrenceTimes?.[event.id] ?? state.eventLog.find((entry) => entry.eventId === event.id)?.occurredAt ?? addHours(state.startedAt, event.atHour);
+}
+
+function isScenarioLifecycleComplete(scenario: ScenarioDefinition, currentTime: string, startedAt: string): boolean {
+  return Date.parse(currentTime) >= Date.parse(scenarioLifecycleCompleteAt(scenario, startedAt));
+}
+
+function scenarioLifecycleCompleteAt(scenario: ScenarioDefinition, startedAt: string): string {
+  const nonmanualEvents = scenario.events.filter((event) => !event.manual);
+  if (nonmanualEvents.length === 0) return startedAt;
+  const horizonHours = Math.max(
+    ...nonmanualEvents.map((event) => {
+      const recordHorizon = Math.max(
+        0,
+        ...event.records.map((record) => Math.max(record.visibleAfterHours ?? 0, record.updatedAfterHours ?? 0, record.deletedAfterHours ?? 0)),
+      );
+      return event.atHour + recordHorizon;
+    }),
+  );
+  return addHours(startedAt, horizonHours);
 }
 
 function resolveParticipants(organization: GeneratedOrganization, scenario: ScenarioDefinition, seed: string): Record<string, string> {

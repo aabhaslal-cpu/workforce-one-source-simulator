@@ -45,6 +45,10 @@ Normal time advancement, manual triggers, feed-triggered realtime reconciliation
 
 Manual triggers use the selected scenario instance's current simulation time as the business event occurrence time. Initial source changes become eligible immediately. `updatedAfterHours` and `deletedAfterHours` are calculated from the actual trigger time, not from the template's original `atHour`.
 
+Realtime reconciliation never inserts a manual event ID and never assigns an occurrence time to an untriggered manual event. Continuous orchestration relies on scheduled nonmanual lifecycle horizons plus persisted successor due times.
+
+Bounded catch-up advances the persisted wall checkpoint only by the wall time consumed in that reconciliation. Unprocessed wall backlog remains available to later reconciliation, and appended ledger sequences remain monotonic across the drain.
+
 ## World Revision
 
 World revision changes on destructive scenario instance reset/delete, organization regeneration, dataset generation, and snapshot restore. Old cursors fail with a stale-checkpoint 400 after the revision changes.

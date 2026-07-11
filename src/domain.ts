@@ -260,9 +260,15 @@ export interface SimulationReconciliationReport {
   previousSimulationTime: string;
   reconciledSimulationTime: string;
   simulationDeltaMs: number;
+  wallTimeConsumedMs: number;
+  wallTimeBacklogRemainingMs: number;
+  catchUpLimited: boolean;
   instancesAdvanced: number;
   instancesCreated: number;
   changesAppended: number;
+  objectsCreated: number;
+  objectsUpdated: number;
+  objectsDeleted: number;
   objectsChanged: number;
   worldRevision: string;
   alreadyCurrent: boolean;
@@ -291,6 +297,7 @@ export interface ContinuousOrchestrationState {
   cycleNumber: number;
   generationCounters: Record<string, number>;
   successorByCompletedInstanceId: Record<string, string>;
+  successorDueTimesByCompletedInstanceId: Record<string, string>;
   nextScheduledInstanceTime: string;
   lastCreatedInstanceId?: string;
   recentSuccessorInstanceIds: string[];

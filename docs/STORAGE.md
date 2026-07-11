@@ -27,7 +27,7 @@ All durable adapters store:
 
 Scenario packs are code templates. Scenario instances are persisted runtime state.
 
-Postgres also stores `rate_limit_buckets` for distributed preview/production request protection.
+Postgres also stores `rate_limit_buckets` for distributed preview/production request protection. Bucket updates use one atomic `INSERT ... ON CONFLICT DO UPDATE ... RETURNING` operation so concurrent first requests are counted consistently.
 
 ## Transactions
 
@@ -48,7 +48,7 @@ The SQLite adapter creates the same schema if it does not exist. The Postgres ad
 
 The Postgres adapter uses async `pg.Pool` queries with bounded timeouts. It does not use worker threads, shared memory, synchronous temp files, or destructive runtime resets.
 
-The adapter supports restart persistence, source ledger persistence, source-object projection persistence, snapshots, simulation clock persistence, continuous orchestration state, distributed rate-limit buckets, health checks, and atomic world replacement.
+The adapter supports restart persistence, source ledger persistence, source-object projection persistence, snapshots, simulation clock persistence, continuous orchestration state, distributed rate-limit buckets, health checks, and atomic world replacement. Reconciliation reads the organization config from the locked world snapshot before materializing records.
 
 Production runtime code does not expose `resetForTesting`. Tests and benchmarks isolate Postgres state with `sim_test_*` or `sim_benchmark_*` schemas and cleanup refuses to drop any other schema.
 

@@ -17,14 +17,14 @@ Milestone 3: Production Hardening and Workforce One Integration Readiness.
 - Postgres support for scenario states, scenario instance states, organization config, world revision, source-change ledger, source-object projection, dataset metadata, snapshots, simulation clock, continuous orchestration state, restart persistence, and transaction-backed world replacement.
 - SQLite/Postgres parity tests and CI Postgres service.
 - Persisted company clock with manual/realtime modes, bounded catch-up, speed multiplier, pause/resume, restart persistence, feed-triggered reconciliation, admin reconciliation, and Vercel cron tick.
-- Deterministic continuous activity orchestrator that creates bounded successor instances from the existing 10 scenario packs while preserving one shared company world.
+- Deterministic continuous activity orchestrator that creates bounded successor instances from the existing 10 scenario packs while preserving one shared company world and preserving manual-event semantics.
 - Structured request telemetry with sanitized logs, request IDs, connection IDs, cursor position, world revision, operation, duration, status, and safe error classification.
 - `/healthz` liveness and `/readyz` readiness with storage health, world revision, dataset metadata, organization summary, uptime, build version, and schema version.
 - Admin metrics, request inspector, storage inspector, performance benchmark, failure-mode configuration, and connector test-kit endpoints.
 - Real request rate limiting keyed by authenticated admin identity, cron identity, or resolved connection ID. Preview/production use Postgres-backed distributed buckets.
 - Deterministic failure simulation for connector testing. Failures are configured rules, never random.
 - Connector lifecycle test kit covering initial sync, incremental sync, late arrivals, updates/deletes, destructive reset, stale cursor handling, new cursor acquisition, permission differences, and connection regeneration behavior.
-- Vercel configuration with fetch-handler rewrites, cron path, bounded max duration, frozen install, config validation, optional token-backed Vercel CLI build, and CI route smoke tests.
+- Vercel configuration with Web Standard fetch export, rewrites, cron path, bounded max duration, frozen install, config validation, optional token-backed Vercel CLI build, and CI route smoke tests.
 - Container build and CI readiness smoke test against Postgres.
 - Internal operator console controls for clock, metrics, storage, ledger, snapshots, failure toggles, benchmarks, and connector kit.
 - Updated OpenAPI, migrations, examples, and docs for production deployment and integration.
@@ -43,10 +43,12 @@ The benchmark harness creates one extra manual-trigger instance during each run,
 
 - `pnpm install --frozen-lockfile`: passed.
 - `pnpm run verify`: passed.
+- `pnpm run vercel:validate`: passed.
 - `git diff --check`: passed.
-- Vitest count: 65 tests total with 62 local passes and 3 Postgres tests skipped without `SIMULATOR_POSTGRES_TEST_URL`.
+- Vitest count: 72 tests total with 67 local passes and 5 Postgres tests skipped without `SIMULATOR_POSTGRES_TEST_URL`.
+- Real local `pnpm run vercel:build`: attempted and failed because Vercel CLI reported an invalid cached/account token; no `.vercel/output` was produced locally.
 
-GitHub Actions provides Postgres and should run all 65 tests, Vercel config validation, route smoke tests, Docker build, and container readiness smoke. A real Vercel CLI build runs only when `VERCEL_TOKEN` is configured.
+GitHub Actions provides Postgres and should run all 72 tests, Vercel config validation, route smoke tests, Docker build, and container readiness smoke. A real Vercel CLI build runs only when `VERCEL_TOKEN` is configured.
 
 ## Known Limitations
 

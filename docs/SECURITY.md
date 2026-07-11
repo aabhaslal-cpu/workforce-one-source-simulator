@@ -23,6 +23,7 @@ The simulator contains fictional data, but it preserves production-like boundari
 - Cross-department access requires explicit source ACL/group membership.
 - Scenario instance participants and runtime context are admin inspection data, not public catalog data.
 - Warm serverless instances refresh persisted organization config before connection-sensitive authorization and admin detailed catalog reads.
+- Canonical cron/feed/admin reconciliation reads `organization_config` from the locked world snapshot and uses that generated organization for participants, ACLs, source records, teams, and connections before updating any in-process cache.
 
 ## Production-Like Fail Closed
 
@@ -59,7 +60,7 @@ Production-like startup requires Postgres through `DATABASE_URL`. If Postgres is
 - Admin routes are keyed by admin identity.
 - Manifest, feed, and source deep-link routes are keyed by the resolved connection ID.
 - Cron is keyed by cron identity.
-- Preview/production use Postgres-backed distributed buckets; raw credentials are not stored as limiter keys.
+- Preview/production use Postgres-backed distributed buckets updated by one atomic upsert; raw credentials are not stored as limiter keys.
 - Rate-limit responses return `429`, `Retry-After`, `rate_limit`, and a correlation ID.
 
 The deterministic simulated `rate_limit` failure mode remains separate from platform protection and is reported as simulated failure behavior, not as an actual limiter decision.
