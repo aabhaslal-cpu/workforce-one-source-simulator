@@ -7,8 +7,10 @@ import { describe, expect, it } from "vitest";
 import { SourceFeedBatchV1Schema } from "../contracts.js";
 import { SourceSimulator } from "../engine.js";
 import { createApp } from "../app.js";
+import { sourceAdapters } from "../adapters/registry.js";
 import { defaultOrganizationConfig, personConnectionId } from "../organization.js";
 import { MemorySimulatorStorage, SQLiteSimulatorStorage } from "../storage.js";
+import { sourceSystems } from "../domain.js";
 
 type TestSQLiteStatement = {
   all(...parameters: unknown[]): unknown[];
@@ -25,8 +27,15 @@ const require = createRequire(import.meta.url);
 function advancedSimulator(seed = "test-seed") {
   const simulator = new SourceSimulator({ seed, baseUrl: "http://sim.test" });
   simulator.advanceScenario("product-launch-readiness", { hours: 48 });
+  simulator.triggerScenarioEvent("product-launch-readiness", "exec-pressure");
   simulator.advanceScenario("reliability-incident", { hours: 48 });
   simulator.advanceScenario("renewal-risk", { hours: 48 });
+  return simulator;
+}
+
+function completedDatasetSimulator(seed = "dataset-seed", datasetSize: "small" | "medium" | "large" = "small") {
+  const simulator = new SourceSimulator({ seed, datasetSize, baseUrl: "http://sim.test" });
+  simulator.generateDataset({ seed, datasetSize });
   return simulator;
 }
 
@@ -61,6 +70,10 @@ function developmentConnectionHeaders(connectionId: string) {
   return connectionHeaders(`dev-connection-secret:${connectionId}`);
 }
 
+function decodeCursor(cursor: string) {
+  return JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Record<string, unknown>;
+}
+
 function cloneDefaultOrganizationConfig() {
   return JSON.parse(JSON.stringify(defaultOrganizationConfig));
 }
@@ -88,16 +101,37 @@ function openTestSQLiteDatabase(filename: string): TestSQLiteDatabase {
 }
 
 function durableTableSql(database: TestSQLiteDatabase): Record<string, string> {
-  const rows = database.prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'table' AND name IN (?, ?, ?) ORDER BY name").all(
+  const rows = database.prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'table' AND name IN (?, ?, ?, ?, ?, ?, ?, ?) ORDER BY name").all(
     "scenario_states",
+    "scenario_instance_states",
     "organization_config",
     "snapshots",
+    "world_state",
+    "source_change_ledger",
+    "source_objects",
+    "dataset_metadata",
   ) as Array<{ name: string; sql: string }>;
   return Object.fromEntries(rows.map((row) => [row.name, normalizeSql(row.sql)]));
 }
 
 function normalizeSql(sql: string): string {
   return sql.replace(/\s+/g, " ").trim();
+}
+
+function addHoursIso(start: string, hours: number): string {
+  const date = new Date(start);
+  date.setUTCHours(date.getUTCHours() + hours);
+  return date.toISOString();
+}
+
+function storageWorldSnapshot(simulator: SourceSimulator) {
+  return {
+    worldRevision: simulator.datasetMetadata().worldRevision,
+    metadata: simulator.datasetMetadata(),
+    instanceStates: simulator.states(),
+    sourceChanges: simulator.sourceChanges(),
+    sourceObjects: simulator.sourceObjects(),
+  };
 }
 
 describe("organization generation", () => {
@@ -174,6 +208,29 @@ describe("SourceSimulator", () => {
     expect(new Set([...first.records, ...second.records].map((record) => record.changeId)).size).toBe(4);
   });
 
+  it("uses a compact v3 checkpoint cursor even for large ledgers", () => {
+    const simulator = completedDatasetSimulator("large-cursor-seed", "large");
+    const first = simulator.feed("conn-product-manager", undefined, 100);
+    const cursorPayload = decodeCursor(first.nextCursor);
+
+    expect(simulator.datasetMetadata().totalSourceChanges).toBeGreaterThanOrEqual(5_000);
+    expect(first.nextCursor.length).toBeLessThan(256);
+    expect(cursorPayload).toMatchObject({
+      v: 3,
+      connectionId: "conn-product-manager",
+      worldRevision: simulator.datasetMetadata().worldRevision,
+    });
+    expect(cursorPayload.consumedChangeIds).toBeUndefined();
+  });
+
+  it("rejects stale cursors after a world revision change", () => {
+    const simulator = new SourceSimulator({ seed: "stale-cursor-seed" });
+    const first = simulator.feed("conn-product-manager", undefined, 10);
+    simulator.resetScenario("product-launch-readiness", { seed: "new-scenario-seed" });
+
+    expect(() => simulator.feed("conn-product-manager", first.nextCursor, 10)).toThrow("Stale checkpoint");
+  });
+
   it("continues from a saved change checkpoint after new creates and updates", () => {
     const simulator = new SourceSimulator({ seed: "checkpoint-seed", baseUrl: "http://sim.test" });
     const initial = simulator.feed("conn-product-manager", undefined, 100);
@@ -200,6 +257,170 @@ describe("SourceSimulator", () => {
     expect(simulator.feed("conn-product-manager", updatedPage.nextCursor, 100).records).toEqual([]);
   });
 
+  it("keeps same-pack scenario instances independent across advance, trigger, pause, reset, delete, and recreate", () => {
+    const simulator = new SourceSimulator({ seed: "instance-independence-seed", baseUrl: "http://sim.test" });
+    simulator.createScenarioInstance({
+      scenarioPackId: "product-launch-readiness",
+      scenarioInstanceId: "independent-a",
+      seed: "instance-a-seed",
+      account: "Alpha Medical",
+    });
+    simulator.createScenarioInstance({
+      scenarioPackId: "product-launch-readiness",
+      scenarioInstanceId: "independent-b",
+      seed: "instance-b-seed",
+      account: "Beta Foods",
+    });
+    const bInitial = simulator.scenarioInstance("independent-b").state;
+
+    simulator.advanceScenarioInstance("independent-a", { hours: 24 });
+    expect(simulator.scenarioInstance("independent-a").state.currentTime).not.toBe(bInitial.currentTime);
+    expect(simulator.scenarioInstance("independent-b").state.currentTime).toBe(bInitial.currentTime);
+
+    simulator.triggerScenarioInstanceEvent("independent-a", "exec-pressure");
+    expect(simulator.scenarioInstance("independent-a").state.triggeredEventIds).toContain("exec-pressure");
+    expect(simulator.scenarioInstance("independent-b").state.triggeredEventIds).not.toContain("exec-pressure");
+
+    simulator.pauseScenarioInstance("independent-a");
+    const pausedA = simulator.scenarioInstance("independent-a").state;
+    simulator.advanceScenarioInstance("independent-a", { hours: 12 });
+    simulator.advanceScenarioInstance("independent-b", { hours: 8 });
+    expect(simulator.scenarioInstance("independent-a").state.currentTime).toBe(pausedA.currentTime);
+    expect(simulator.scenarioInstance("independent-b").state.currentTime).not.toBe(bInitial.currentTime);
+
+    const bBeforeReset = simulator.scenarioInstance("independent-b").state;
+    simulator.resetScenarioInstance("independent-a", { seed: "instance-a-reset-seed" });
+    expect(simulator.scenarioInstance("independent-a").state.currentTime).not.toBe(pausedA.currentTime);
+    expect(simulator.scenarioInstance("independent-b").state).toEqual(bBeforeReset);
+
+    simulator.deleteScenarioInstance("independent-a");
+    expect(simulator.scenarioInstance("independent-b").state).toEqual(bBeforeReset);
+    expect(() => simulator.scenarioInstance("independent-a")).toThrow("Unknown scenario instance");
+
+    simulator.createScenarioInstance({
+      scenarioPackId: "product-launch-readiness",
+      scenarioInstanceId: "independent-a",
+      seed: "instance-a-recreated-seed",
+      account: "Alpha Medical",
+    });
+    expect(simulator.scenarioInstance("independent-b").state).toEqual(bBeforeReset);
+    expect(simulator.scenarioInstance("independent-a").state.seed).toBe("instance-a-recreated-seed");
+  });
+
+  it("keeps the ledger occurred-only and appends new creates and updates after a saved cursor", () => {
+    const simulator = new SourceSimulator({ seed: "occurred-ledger-seed", baseUrl: "http://sim.test" });
+    const initialWorldRevision = simulator.datasetMetadata().worldRevision;
+    const initialChanges = simulator.sourceChanges();
+    expect(initialChanges.some((change) => change.record.title === "Workflow export API dependency")).toBe(false);
+    expect(initialChanges.every((change, index) => change.ledgerSequence === index + 1)).toBe(true);
+
+    const initialPage = simulator.feed("conn-product-manager", undefined, 100);
+    const initialCheckpoint = initialPage.nextCursor;
+    simulator.advanceScenario("product-launch-readiness", { hours: 24 });
+    expect(simulator.datasetMetadata().worldRevision).toBe(initialWorldRevision);
+
+    const afterCreateChanges = simulator.sourceChanges();
+    expect(afterCreateChanges.slice(0, initialChanges.length).map((change) => change.changeId)).toEqual(
+      initialChanges.map((change) => change.changeId),
+    );
+    expect(afterCreateChanges.every((change, index) => change.ledgerSequence === index + 1)).toBe(true);
+    expect(new Set(afterCreateChanges.map((change) => change.changeId)).size).toBe(afterCreateChanges.length);
+
+    const createdPage = simulator.feed("conn-product-manager", initialCheckpoint, 100);
+    const retryCreatedPage = simulator.feed("conn-product-manager", initialCheckpoint, 100);
+    expect(createdPage.records.map((record) => record.changeId)).toEqual(retryCreatedPage.records.map((record) => record.changeId));
+    expect(createdPage.records.every((record) => Date.parse(record.changeOccurredAt) <= Date.parse(simulator.state("product-launch-readiness").currentTime))).toBe(true);
+    const createdDependency = createdPage.records.find((record) => record.title === "Workflow export API dependency");
+    expect(createdDependency?.changeType).toBe("created");
+
+    simulator.advanceScenario("product-launch-readiness", { hours: 6 });
+    expect(simulator.datasetMetadata().worldRevision).toBe(initialWorldRevision);
+    const updatedPage = simulator.feed("conn-product-manager", createdPage.nextCursor, 100);
+    const updatedDependency = updatedPage.records.find((record) => record.sourceId === createdDependency?.sourceId);
+    expect(updatedDependency?.changeType).toBe("updated");
+    expect(updatedDependency?.sourceId).toBe(createdDependency?.sourceId);
+  });
+
+  it("uses current instance time for early manual triggers and delays updates from that occurrence time", () => {
+    const simulator = new SourceSimulator({ seed: "manual-trigger-seed", baseUrl: "http://sim.test" });
+    simulator.createScenarioInstance({
+      scenarioPackId: "product-launch-readiness",
+      scenarioInstanceId: "manual-trigger-a",
+      seed: "manual-trigger-a-seed",
+    });
+    simulator.createScenarioInstance({
+      scenarioPackId: "product-launch-readiness",
+      scenarioInstanceId: "manual-trigger-b",
+      seed: "manual-trigger-b-seed",
+    });
+    const beforeTrigger = simulator.scenarioInstance("manual-trigger-a").state;
+    const triggerTime = beforeTrigger.currentTime;
+    expect(triggerTime).not.toBe(addHoursIso(beforeTrigger.startedAt, 36));
+
+    const savedCursor = simulator.feed("conn-product-vp", undefined, 100).nextCursor;
+    simulator.triggerScenarioInstanceEvent("manual-trigger-a", "exec-pressure");
+    const triggered = simulator.scenarioInstance("manual-trigger-a").state;
+    const triggeredEvent = triggered.eventLog.find((entry) => entry.eventId === "exec-pressure");
+    expect(triggered.eventOccurrenceTimes["exec-pressure"]).toBe(triggerTime);
+    expect(triggeredEvent?.occurredAt).toBe(triggerTime);
+
+    const triggeredPage = simulator.feed("conn-product-vp", savedCursor, 100);
+    expect(triggeredPage.records.some((record) => record.title === "Launch date question for staff" && record.changeType === "created")).toBe(true);
+    expect(triggeredPage.records.some((record) => record.title === "Launch decision update" && record.changeType === "created")).toBe(true);
+    expect(triggeredPage.records.some((record) => record.title === "Launch decision update" && record.changeType === "updated")).toBe(false);
+    expect(
+      simulator.sourceChanges().some((change) => change.scenarioInstanceId === "manual-trigger-a" && change.record.title === "Launch decision update" && change.changeType === "updated"),
+    ).toBe(false);
+
+    simulator.advanceScenarioInstance("manual-trigger-a", { hours: 7 });
+    expect(
+      simulator.sourceChanges().some((change) => change.scenarioInstanceId === "manual-trigger-a" && change.record.title === "Launch decision update" && change.changeType === "updated"),
+    ).toBe(false);
+
+    simulator.advanceScenarioInstance("manual-trigger-a", { hours: 1 });
+    const updatedChange = simulator.sourceChanges().find((change) => change.scenarioInstanceId === "manual-trigger-a" && change.record.title === "Launch decision update" && change.changeType === "updated");
+    expect(updatedChange?.changeOccurredAt).toBe(addHoursIso(triggerTime, 8));
+    expect(updatedChange?.record.updatedAt).toBe(addHoursIso(triggerTime, 8));
+
+    const changeCountBeforeRetry = simulator.sourceChanges().length;
+    simulator.triggerScenarioInstanceEvent("manual-trigger-a", "exec-pressure");
+    const afterRetry = simulator.scenarioInstance("manual-trigger-a").state;
+    expect(afterRetry.eventOccurrenceTimes["exec-pressure"]).toBe(triggerTime);
+    expect(afterRetry.eventLog.filter((entry) => entry.eventId === "exec-pressure")).toHaveLength(1);
+    expect(simulator.sourceChanges()).toHaveLength(changeCountBeforeRetry);
+
+    const peer = simulator.scenarioInstance("manual-trigger-b").state;
+    expect(peer.triggeredEventIds).not.toContain("exec-pressure");
+    expect(peer.eventOccurrenceTimes["exec-pressure"]).toBeUndefined();
+    expect(peer.eventLog.some((entry) => entry.eventId === "exec-pressure")).toBe(false);
+
+    simulator.advanceScenarioInstance("manual-trigger-b", { hours: 30 });
+    const peerAfterAdvance = simulator.scenarioInstance("manual-trigger-b").state;
+    expect(peerAfterAdvance.eventLog.find((entry) => entry.eventId === "dependency-risk")?.occurredAt).toBe(addHoursIso(peer.startedAt, 24));
+    expect(peerAfterAdvance.currentTime).toBe(addHoursIso(peer.startedAt, 30));
+  });
+
+  it("calculates manual-trigger deletions from actual trigger time", () => {
+    const simulator = new SourceSimulator({ seed: "manual-delete-seed", baseUrl: "http://sim.test" });
+    const beforeTrigger = simulator.state("technical-debt-staffing-risk");
+    const triggerTime = beforeTrigger.currentTime;
+    expect(triggerTime).not.toBe(addHoursIso(beforeTrigger.startedAt, 80));
+
+    simulator.triggerScenarioEvent("technical-debt-staffing-risk", "vp-investment");
+    const created = simulator.sourceChanges().find((change) => change.record.title === "Deferred retry remediation item" && change.changeType === "created");
+    expect(created?.changeOccurredAt).toBe(triggerTime);
+    expect(simulator.sourceChanges().some((change) => change.record.title === "Deferred retry remediation item" && change.changeType === "deleted")).toBe(false);
+
+    simulator.advanceScenario("technical-debt-staffing-risk", { hours: 35 });
+    expect(simulator.sourceChanges().some((change) => change.record.title === "Deferred retry remediation item" && change.changeType === "deleted")).toBe(false);
+
+    simulator.advanceScenario("technical-debt-staffing-risk", { hours: 1 });
+    const deleted = simulator.sourceChanges().find((change) => change.record.title === "Deferred retry remediation item" && change.changeType === "deleted");
+    expect(deleted?.sourceId).toBe(created?.sourceId);
+    expect(deleted?.changeOccurredAt).toBe(addHoursIso(triggerTime, 36));
+    expect(deleted?.record.updatedAt).toBe(addHoursIso(triggerTime, 36));
+  });
+
   it("filters executive-only records away from IC, Manager, and Director connections", () => {
     const simulator = advancedSimulator();
     const productIc = simulator.feed("conn-product-ic", undefined, 100);
@@ -224,11 +445,11 @@ describe("SourceSimulator", () => {
 
   it("restores snapshots exactly, including organization config", () => {
     const simulator = advancedSimulator();
-    const before = simulator.allRecords().map((record) => record.sourceId);
+    const before = simulator.allRecords().map((record) => record.sourceId).sort();
     const snapshot = simulator.createSnapshot();
     simulator.regenerateOrganization({ seed: "changed-org" });
     simulator.restoreSnapshot(snapshot.snapshotId);
-    const after = simulator.allRecords().map((record) => record.sourceId);
+    const after = simulator.allRecords().map((record) => record.sourceId).sort();
 
     expect(after).toEqual(before);
   });
@@ -244,6 +465,45 @@ describe("SourceSimulator", () => {
     const after = simulator.feed("conn-engineering-manager", undefined, 100).records.map((record) => record.sourceId);
 
     expect(after).toEqual(before);
+  });
+
+  it("restores multiple scenario instances independently and rebuilds a deterministic ledger under a new revision", () => {
+    const simulator = new SourceSimulator({ seed: "snapshot-instance-seed", baseUrl: "http://sim.test" });
+    simulator.createScenarioInstance({
+      scenarioPackId: "product-launch-readiness",
+      scenarioInstanceId: "snapshot-a",
+      seed: "snapshot-a-seed",
+      account: "Snapshot Alpha",
+    });
+    simulator.createScenarioInstance({
+      scenarioPackId: "product-launch-readiness",
+      scenarioInstanceId: "snapshot-b",
+      seed: "snapshot-b-seed",
+      account: "Snapshot Beta",
+    });
+    simulator.advanceScenarioInstance("snapshot-a", { hours: 24 });
+    simulator.advanceScenarioInstance("snapshot-b", { hours: 8 });
+    const snapshot = simulator.createSnapshot();
+    const aAtSnapshot = simulator.scenarioInstance("snapshot-a").state;
+    const bAtSnapshot = simulator.scenarioInstance("snapshot-b").state;
+    const cursorBeforeRestore = simulator.feed("conn-product-manager", undefined, 100).nextCursor;
+    const revisionBeforeRestore = simulator.datasetMetadata().worldRevision;
+
+    simulator.advanceScenarioInstance("snapshot-a", { hours: 30 });
+    simulator.triggerScenarioInstanceEvent("snapshot-b", "exec-pressure");
+    simulator.restoreSnapshot(snapshot.snapshotId);
+    const firstRestoreRevision = simulator.datasetMetadata().worldRevision;
+    const firstRestoreLedger = simulator.sourceChanges().map((change) => ({ ...change, worldRevision: "<ignored>" }));
+
+    expect(firstRestoreRevision).not.toBe(revisionBeforeRestore);
+    expect(() => simulator.feed("conn-product-manager", cursorBeforeRestore, 100)).toThrow("Stale checkpoint");
+    expect(simulator.scenarioInstance("snapshot-a").state).toEqual(aAtSnapshot);
+    expect(simulator.scenarioInstance("snapshot-b").state).toEqual(bAtSnapshot);
+
+    simulator.advanceScenarioInstance("snapshot-a", { hours: 1 });
+    simulator.restoreSnapshot(snapshot.snapshotId);
+    const secondRestoreLedger = simulator.sourceChanges().map((change) => ({ ...change, worldRevision: "<ignored>" }));
+    expect(secondRestoreLedger).toEqual(firstRestoreLedger);
   });
 
   it("does not expose source updates before the simulation clock reaches the update time", () => {
@@ -281,6 +541,88 @@ describe("SourceSimulator", () => {
     expect(afterUpdate?.sourceId).toBe(initial?.sourceId);
     expect(afterUpdate?.updatedAt).toBe("2026-07-11T00:00:00.000Z");
     expect(afterUpdate?.changeType).toBe("updated");
+  });
+
+  it("preserves source identity across created, updated, and deleted history entries", () => {
+    const simulator = completedDatasetSimulator("history-seed", "small");
+    const deletedChange = simulator.sourceChanges().find((change) => change.record.title === "Deferred retry remediation item" && change.changeType === "deleted");
+    expect(deletedChange).toBeDefined();
+
+    const history = simulator.sourceObjectHistory(deletedChange!.sourceSystem, deletedChange!.sourceId);
+    expect(history.map((change) => change.sourceId)).toEqual(history.map(() => deletedChange!.sourceId));
+    expect(history.map((change) => change.changeType)).toEqual(["created", "deleted"]);
+  });
+});
+
+describe("Milestone 2 scenario packs and adapters", () => {
+  it("registers all required source adapters and validates emitted provider payloads", () => {
+    const simulator = completedDatasetSimulator("adapter-seed", "small");
+    expect(sourceAdapters.map((adapter) => adapter.sourceSystem).sort()).toEqual([...sourceSystems].sort());
+
+    for (const adapter of sourceAdapters) {
+      const change = simulator.sourceChanges().find((candidate) => candidate.sourceSystem === adapter.sourceSystem);
+      expect(change, adapter.sourceSystem).toBeDefined();
+      expect(adapter.validatePayload(change!.record.rawPayload)).toEqual({ ok: true, errors: [] });
+      expect(change!.record.rawPayload.actor).toMatchObject({ id: expect.any(String), email: expect.stringContaining("@example.test") });
+      expect(adapter.buildSourceUrl({ baseUrl: "http://sim.test", sourceId: "source-123" })).toBe(
+        `http://sim.test/sim/${adapter.sourceSystem}/source-123`,
+      );
+    }
+  });
+
+  it("covers all ten scenario packs, departments, levels, and source systems", () => {
+    const simulator = new SourceSimulator({ seed: "pack-seed" });
+    const packs = simulator.scenarioPacks();
+    const unionSources = new Set(packs.flatMap((pack) => pack.sourceSystems));
+    const unionRoles = new Set(packs.flatMap((pack) => pack.participantRoleTemplateCount));
+
+    expect(packs.map((pack) => pack.scenarioPackId)).toEqual([
+      "product-launch-readiness",
+      "feature-adoption-lag",
+      "roadmap-tradeoff",
+      "reliability-incident",
+      "migration-delivery-slip",
+      "technical-debt-staffing-risk",
+      "renewal-risk",
+      "implementation-blocker",
+      "expansion-opportunity",
+      "major-cross-functional-product-release",
+    ]);
+    expect([...unionSources].sort()).toEqual([...sourceSystems].sort());
+    expect(simulator.organizationSummary().counts.byRoleLevel).toMatchObject({ ic: expect.any(Number), manager: expect.any(Number), director: expect.any(Number), vp: expect.any(Number) });
+    expect([...unionRoles].length).toBeGreaterThan(0);
+  });
+
+  it("generates deterministic dataset sizes inside documented change-count ranges", () => {
+    const small = completedDatasetSimulator("dataset-seed", "small").datasetMetadata();
+    const medium = completedDatasetSimulator("dataset-seed", "medium").datasetMetadata();
+    const mediumReplay = completedDatasetSimulator("dataset-seed", "medium").datasetMetadata();
+    const large = completedDatasetSimulator("dataset-seed", "large").datasetMetadata();
+
+    expect(small.totalSourceChanges).toBeGreaterThanOrEqual(100);
+    expect(small.totalSourceChanges).toBeLessThanOrEqual(250);
+    expect(medium.totalSourceChanges).toBeGreaterThanOrEqual(1_000);
+    expect(medium.totalSourceChanges).toBeLessThanOrEqual(2_500);
+    expect(large.totalSourceChanges).toBeGreaterThanOrEqual(5_000);
+    expect(large.totalSourceChanges).toBeLessThanOrEqual(10_000);
+    expect(medium).toEqual(mediumReplay);
+  });
+
+  it("keeps cross-functional relationships explicit and separate from primary reporting", () => {
+    const simulator = new SourceSimulator({ seed: "relationship-seed" });
+    const relationships = simulator.organizationRelationships().relationships;
+    const dotted = relationships.filter((relationship) => relationship.relationshipType === "dotted_line");
+    const primary = relationships.filter((relationship) => relationship.relationshipType === "primary");
+    const peopleById = new Map(simulator.people().map((person) => [person.id, person]));
+
+    expect(dotted.length).toBeGreaterThanOrEqual(2);
+    for (const relationship of dotted) {
+      expect(peopleById.get(relationship.reportId)?.managerId).not.toBe(relationship.managerId);
+    }
+    for (const person of simulator.people().filter((candidate) => candidate.managerId)) {
+      expect(primary.filter((relationship) => relationship.reportId === person.id)).toHaveLength(1);
+    }
+    expect(simulator.teams().some((team) => team.id === "team-project-aurora" && team.level === "project")).toBe(true);
   });
 });
 
@@ -565,6 +907,129 @@ describe("source deep links", () => {
   });
 });
 
+describe("Milestone 2 admin APIs", () => {
+  it("exposes scenario packs, instances, dataset metadata, and source history through admin routes", async () => {
+    const { app } = credentialedApp(completedDatasetSimulator("api-m2-seed", "medium"));
+
+    const packs = await app.request("/v1/catalog/scenario-packs");
+    expect(packs.status).toBe(200);
+    expect((await packs.json()).scenarioPacks).toHaveLength(10);
+
+    const instances = await app.request("/v1/catalog/scenario-instances", { headers: adminHeaders() });
+    const instanceBody = await instances.json();
+    expect(instanceBody.scenarioInstances).toHaveLength(80);
+
+    const dataset = await app.request("/v1/admin/datasets/current", { headers: adminHeaders() });
+    expect((await dataset.json()).totalSourceChanges).toBeGreaterThanOrEqual(1_000);
+
+    const sourceObjects = await app.request("/v1/admin/source-objects", { headers: adminHeaders() });
+    const object = (await sourceObjects.json()).sourceObjects[0];
+    const history = await app.request(`/v1/admin/source-objects/${object.sourceSystem}/${object.sourceId}/history`, { headers: adminHeaders() });
+    expect((await history.json()).history[0].sourceId).toBe(object.sourceId);
+  });
+
+  it("creates real independent scenario instances through POST and validates duplicate and unknown packs", async () => {
+    const { app, simulator } = credentialedApp(new SourceSimulator({ seed: "api-create-seed", baseUrl: "http://sim.test" }));
+    const created = await app.request("/v1/admin/scenario-instances", {
+      method: "POST",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({
+        scenarioPackId: "product-launch-readiness",
+        scenarioInstanceId: "api-created-instance",
+        seed: "api-created-seed",
+        account: "Created Account",
+      }),
+    });
+    expect(created.status).toBe(200);
+    expect((await created.json()).state).toMatchObject({
+      scenarioPackId: "product-launch-readiness",
+      scenarioInstanceId: "api-created-instance",
+      seed: "api-created-seed",
+      account: "Created Account",
+    });
+    expect(simulator.scenarioInstance("api-created-instance").state.seed).toBe("api-created-seed");
+
+    const duplicate = await app.request("/v1/admin/scenario-instances", {
+      method: "POST",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ scenarioPackId: "product-launch-readiness", scenarioInstanceId: "api-created-instance" }),
+    });
+    expect(duplicate.status).toBe(400);
+
+    const unknown = await app.request("/v1/admin/scenario-instances", {
+      method: "POST",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ scenarioPackId: "not-a-pack", scenarioInstanceId: "missing-pack-instance" }),
+    });
+    expect(unknown.status).toBe(400);
+  });
+
+  it("persists POST-created scenario instances across SQLite restart", async () => {
+    const databasePath = join(mkdtempSync(join(tmpdir(), "source-sim-instance-api-")), "simulator.sqlite");
+    const firstStorage = new SQLiteSimulatorStorage(databasePath);
+    const firstSimulator = new SourceSimulator({ seed: "sqlite-instance-create", storage: firstStorage, baseUrl: "http://sim.test" });
+    const { app } = credentialedApp(firstSimulator);
+    const created = await app.request("/v1/admin/scenario-instances", {
+      method: "POST",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({
+        scenarioPackId: "reliability-incident",
+        scenarioInstanceId: "sqlite-created-instance",
+        seed: "sqlite-created-seed",
+        service: "connector-gateway",
+      }),
+    });
+    expect(created.status).toBe(200);
+    firstStorage.close();
+
+    const secondStorage = new SQLiteSimulatorStorage(databasePath);
+    const secondSimulator = new SourceSimulator({ seed: "ignored-seed", storage: secondStorage, baseUrl: "http://sim.test" });
+    expect(secondSimulator.scenarioInstance("sqlite-created-instance").state).toMatchObject({
+      scenarioPackId: "reliability-incident",
+      seed: "sqlite-created-seed",
+      service: "connector-gateway",
+    });
+    secondStorage.close();
+  });
+
+  it("does not expose future changes through the admin source-change route", async () => {
+    const { app } = credentialedApp(new SourceSimulator({ seed: "api-ledger-seed", baseUrl: "http://sim.test" }));
+    const initial = await app.request("/v1/admin/source-changes", { headers: adminHeaders() });
+    expect((await initial.json()).sourceChanges.some((change: { record: { title: string } }) => change.record.title === "Workflow export API dependency")).toBe(
+      false,
+    );
+
+    await app.request("/v1/admin/scenarios/product-launch-readiness/advance", {
+      method: "POST",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ hours: 24 }),
+    });
+    const advanced = await app.request("/v1/admin/source-changes", { headers: adminHeaders() });
+    expect((await advanced.json()).sourceChanges.some((change: { record: { title: string } }) => change.record.title === "Workflow export API dependency")).toBe(
+      true,
+    );
+  });
+
+  it("generates and resets datasets through bounded admin endpoints", async () => {
+    const { app } = credentialedApp();
+    const generated = await app.request("/v1/admin/datasets/generate", {
+      method: "POST",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ seed: "dataset-api-seed", datasetSize: "large" }),
+    });
+    expect(generated.status).toBe(200);
+    expect((await generated.json()).totalSourceChanges).toBeGreaterThanOrEqual(5_000);
+
+    const reset = await app.request("/v1/admin/datasets/reset", {
+      method: "POST",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(reset.status).toBe(200);
+    expect((await reset.json()).datasetSize).toBe("small");
+  });
+});
+
 describe("SQLite storage", () => {
   it("keeps the migration schema aligned with the runtime SQLite schema", async () => {
     const migrationSql = await readFile(new URL("../../migrations/001_initial.sql", import.meta.url), "utf8");
@@ -577,9 +1042,14 @@ describe("SQLite storage", () => {
     try {
       migrationDatabase.exec(migrationSql);
       const expectedSchema = {
+        dataset_metadata: "CREATE TABLE dataset_metadata ( id TEXT PRIMARY KEY CHECK (id = 'singleton'), metadata_json TEXT NOT NULL )",
         organization_config: "CREATE TABLE organization_config ( id TEXT PRIMARY KEY CHECK (id = 'singleton'), config_json TEXT NOT NULL )",
+        scenario_instance_states: "CREATE TABLE scenario_instance_states ( scenario_instance_id TEXT PRIMARY KEY, scenario_pack_id TEXT NOT NULL, state_json TEXT NOT NULL )",
         scenario_states: "CREATE TABLE scenario_states ( scenario_id TEXT PRIMARY KEY, state_json TEXT NOT NULL )",
+        source_change_ledger: "CREATE TABLE source_change_ledger ( ledger_sequence INTEGER PRIMARY KEY, world_revision TEXT NOT NULL, change_json TEXT NOT NULL )",
+        source_objects: "CREATE TABLE source_objects ( source_key TEXT PRIMARY KEY, world_revision TEXT NOT NULL, object_json TEXT NOT NULL )",
         snapshots: "CREATE TABLE snapshots ( snapshot_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, snapshot_json TEXT NOT NULL )",
+        world_state: "CREATE TABLE world_state ( id TEXT PRIMARY KEY CHECK (id = 'singleton'), world_revision TEXT NOT NULL )",
       };
       expect(durableTableSql(migrationDatabase)).toEqual(expectedSchema);
       expect(durableTableSql(runtimeDatabase)).toEqual(expectedSchema);
@@ -587,6 +1057,55 @@ describe("SQLite storage", () => {
       migrationDatabase.close();
       runtimeDatabase.close();
     }
+  });
+
+  it("rolls back failed world replacement during scenario instance creation", () => {
+    const databasePath = join(mkdtempSync(join(tmpdir(), "source-sim-atomic-create-")), "simulator.sqlite");
+    const storage = new SQLiteSimulatorStorage(databasePath);
+    const simulator = new SourceSimulator({ seed: "atomic-create-seed", storage, baseUrl: "http://sim.test" });
+    const before = storageWorldSnapshot(simulator);
+
+    storage.injectWorldReplacementFailureForTesting();
+    expect(() =>
+      simulator.createScenarioInstance({
+        scenarioPackId: "product-launch-readiness",
+        scenarioInstanceId: "should-roll-back",
+        seed: "should-roll-back-seed",
+      }),
+    ).toThrow("Injected world replacement failure");
+
+    expect(storageWorldSnapshot(simulator)).toEqual(before);
+    expect(() => simulator.scenarioInstance("should-roll-back")).toThrow("Unknown scenario instance");
+    storage.close();
+  });
+
+  it("rolls back failed world replacement during scenario instance reset", () => {
+    const databasePath = join(mkdtempSync(join(tmpdir(), "source-sim-atomic-reset-")), "simulator.sqlite");
+    const storage = new SQLiteSimulatorStorage(databasePath);
+    const simulator = new SourceSimulator({ seed: "atomic-reset-seed", storage, baseUrl: "http://sim.test" });
+    simulator.advanceScenario("product-launch-readiness", { hours: 24 });
+    const before = storageWorldSnapshot(simulator);
+
+    storage.injectWorldReplacementFailureForTesting();
+    expect(() => simulator.resetScenarioInstance("product-launch-readiness-default", { seed: "failed-reset-seed" })).toThrow(
+      "Injected world replacement failure",
+    );
+
+    expect(storageWorldSnapshot(simulator)).toEqual(before);
+    storage.close();
+  });
+
+  it("rolls back failed world replacement during dataset generation", () => {
+    const databasePath = join(mkdtempSync(join(tmpdir(), "source-sim-atomic-dataset-")), "simulator.sqlite");
+    const storage = new SQLiteSimulatorStorage(databasePath);
+    const simulator = new SourceSimulator({ seed: "atomic-dataset-seed", storage, baseUrl: "http://sim.test" });
+    const before = storageWorldSnapshot(simulator);
+
+    storage.injectWorldReplacementFailureForTesting();
+    expect(() => simulator.generateDataset({ seed: "failed-dataset-seed", datasetSize: "medium" })).toThrow("Injected world replacement failure");
+
+    expect(storageWorldSnapshot(simulator)).toEqual(before);
+    storage.close();
   });
 
   it("persists scenario states, organization config, and snapshots across engine recreation", () => {
@@ -597,6 +1116,8 @@ describe("SQLite storage", () => {
     first.regenerateOrganization({ seed: "sqlite-org-seed" });
     const snapshot = first.createSnapshot();
     const stateBefore = first.state("product-launch-readiness");
+    const metadataBefore = first.datasetMetadata();
+    const firstCursor = first.feed("conn-product-manager", undefined, 10).nextCursor;
     firstStorage.close();
 
     const secondStorage = new SQLiteSimulatorStorage(databasePath);
@@ -604,6 +1125,30 @@ describe("SQLite storage", () => {
     expect(second.state("product-launch-readiness").currentTime).toBe(stateBefore.currentTime);
     expect(second.organizationSummary().seed).toBe("sqlite-org-seed");
     expect(second.listSnapshots().map((candidate) => candidate.snapshotId)).toContain(snapshot.snapshotId);
+    expect(second.datasetMetadata()).toEqual(metadataBefore);
+    expect(second.feed("conn-product-manager", firstCursor, 10).worldRevision).toBe(metadataBefore.worldRevision);
+    expect(second.sourceChanges().length).toBe(metadataBefore.totalSourceChanges);
+    secondStorage.close();
+  });
+
+  it("persists manual trigger occurrence time across engine recreation", () => {
+    const databasePath = join(mkdtempSync(join(tmpdir(), "source-sim-manual-trigger-")), "simulator.sqlite");
+    const firstStorage = new SQLiteSimulatorStorage(databasePath);
+    const first = new SourceSimulator({ seed: "sqlite-manual-trigger-seed", storage: firstStorage, baseUrl: "http://sim.test" });
+    const triggerTime = first.state("product-launch-readiness").currentTime;
+    first.triggerScenarioEvent("product-launch-readiness", "exec-pressure");
+    const beforeRestart = first.state("product-launch-readiness");
+    expect(beforeRestart.eventOccurrenceTimes["exec-pressure"]).toBe(triggerTime);
+    firstStorage.close();
+
+    const secondStorage = new SQLiteSimulatorStorage(databasePath);
+    const second = new SourceSimulator({ seed: "ignored-seed", storage: secondStorage, baseUrl: "http://sim.test" });
+    const afterRestart = second.state("product-launch-readiness");
+    expect(afterRestart.eventOccurrenceTimes["exec-pressure"]).toBe(triggerTime);
+    expect(afterRestart.eventLog.find((entry) => entry.eventId === "exec-pressure")?.occurredAt).toBe(triggerTime);
+    expect(
+      second.sourceChanges().some((change) => change.record.title === "Launch date question for staff" && change.changeOccurredAt === triggerTime),
+    ).toBe(true);
     secondStorage.close();
   });
 });

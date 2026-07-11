@@ -1,41 +1,45 @@
 # Scenarios
 
-Milestone 1 implements one scenario per department. Scenario records are authored by and assigned to concrete generated people selected from role templates. They are not authored by generic labels such as "Product Manager."
+Milestone 2 implements 10 scenario packs. Packs define reusable business-event templates; source adapters shape how those events appear in provider payloads.
 
-## Product Launch Readiness
+The simulator creates source evidence only. It does not define expected Workforce One conclusions.
 
-A launch date is approaching while requirements, customer commitments, and engineering dependencies are not fully aligned.
+## Scenario Packs
 
-Sources represented: Slack, Gmail, Notion, Jira, Productboard, Amplitude.
+| Pack | Departments | Key Sources |
+| --- | --- | --- |
+| `product-launch-readiness` | Product, Engineering, CS | Slack, Gmail, Calendar, Notion, Jira, Productboard, Amplitude |
+| `feature-adoption-lag` | Product, CS | Amplitude, Productboard, Zendesk, Slack, Gmail, Notion |
+| `roadmap-tradeoff` | Product, Engineering, CS | Productboard, Gmail, Jira, Calendar, Notion, Slack |
+| `reliability-incident` | Engineering, CS | PagerDuty, Slack, GitHub, Jira, Calendar, Notion, Gmail, Zendesk |
+| `migration-delivery-slip` | Engineering, Product, CS | Jira, GitHub, Calendar, Slack, Gmail, Notion, Salesforce |
+| `technical-debt-staffing-risk` | Engineering | Jira, GitHub, PagerDuty, Notion, Slack, Calendar, Gmail |
+| `renewal-risk` | Customer Success, Product, Engineering | Salesforce, Gmail, Zendesk, Gainsight, Slack, Calendar, Productboard |
+| `implementation-blocker` | CS, Engineering, Product | Gainsight, Salesforce, Zendesk, Slack, Jira, Calendar, Notion |
+| `expansion-opportunity` | CS, Product, Engineering | Amplitude, Salesforce, Gainsight, Productboard, GitHub, Gmail, Calendar |
+| `major-cross-functional-product-release` | Product, Engineering, CS | All 12 source systems |
 
-## Reliability Incident
+## Imperfect Data
 
-A service degradation creates incident response records, engineering fix work, stakeholder updates, and postmortem notes.
+The packs include late email, Slack edits, corrected analytics, delayed Salesforce updates, reopened Zendesk tickets, GitHub/Jira ordering differences, cancelled/rescheduled meetings, restricted/archived pages, deleted source objects, and sources that disagree or omit context.
 
-Sources represented: PagerDuty, Slack, GitHub, Jira, Calendar, Notion, Gmail.
+## Level-Specific Evidence
 
-## Renewal Risk
+- IC artifacts show implementation detail, tickets, pull requests, support investigation, and direct work.
+- Manager artifacts show coordination, assignments, escalations, and team status.
+- Director artifacts show multi-team dependencies, tradeoffs, and portfolio reviews.
+- VP artifacts show executive summaries, launch confidence, customer exposure, and investment discussion.
 
-A customer sponsor becomes unresponsive while support issues, adoption weakness, and commercial risk converge.
+## Instances
 
-Sources represented: Salesforce, Gmail, Zendesk, Gainsight, Slack, Calendar.
+Dataset size controls deterministic scenario instances:
 
-## Organization-Aware Behavior
+- Small: 10 instances total.
+- Medium: 80 instances total.
+- Large: 400 instances total.
 
-- IC records contain execution detail, assigned tickets, accounts, features, and working-team updates.
-- Manager records coordinate teams, aggregate risk, and escalate upward.
-- Director records cover multiple-team dependencies and resource tradeoffs.
-- VP records cover portfolio-level decisions, executive updates, and major customer or launch risk.
+Each instance has a scenario pack ID and distinct scenario instance ID.
 
-The same event should produce different information at different levels. The simulator creates underlying source artifacts; it does not generate Workforce One conclusions.
+Instances, not packs, hold runtime state: seed, dataset size, started time, current time, pause state, event occurrence times, triggered event IDs, event log, completion state, concrete participants, and account/product/project/service/workstream context. Instance APIs mutate only the selected instance.
 
-## Deferred to Milestone 2
-
-- Feature adoption lag.
-- Roadmap tradeoff.
-- Migration or delivery slip.
-- Technical debt and staffing risk.
-- Implementation blocker.
-- Expansion opportunity.
-- Major cross-functional product release.
-- Richer manager rollups, escalations, dotted-line relationships, and cross-functional project membership.
+When an operator manually triggers an event, that event occurs at the instance's current simulation time. It does not wait for the template's scheduled `atHour`, and no other instance from the same pack is affected.

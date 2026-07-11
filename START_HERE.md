@@ -5,13 +5,13 @@ This repository is a separate source simulator for Workforce One ingestion testi
 ## New Session Checklist
 
 1. Read this file.
-2. Read `ACTIVE_WORK.md` for current milestone status.
+2. Read `ACTIVE_WORK.md` for the current branch, baseline, verification, and limitations.
 3. Read `docs/MILESTONES.md` before changing scope.
-4. Read `docs/ORGANIZATION.md` before changing generated people, reporting lines, teams, or source memberships.
-5. Read `docs/CONTRACT.md` before changing the feed shape.
-6. Read `docs/PERSONAS_AND_PERMISSIONS.md` before changing visibility behavior.
-7. Run `pnpm run verify` before declaring a milestone ready.
-8. Keep one draft PR per milestone and do not auto-merge.
+4. Read `docs/ARCHITECTURE.md`, `docs/CHANGE_LEDGER.md`, and `docs/CONTRACT.md` before changing feed, cursor, storage, or source-change behavior.
+5. Read `docs/SOURCE_ADAPTERS.md` and `docs/SCENARIOS.md` before changing provider payloads or scenario packs.
+6. Read `docs/ORGANIZATION.md` and `docs/PERSONAS_AND_PERMISSIONS.md` before changing generated people, reporting lines, teams, or visibility.
+7. Run `pnpm install --frozen-lockfile` and `pnpm run verify` before declaring the PR ready.
+8. Keep one draft PR per milestone. Do not auto-merge.
 
 ## Hard Boundaries
 
@@ -21,24 +21,26 @@ This repository is a separate source simulator for Workforce One ingestion testi
 - Do not generate Workforce One Signals, Forces, Objectives, Priorities, Recommendations, AI answers, or Outcomes.
 - Do not use real people, customer, email, credential, or company data.
 - Do not combine milestone PRs.
+- Do not begin Milestone 3 work from the Milestone 2 branch.
 - Keep reporting hierarchy and permission visibility as separate models.
 
 ## Current Branch
 
-Milestone 1 lives on `milestone-1/core-simulator-platform`.
+Milestone 2 lives on `milestone-2/scenarios-and-sources`.
 
-## Review Target
+## Milestone 2 Review Target
 
-Milestone 1 should prove a vertical slice:
+Milestone 2 should prove:
 
-1. Reset a scenario.
-2. Advance simulation time.
-3. Generate source records.
-4. Retrieve them through an authenticated connection.
-5. Paginate with an opaque cursor.
-6. Retrieve only records authorized for that connection.
-7. Reset and reproduce the same records with the same seed.
-8. Generate a configurable organizational hierarchy.
-9. Select an IC, Manager, Director and VP.
-10. Prove each person has the correct manager, direct reports and source visibility.
-11. Prove the same seed and configuration reproduce the same organization.
+1. All 12 source systems have modular adapters.
+2. All 10 scenario packs exist.
+3. Product, Engineering, and Customer Success are covered.
+4. IC, Manager, Director, and VP source behavior is represented.
+5. Multiple actual people occupy every role level.
+6. Source artifacts reference concrete fictional people.
+7. Reporting, dotted-line, project, account, source membership, and permission access are distinct.
+8. Source records can lag, conflict, update, archive, and delete.
+9. The connector feed uses a compact v3 cursor over a deterministic change ledger.
+10. Small, medium, and large datasets generate within documented source-change ranges.
+11. Source deep links enforce the same connection visibility as feeds.
+12. Production-like runtime behavior still fails closed until durable Postgres is proven in Milestone 3.

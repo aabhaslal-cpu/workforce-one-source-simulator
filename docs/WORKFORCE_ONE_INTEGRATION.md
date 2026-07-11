@@ -2,37 +2,44 @@
 
 ## Boundary
 
-Workforce One should consume this simulator exactly like an external source platform.
+Workforce One should consume this simulator like an external source platform.
 
-The simulator returns source records. Workforce One derives evidence, provenance, Signals, Forces, Objectives, Priorities, Recommendations, and Outcomes.
+The simulator returns source records. Workforce One derives evidence, provenance, Signals, Forces, Objectives, Priorities, Recommendations, AI answers, and Outcomes.
 
 ## Connector Flow
 
-1. Workforce One stores a configured simulator connection and the credential assigned to that exact connection ID.
-2. The connector calls `/v1/connections/{connectionId}/manifest` with the connection-bound credential.
-3. The simulator resolves the credential server-side to one connection ID and rejects mismatched URL connection IDs with 403.
-4. The connector calls `/v1/connections/{connectionId}/records` with the same connection-bound credential.
-5. Workforce One stores the returned opaque `nextCursor` checkpoint and uses it on later polls.
-6. Workforce One maps the returned source ACL, raw payload, change metadata, and source URL into normal connector-ingress.
-7. Workforce One may fetch `sourceUrl` for a readable simulator-owned source view using the same connection credential.
-8. Workforce One owns all downstream interpretation.
+1. Workforce One stores a configured simulator connection and its credential.
+2. The connector calls `/v1/connections/{connectionId}/manifest`.
+3. The simulator resolves the credential server-side to one connection ID.
+4. The simulator rejects a URL connection ID mismatch with 403.
+5. The connector calls `/v1/connections/{connectionId}/records`.
+6. Workforce One stores the opaque v3 `nextCursor`.
+7. Later polls send the same cursor and receive only later authorized changes for the same world revision. Normal scenario time advancement and manual triggers append to the same world revision.
+8. If the world revision changed because of scenario instance reset/delete, dataset generation, organization regeneration, or snapshot restore, Workforce One receives a stale-checkpoint 400 and must perform an intentional reset/reseed flow.
+9. Workforce One may fetch simulator `sourceUrl` links with the same connection credential.
 
-The cursor is not an offset. It is a connection-bound checkpoint over consumed source changes, so polling from an earlier checkpoint after simulation time advances returns only newly visible creates and updates without duplicate or skipped changes.
+## Cursor
 
-## Example Request
+The cursor is not an offset and does not contain consumed change IDs. It is a compact checkpoint over the source-change ledger:
 
-```bash
-curl -H 'x-connection-secret: dev-connection-secret:conn-engineering-manager' \
-  'https://simulator.example.com/v1/connections/conn-engineering-manager/records?limit=25'
+```json
+{
+  "v": 3,
+  "connectionId": "conn-product-manager",
+  "worldRevision": "world-...",
+  "afterSequence": 1452
+}
 ```
 
-Production credentials must not use the `dev-connection-secret:<connectionId>` form.
+The source-change ledger contains occurred changes only. Workforce One should not depend on admin/debug routes for future planned events.
+
+Manual trigger source changes are timestamped from the scenario instance's current simulation time. Connector consumers should treat them like any other occurred source change and continue from the returned cursor.
 
 ## Do Not Do
 
-- Do not import simulator packages into Workforce One.
+- Do not import simulator code into Workforce One.
 - Do not write simulator records directly to the Workforce One database.
-- Do not trust a tenant ID, person ID, role, or scope supplied by a client request.
+- Do not trust client-supplied tenant, person, role, or scope values.
 - Do not use one credential for multiple simulator connections.
-- Do not reason from simulator debug event logs.
-- Do not treat this milestone as proven production durable deployment readiness.
+- Do not reason from simulator admin event logs.
+- Do not treat Milestone 2 as proven production durable deployment readiness.

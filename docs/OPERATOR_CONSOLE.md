@@ -2,46 +2,47 @@
 
 The operator console is available at `/console`.
 
-It is an internal simulator control surface, not a Workforce One screen.
+It is an internal simulator control panel, not a Workforce One screen and not a public demo.
 
-## Milestone 1 Organization Section
+## Organization
 
 Supports:
 
-- view organization tree
-- filter people by department
-- filter people by role level
-- search generated people
-- select a person
-- view their manager
-- view their direct reports
-- view their team
-- view their work ownership and source memberships through person detail
-- inspect records visible to a person
-- compare source visibility between two people
-- inspect generation seed and summary
-- regenerate the organization with a chosen seed
-- reset to the default organization template
+- organization tree
+- department filter
+- role-level filter
+- person search
+- person detail
+- person visible records
+- two-person visibility comparison
+- organization regeneration by seed
+- organization reset
 
-Detailed organization APIs now require the admin credential. The console includes an admin-key field and calls those routes with `x-admin-api-key`.
+API responses distinguish primary reporting, dotted-line relationships, project/account membership, source groups, work ownership, and permission access.
 
-The UI distinguishes the data model in API responses:
+## Scenarios
 
-- primary reporting line
-- source-system group membership
-- work ownership
-- permission access
+Supports:
 
-## Deep Links
+- all 10 scenario pack options
+- scenario state
+- reset
+- advance time
+- event log
+- scenario pack list
+- scenario instance list
+- scenario instance detail
+- independent instance advance/reset/trigger/pause/resume
 
-Source records include simulator-owned `sourceUrl` values. Opening those links requires the corresponding connection-bound credential and returns only the current fictional source object visible to that connection.
+## Sources And Dataset
 
-## Deferred to Milestone 2
+Supports:
 
-- richer expandable tree controls
-- editable span-of-control form controls
-- preview count panel before regeneration
-- dotted-line and project relationship visualization
-- deeper person-to-person visibility comparison
+- current dataset metadata
+- deterministic dataset generation by seed and size
+- source-object projection inspection
+- source-change ledger inspection
+- source-object history inspection
+- simulator deep-link targets
 
-A simple tree and detail panel is sufficient. This must not become a full HR product or polished Workforce One UI.
+The console requires the admin credential for detailed reads and writes. It does not display credential material.

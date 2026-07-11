@@ -1,6 +1,13 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
-import { SourceSimulator, HttpError, badRequest, validateOrganizationConfigCompatibility, type SimulatorOptions } from "./engine.js";
+import {
+  SourceSimulator,
+  HttpError,
+  badRequest,
+  validateOrganizationConfigCompatibility,
+  type ScenarioInstanceCreateInput,
+  type SimulatorOptions,
+} from "./engine.js";
 import { scenarios } from "./data.js";
 import { previewOrganizationCounts, roleTemplates } from "./organization.js";
 import { MemorySimulatorStorage, SQLiteSimulatorStorage, type SimulatorStorage } from "./storage.js";
@@ -19,6 +26,7 @@ type RuntimeEnv = "development" | "test" | "preview" | "production";
 type ScenarioResetInput = { seed?: string; datasetSize?: DatasetSize; startTime?: string };
 type ScenarioAdvanceInput = { hours?: number; days?: number };
 type OrganizationGenerateInput = { seed?: string; config?: OrganizationConfig };
+type DatasetGenerateInput = { seed?: string; datasetSize?: DatasetSize; startTime?: string };
 
 const DEV_ADMIN_KEY = "dev-admin-key";
 const DEV_CONNECTION_PREFIX = "dev-connection-secret";
@@ -95,6 +103,28 @@ const OrganizationConfigSchema = z
     }
   });
 const OrganizationGenerateSchema = z.object({ seed: BoundedSeedSchema.optional(), config: OrganizationConfigSchema.optional() }).strict();
+const DatasetGenerateSchema = z
+  .object({
+    seed: BoundedSeedSchema.optional(),
+    datasetSize: DatasetSizeSchema.optional(),
+    startTime: z.string().datetime().optional(),
+  })
+  .strict();
+const ScenarioInstanceCreateSchema = z
+  .object({
+    scenarioPackId: z.string().min(1).max(128),
+    scenarioInstanceId: z.string().min(1).max(160).optional(),
+    seed: BoundedSeedSchema.optional(),
+    datasetSize: DatasetSizeSchema.optional(),
+    startTime: z.string().datetime().optional(),
+    account: z.string().min(1).max(160).optional(),
+    product: z.string().min(1).max(160).optional(),
+    project: z.string().min(1).max(160).optional(),
+    service: z.string().min(1).max(160).optional(),
+    workstream: z.string().min(1).max(160).optional(),
+    participantPersonIds: z.record(z.string().min(1).max(128), z.string().min(1).max(160)).optional(),
+  })
+  .strict();
 
 type AuthConfig = {
   adminKey: string;
@@ -143,6 +173,8 @@ export function createApp(options: AppOptions = {}) {
       })),
     }),
   );
+  app.get("/v1/catalog/scenario-packs", (c) => c.json({ scenarioPacks: simulator.scenarioPacks() }));
+  app.get("/v1/catalog/scenario-instances", (c) => withAdmin(c, auth, () => c.json({ scenarioInstances: simulator.scenarioInstances() })));
   app.get("/v1/catalog/seats", (c) => c.json({ roleTemplates }));
   app.get("/v1/catalog/people", (c) => withAdmin(c, auth, () => c.json({ people: simulator.people() })));
   app.get("/v1/catalog/people/:personId", (c) => withAdmin(c, auth, () => c.json(simulator.person(c.req.param("personId")))));
@@ -205,6 +237,34 @@ export function createApp(options: AppOptions = {}) {
   app.get("/v1/admin/scenarios/:scenarioId/events", (c) => c.json({ events: simulator.eventLog(c.req.param("scenarioId")) }));
   app.get("/v1/admin/records", (c) => c.json({ records: simulator.allRecords() }));
   app.get("/v1/admin/connections", (c) => c.json({ connections: simulator.connectionsForAdmin() }));
+  app.post("/v1/admin/scenario-instances", async (c) => {
+    const body = compactOptional(await readJsonBody(c.req.raw, ScenarioInstanceCreateSchema)) as unknown as ScenarioInstanceCreateInput;
+    return c.json(simulator.createScenarioInstance(body));
+  });
+  app.post("/v1/admin/scenario-instances/:instanceId/reset", async (c) => {
+    const body = compactOptional(await readJsonBody(c.req.raw, ScenarioResetSchema)) as ScenarioResetInput;
+    return c.json(simulator.resetScenarioInstance(c.req.param("instanceId"), body));
+  });
+  app.post("/v1/admin/scenario-instances/:instanceId/advance", async (c) => {
+    const body = compactOptional(await readJsonBody(c.req.raw, ScenarioAdvanceSchema)) as ScenarioAdvanceInput;
+    return c.json(simulator.advanceScenarioInstance(c.req.param("instanceId"), body));
+  });
+  app.post("/v1/admin/scenario-instances/:instanceId/trigger", async (c) => {
+    const body = await readJsonBody(c.req.raw, TriggerSchema);
+    return c.json(simulator.triggerScenarioInstanceEvent(c.req.param("instanceId"), body.eventId));
+  });
+  app.post("/v1/admin/scenario-instances/:instanceId/pause", async (c) => {
+    await readJsonBody(c.req.raw, EmptyBodySchema);
+    return c.json(simulator.pauseScenarioInstance(c.req.param("instanceId")));
+  });
+  app.post("/v1/admin/scenario-instances/:instanceId/resume", async (c) => {
+    await readJsonBody(c.req.raw, EmptyBodySchema);
+    return c.json(simulator.resumeScenarioInstance(c.req.param("instanceId")));
+  });
+  app.get("/v1/admin/scenario-instances/:instanceId", (c) => c.json(simulator.scenarioInstance(c.req.param("instanceId"))));
+  app.delete("/v1/admin/scenario-instances/:instanceId", (c) => c.json(simulator.deleteScenarioInstance(c.req.param("instanceId"))));
+  app.get("/v1/admin/scenario-instances/:instanceId/events", (c) => c.json({ events: simulator.scenarioInstance(c.req.param("instanceId")).events }));
+  app.get("/v1/admin/scenario-instances/:instanceId/changes", (c) => c.json({ changes: simulator.scenarioInstance(c.req.param("instanceId")).changes }));
   app.get("/v1/admin/snapshots", (c) => c.json({ snapshots: simulator.listSnapshots() }));
   app.post("/v1/admin/snapshots", async (c) => {
     await readJsonBody(c.req.raw, EmptyBodySchema);
@@ -223,6 +283,8 @@ export function createApp(options: AppOptions = {}) {
     await readJsonBody(c.req.raw, EmptyBodySchema);
     return c.json(simulator.resetOrganization());
   });
+  app.get("/v1/admin/organization/relationships", (c) => c.json(simulator.organizationRelationships()));
+  app.get("/v1/admin/organization/preview", (c) => c.json(simulator.previewOrganization()));
   app.get("/v1/admin/organization/config", (c) => c.json(simulator.getOrganizationConfig()));
   app.put("/v1/admin/organization/config", async (c) =>
     c.json(simulator.putOrganizationConfig((await readJsonBody(c.req.raw, OrganizationConfigSchema)) as OrganizationConfig)),
@@ -231,6 +293,23 @@ export function createApp(options: AppOptions = {}) {
   app.get("/v1/admin/people/:personId/compare/:otherPersonId", (c) =>
     c.json(simulator.comparePersonVisibility(c.req.param("personId"), c.req.param("otherPersonId"))),
   );
+  app.get("/v1/admin/source-objects", (c) => c.json({ sourceObjects: simulator.sourceObjects() }));
+  app.get("/v1/admin/source-objects/:sourceSystem/:sourceId", (c) =>
+    c.json({ sourceObject: simulator.sourceObject(c.req.param("sourceSystem"), c.req.param("sourceId")) }),
+  );
+  app.get("/v1/admin/source-objects/:sourceSystem/:sourceId/history", (c) =>
+    c.json({ history: simulator.sourceObjectHistory(c.req.param("sourceSystem"), c.req.param("sourceId")) }),
+  );
+  app.get("/v1/admin/source-changes", (c) => c.json({ sourceChanges: simulator.sourceChanges() }));
+  app.post("/v1/admin/datasets/generate", async (c) => {
+    const body = compactOptional(await readJsonBody(c.req.raw, DatasetGenerateSchema)) as DatasetGenerateInput;
+    return c.json(simulator.generateDataset(body));
+  });
+  app.get("/v1/admin/datasets/current", (c) => c.json(simulator.datasetMetadata()));
+  app.post("/v1/admin/datasets/reset", async (c) => {
+    await readJsonBody(c.req.raw, EmptyBodySchema);
+    return c.json(simulator.resetDataset());
+  });
 
   return app;
 }
@@ -481,12 +560,44 @@ const consoleHtml = `<!doctype html>
     <section class="panel">
       <h2>Scenario</h2>
       <div class="row">
-        <label>Scenario <select id="scenario"><option>product-launch-readiness</option><option>reliability-incident</option><option>renewal-risk</option></select></label>
+        <label>Scenario <select id="scenario">
+          <option>product-launch-readiness</option>
+          <option>feature-adoption-lag</option>
+          <option>roadmap-tradeoff</option>
+          <option>reliability-incident</option>
+          <option>migration-delivery-slip</option>
+          <option>technical-debt-staffing-risk</option>
+          <option>renewal-risk</option>
+          <option>implementation-blocker</option>
+          <option>expansion-opportunity</option>
+          <option>major-cross-functional-product-release</option>
+        </select></label>
+        <label>Instance <input id="instance" placeholder="scenario-instance-id" /></label>
         <button onclick="callAdmin('state','GET')">State</button>
         <button onclick="callAdmin('reset','POST')">Reset</button>
         <button onclick="advance()">Advance 24h</button>
         <button onclick="callAdmin('events','GET')">Events</button>
+        <button onclick="packs()">Packs</button>
+        <button onclick="instances()">Instances</button>
+        <button onclick="instanceDetail()">Instance Detail</button>
         <button onclick="records()">All Records</button>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Sources And Dataset</h2>
+      <div class="row">
+        <label>Dataset <select id="dataset"><option>small</option><option>medium</option><option>large</option></select></label>
+        <label>Dataset seed <input id="datasetSeed" value="wfo-m2-dataset-seed" /></label>
+        <button onclick="datasetCurrent()">Current Dataset</button>
+        <button onclick="datasetGenerate()">Generate Dataset</button>
+        <button onclick="sourceObjects()">Source Objects</button>
+        <button onclick="sourceChanges()">Source Changes</button>
+      </div>
+      <div class="row">
+        <label>Source <input id="sourceSystem" placeholder="slack" /></label>
+        <label>Source ID <input id="sourceId" /></label>
+        <button onclick="sourceObject()">Object</button>
+        <button onclick="sourceHistory()">History</button>
       </div>
     </section>
     <pre id="out">Ready.</pre>
@@ -501,6 +612,15 @@ async function getJson(url, opts = {}) { const res = await fetch(url, opts); ret
 async function callAdmin(action, method) { show(await getJson('/v1/admin/scenarios/' + scenario() + '/' + action, { method, headers: headers({ 'content-type': 'application/json' }), body: method === 'POST' ? '{}' : undefined })); }
 async function advance() { show(await getJson('/v1/admin/scenarios/' + scenario() + '/advance', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ hours: 24 }) })); }
 async function records() { show(await getJson('/v1/admin/records', { headers: headers() })); }
+async function packs() { show(await getJson('/v1/catalog/scenario-packs')); }
+async function instances() { show(await getJson('/v1/catalog/scenario-instances', { headers: headers() })); }
+async function instanceDetail() { show(await getJson('/v1/admin/scenario-instances/' + document.getElementById('instance').value, { headers: headers() })); }
+async function datasetCurrent() { show(await getJson('/v1/admin/datasets/current', { headers: headers() })); }
+async function datasetGenerate() { show(await getJson('/v1/admin/datasets/generate', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ seed: document.getElementById('datasetSeed').value, datasetSize: document.getElementById('dataset').value }) })); }
+async function sourceObjects() { show(await getJson('/v1/admin/source-objects', { headers: headers() })); }
+async function sourceChanges() { show(await getJson('/v1/admin/source-changes', { headers: headers() })); }
+async function sourceObject() { show(await getJson('/v1/admin/source-objects/' + document.getElementById('sourceSystem').value + '/' + document.getElementById('sourceId').value, { headers: headers() })); }
+async function sourceHistory() { show(await getJson('/v1/admin/source-objects/' + document.getElementById('sourceSystem').value + '/' + document.getElementById('sourceId').value + '/history', { headers: headers() })); }
 async function loadOrg() { show(await getJson('/v1/catalog/organization/tree', { headers: headers() })); }
 async function loadPeople() {
   const data = await getJson('/v1/catalog/people', { headers: headers() });

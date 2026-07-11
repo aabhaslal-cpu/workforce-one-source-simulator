@@ -32,6 +32,8 @@ export const SourceRecordSchema = z.object({
 
 export const SourceFeedBatchV1Schema = z.object({
   schemaVersion: z.literal("source-feed.v1"),
+  cursorVersion: z.literal(3),
+  worldRevision: z.string().min(1),
   connectionId: z.string().min(1),
   batchId: z.string().min(1),
   generatedAt: z.string().datetime(),

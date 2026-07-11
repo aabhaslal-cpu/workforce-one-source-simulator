@@ -1,81 +1,105 @@
 # Architecture
 
-## Shape
+## Boundary
 
 ```text
-Source Simulator
-  -> authenticated source-change feed
-  -> Workforce One connector
-  -> connector-ingress gateway
-  -> evidence and provenance
-  -> Workforce One product reasoning and UI
+Source Simulator -> authenticated source feed -> Workforce One connector -> Workforce One evidence/provenance/reasoning
 ```
 
-The simulator owns fictional source data only. Workforce One owns interpretation.
+The simulator owns fictional source data only. Workforce One owns interpretation, ranking, recommendations, outcomes, and UI.
 
 ## Runtime Components
 
-- `src/app.ts`: HTTP API, connection-bound auth, admin auth, request validation, operator console, source deep links.
-- `src/engine.ts`: deterministic scenario engine, source-change stream, checkpoint cursors, snapshots, temporal source mutations, organization-aware visibility.
-- `src/domain.ts`: shared domain types.
-- `src/organization.ts`: deterministic organization generator, role templates, reporting tree, and person-level connections.
-- `src/data.ts`: fictional tenant and M1 scenario templates.
-- `src/contracts.ts`: SourceFeedBatchV1 Zod schemas.
-- `src/storage.ts`: storage interface, in-memory test adapter, and durable local SQLite adapter.
+- `src/app.ts`: HTTP API, admin auth, connection-bound auth, request validation, operator console, source deep links, and admin inspection routes.
+- `src/engine.ts`: deterministic organization-aware scenario engine, scenario instances, source-change ledger, v3 cursor feed, world revision, snapshots, dataset metadata, and visibility filtering.
+- `src/adapters/*`: provider-shaped payload adapters and adapter registry.
+- `src/data.ts`: fictional tenant and 10 scenario-pack definitions.
+- `src/organization.ts`: role templates, deterministic people/teams/reporting graph, dotted-line relationships, cross-functional memberships, and connection IDs.
+- `src/storage.ts`: storage interface, memory test adapter, and SQLite local durable adapter.
+- `src/contracts.ts`: Zod runtime contract for `SourceFeedBatchV1`.
 
 ## Determinism
 
-Record identity is derived from seed, organization seed, scenario, event, source system, object type, and template ID. The same seed, organization configuration, scenario state, and trigger sequence produce the same organization and records. Different seeds produce different stable people and source IDs while preserving valid structure.
+Stable IDs are derived from deterministic inputs: organization config, organization seed, dataset seed, dataset size, scenario pack, scenario instance, event, template, source system, and change type.
 
-Source updates are deterministic timeline mutations. A record with an update time keeps the same source ID and initial payload until the simulation clock reaches the update time; only then does `updatedAt` and the updated simulator payload metadata appear.
+The code must not use uncontrolled `Math.random()`, `Date.now()`, random UUIDs, real people, routable emails, or real customer data.
 
-Connection feeds are built from deterministic source changes, not offset pagination over a mutable record list. A v2 cursor is bound to one connection and records consumed change IDs so later creates or updates cannot cause skipped or duplicated feed items. The server returns a checkpoint cursor even when `hasMore` is false.
+## Change Ledger
+
+The feed is built from a deterministic source-change ledger, not offset pagination over a mutable list.
+
+The durable ledger contains only changes that have occurred through initial instance creation, time advancement, manual triggers, or deterministic world reconstruction after a destructive operation. Future planned emissions stay in scenario definitions and are not exposed by `GET /v1/admin/source-changes`.
+
+Each ledger entry has:
+
+- monotonic `ledgerSequence`
+- `worldRevision`
+- `changeId`
+- `changeType`
+- source system and source ID
+- change time and source occurrence time
+- scenario pack and scenario instance IDs
+- business event and template IDs
+- current source record or tombstone payload
+- permission scope
+
+The v3 cursor stores only connection ID, world revision, and `afterSequence`. It remains compact regardless of dataset size.
+
+Normal time advancement and manual triggers append new changes with increasing `ledgerSequence` values and keep the same `worldRevision`. Destructive reset/delete of a scenario instance, dataset generation, organization regeneration, and snapshot restore atomically rebuild the world and rotate `worldRevision`.
+
+## Source Objects
+
+The current source-object projection stores only the latest occurred source object per stable source identity for the current simulation clock.
+
+Updates and deletions preserve source identity. Deleted provider semantics are represented as tombstoned source records.
+
+## Scenario Packs And Instances
+
+There are 10 scenario packs. Packs are reusable templates; they do not hold runtime clock or completion state. Each scenario instance is a persisted runtime entity with its own ID, pack ID, seed, dataset size, started time, current time, pause state, event occurrence-time map, triggered event IDs, event log, completion state, concrete participants, and account/product/project/service/workstream context.
+
+Dataset size controls deterministic instance count:
+
+- Small: 1 instance per pack.
+- Medium: 8 instances per pack.
+- Large: 40 instances per pack.
+
+Scenario instances advance, pause, reset, delete, and trigger events independently. Reset/delete are destructive world replacements and invalidate previous cursors; ordinary advance/trigger append to the current world and preserve cursor continuity.
+
+Automatically scheduled events occur at `startedAt + atHour`. Manual triggers occur at the selected instance's `currentTime`, even when that is earlier than the template's `atHour`. The persisted event occurrence time is the source of truth for created, updated, and deleted source timestamps.
 
 ## Organization
 
-The simulator generates actual people, not only persona labels. Role templates define categories such as Product Manager or VP Customer Success; generated people occupy those templates. Each person has a manager, direct reports, team, source identities, work ownership, permission groups, and person-level source connection.
+The simulator generates actual fictional people, not generic persona labels. Role templates are categories; generated people occupy them.
 
-## State
+The organization includes:
 
-Scenario state includes:
+- primary manager/report relationships
+- dotted-line relationships
+- department teams
+- manager teams
+- cross-functional project teams
+- account teams
+- launch team membership
+- incident responder membership
+- product, project, account, and workstream assignments
 
-- scenario ID
-- seed
-- dataset size
-- start time
-- current time
-- paused flag
-- triggered event IDs
-- debugging event log
-
-Organization state includes:
-
-- organization seed
-- organization configuration
-- generated people
-- teams
-- reporting relationships
-- validation result
-
-The event log is for operator inspection only and is not part of the Workforce One data contract.
-
-## Permissions
-
-Connections map server-side to a concrete generated person, allowed source systems, and allowed groups. Each connection credential resolves to exactly one connection ID. The URL `connectionId` must match the authenticated connection ID or the API returns 403.
-
-Clients cannot choose arbitrary tenant, department, person, role, or group scope. Reporting hierarchy does not automatically grant visibility; ACLs and source memberships do.
-
-## Public vs Admin Catalog
-
-Unauthenticated catalog routes expose only safe high-level metadata: supported source systems, contract version, scenario names, role-template count, and aggregate organization counts. Detailed people, teams, source identities, assignments, organization tree, and visibility comparison require admin authentication.
+Reporting hierarchy does not grant record visibility by itself. Visibility comes from source ACLs, groups, explicit memberships, and person-specific source connections.
 
 ## Storage
 
-The engine talks to a storage interface. Milestone 1 includes:
+SQLite local storage persists:
 
-- `MemorySimulatorStorage` for tests and explicitly selected local ephemeral development only.
-- `SQLiteSimulatorStorage` for durable local scenario state, organization configuration, and snapshots.
+- `scenario_states`
+- `scenario_instance_states`
+- `organization_config`
+- `world_state`
+- `source_change_ledger`
+- `source_objects`
+- `dataset_metadata`
+- `snapshots`
 
-Production-like runtimes must fail closed when durable storage is unavailable. This draft does not claim proven production Postgres readiness.
+Memory storage is for tests or explicitly selected local ephemeral development. Preview, production, and Vercel-like environments reject memory and SQLite. Production Postgres remains Milestone 3 and is not claimed as ready.
 
-Preview, production, and Vercel-like runtimes reject memory and SQLite storage, including injected `AppOptions.storage` or `AppOptions.simulator` instances. Until a proven Postgres adapter exists, production-like startup fails closed instead of silently falling back to local storage.
+## Public Vs Admin
+
+Public catalog routes expose safe metadata only. Detailed people, organization graph, teams, source objects, source changes, assignments, relationships, and visibility comparison require admin authentication.
