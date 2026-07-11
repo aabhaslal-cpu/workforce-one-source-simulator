@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { requireSourceAdapter } from "./adapters/registry.js";
 import { SourceFeedBatchV1Schema, type SourceFeedBatchV1 } from "./contracts.js";
 import { scenarios, tenant } from "./data.js";
 import {
+  type DatasetMetadata,
   sourceSystems,
   type DatasetSize,
   type GeneratedOrganization,
@@ -10,11 +12,14 @@ import {
   type Person,
   type ScenarioDefinition,
   type ScenarioEventTemplate,
+  type ScenarioInstanceContext,
   type ScenarioRecordTemplate,
   type ScenarioState,
   type Snapshot,
+  type SourceChangeLedgerEntry,
   type SourceChangeType,
   type SourceConnection,
+  type SourceObjectProjection,
   type SourceRecord,
   type Team,
 } from "./domain.js";
@@ -40,30 +45,29 @@ export interface SimulatorOptions {
 }
 
 interface CursorPayload {
-  v: 2;
+  v: 3;
   connectionId: string;
-  consumedChangeIds: string[];
-  lastSequence: number;
-}
-
-interface SourceChange {
-  changeId: string;
-  sequence: number;
-  record: SourceRecord;
+  worldRevision: string;
+  afterSequence: number;
 }
 
 const CursorPayloadSchema = z
   .object({
-    v: z.literal(2),
+    v: z.literal(3),
     connectionId: z.string().min(1).max(200),
-    consumedChangeIds: z.array(z.string().min(1).max(220)).max(5_000),
-    lastSequence: z.number().int().min(0).max(1_000_000),
+    worldRevision: z.string().min(1).max(128),
+    afterSequence: z.number().int().min(0).max(10_000_000),
   })
   .strict();
 
 const DEFAULT_START_TIME = "2026-07-10T16:00:00.000Z";
 const MAX_PAGE_SIZE = 100;
-const CHANGE_SEQUENCE_BY_KEY = buildChangeSequenceMap();
+const INSTANCE_COUNTS: Record<DatasetSize, number> = { small: 1, medium: 8, large: 40 };
+const INSTANCE_SPANS_HOURS: Record<DatasetSize, number> = { small: 0, medium: 24 * 25, large: 24 * 85 };
+const INSTANCE_ACCOUNTS = ["Northstar Medical", "Summit Foods", "Cobalt Bank", "Beacon Retail", "Atlas Logistics", "Pioneer Health"];
+const INSTANCE_PRODUCTS = ["Workflow Hub", "Operations Control", "Connector Gateway", "Analytics Studio", "Customer Console", "Identity Fabric"];
+const INSTANCE_PROJECTS = ["Aurora", "Beacon", "Comet", "Delta", "Evergreen", "Foundry"];
+const INSTANCE_SERVICES = ["ingestion", "workflow-export", "identity", "analytics", "notifications", "audit-stream"];
 
 export class SourceSimulator {
   private readonly storage: SimulatorStorage;
@@ -93,6 +97,8 @@ export class SourceSimulator {
         this.storage.saveScenarioState(createInitialState(scenario.id, this.defaultSeed, this.defaultDatasetSize, options.now ?? DEFAULT_START_TIME));
       }
     }
+    this.ensureWorldRevision();
+    this.rebuildLedger();
   }
 
   storageKind(): StorageKind {
@@ -117,6 +123,70 @@ export class SourceSimulator {
         validationOk: this.organization.validation.ok,
       },
     };
+  }
+
+  scenarioPacks() {
+    return scenarios.map(({ events, participantRoleTemplateIds, ...scenario }) => ({
+      ...scenario,
+      scenarioPackId: scenario.id,
+      eventCount: events.length,
+      participantRoleTemplateCount: participantRoleTemplateIds.length,
+      sourceSystems: [...scenario.sourceSystems],
+    }));
+  }
+
+  scenarioInstances() {
+    return scenarios.flatMap((scenario) => this.instanceContextsForScenario(scenario).map((instance) => ({ ...instance, scenarioPackId: scenario.id })));
+  }
+
+  scenarioInstance(instanceId: string) {
+    const instance = this.scenarioInstances().find((candidate) => candidate.scenarioInstanceId === instanceId);
+    if (!instance) throw notFound(`Unknown scenario instance: ${instanceId}`);
+    return {
+      instance,
+      state: this.requireState(instance.scenarioPackId),
+      events: this.eventLog(instance.scenarioPackId),
+      changes: this.sourceChanges().filter((change) => change.scenarioInstanceId === instanceId),
+    };
+  }
+
+  sourceChanges(): SourceChangeLedgerEntry[] {
+    return this.storage.listSourceChanges();
+  }
+
+  sourceObjects(): SourceObjectProjection[] {
+    return this.storage.listSourceObjects();
+  }
+
+  sourceObject(sourceSystem: string, sourceId: string): SourceObjectProjection {
+    const object = this.sourceObjects().find((candidate) => candidate.sourceSystem === sourceSystem && candidate.sourceId === sourceId);
+    if (!object) throw notFound("Unknown source object");
+    return object;
+  }
+
+  sourceObjectHistory(sourceSystem: string, sourceId: string): SourceChangeLedgerEntry[] {
+    const history = this.sourceChanges().filter((change) => change.sourceSystem === sourceSystem && change.sourceId === sourceId).sort(compareChanges);
+    if (history.length === 0) throw notFound("Unknown source object");
+    return history;
+  }
+
+  datasetMetadata(): DatasetMetadata {
+    const metadata = this.storage.getDatasetMetadata();
+    if (metadata) return metadata;
+    return this.buildDatasetMetadata();
+  }
+
+  generateDataset(input: { seed?: string; datasetSize?: DatasetSize; startTime?: string } = {}): DatasetMetadata {
+    const nextSeed = input.seed ?? this.defaultSeed;
+    const datasetSize = input.datasetSize ?? this.defaultDatasetSize;
+    const startTime = input.startTime ?? DEFAULT_START_TIME;
+    this.storage.replaceScenarioStates(scenarios.map((scenario) => createInitialState(scenario.id, nextSeed, datasetSize, startTime)));
+    this.rotateWorldRevision(`dataset-generate:${datasetSize}:${nextSeed}`);
+    return this.datasetMetadata();
+  }
+
+  resetDataset(): DatasetMetadata {
+    return this.generateDataset({ seed: this.defaultSeed, datasetSize: this.defaultDatasetSize, startTime: DEFAULT_START_TIME });
   }
 
   catalog() {
@@ -144,6 +214,14 @@ export class SourceSimulator {
 
   organizationTree() {
     return { tree: this.organization.tree };
+  }
+
+  organizationRelationships() {
+    return { relationships: this.organization.reportingRelationships };
+  }
+
+  previewOrganization(config: OrganizationConfig = this.organizationConfig) {
+    return { previewCounts: previewOrganizationCounts(config) };
   }
 
   people(): Person[] {
@@ -195,6 +273,7 @@ export class SourceSimulator {
     this.storage.saveOrganizationConfig(this.organizationConfig);
     this.organization = nextOrganization;
     this.connections = createConnections(this.organization);
+    this.rotateWorldRevision("organization-regenerate");
     return { organization: this.organizationSummary(), previewCounts: previewOrganizationCounts(this.organizationConfig) };
   }
 
@@ -203,6 +282,7 @@ export class SourceSimulator {
     this.organization = buildCompatibleOrganization(this.organizationConfig);
     this.storage.saveOrganizationConfig(this.organizationConfig);
     this.connections = createConnections(this.organization);
+    this.rotateWorldRevision("organization-reset");
     return this.organizationSummary();
   }
 
@@ -251,6 +331,7 @@ export class SourceSimulator {
       input.startTime ?? DEFAULT_START_TIME,
     );
     this.storage.saveScenarioState(state);
+    this.rotateWorldRevision(`scenario-reset:${scenarioId}`);
     return state;
   }
 
@@ -264,6 +345,7 @@ export class SourceSimulator {
     const nextState: ScenarioState = { ...state, currentTime: current.toISOString() };
     this.recordReachedEvents(scenario, nextState);
     this.storage.saveScenarioState(nextState);
+    this.refreshSourceObjects();
     return nextState;
   }
 
@@ -279,6 +361,7 @@ export class SourceSimulator {
         eventLog: [...state.eventLog, logEntry(scenario.id, event, state.currentTime)],
       };
       this.storage.saveScenarioState(nextState);
+      this.refreshSourceObjects();
       return nextState;
     }
     return state;
@@ -287,12 +370,14 @@ export class SourceSimulator {
   pauseScenario(scenarioId: string): ScenarioState {
     const state = { ...this.requireState(scenarioId), paused: true };
     this.storage.saveScenarioState(state);
+    this.refreshSourceObjects();
     return state;
   }
 
   resumeScenario(scenarioId: string): ScenarioState {
     const state = { ...this.requireState(scenarioId), paused: false };
     this.storage.saveScenarioState(state);
+    this.refreshSourceObjects();
     return state;
   }
 
@@ -309,7 +394,7 @@ export class SourceSimulator {
   }
 
   allRecords(): SourceRecord[] {
-    return scenarios.flatMap((scenario) => this.recordsForScenario(scenario));
+    return this.currentSourceObjects().map((object) => object.record);
   }
 
   findRecordForConnection(connectionId: string, sourceSystem: string, sourceId: string): SourceRecord {
@@ -322,27 +407,31 @@ export class SourceSimulator {
 
   feed(connectionId: string, cursor: string | undefined, limitInput: number | undefined): SourceFeedBatchV1 {
     const connection = this.requireConnection(connectionId);
-    const cursorPayload = cursor ? decodeCursor(cursor) : { v: 2 as const, connectionId, consumedChangeIds: [], lastSequence: 0 };
+    const worldRevision = this.requireWorldRevision();
+    const cursorPayload = cursor ? decodeCursor(cursor) : { v: 3 as const, connectionId, worldRevision, afterSequence: 0 };
     if (cursorPayload.connectionId !== connectionId) {
       throw badRequest("Cursor does not belong to this connection");
     }
+    if (cursorPayload.worldRevision !== worldRevision) {
+      throw badRequest("Stale checkpoint: cursor world revision no longer matches the current simulator world");
+    }
     const limit = Math.min(Math.max(limitInput ?? 50, 1), MAX_PAGE_SIZE);
-    const consumed = new Set(cursorPayload.consumedChangeIds);
-    const visibleChanges = this.sourceChanges()
+    const visibleChanges = this.visibleLedgerEntries()
+      .filter((change) => change.ledgerSequence > cursorPayload.afterSequence)
       .filter((change) => canConnectionSee(change.record, connection))
       .sort(compareChanges);
-    const pending = visibleChanges.filter((change) => !consumed.has(change.changeId));
-    const page = pending.slice(0, limit);
-    const nextConsumedChangeIds = appendUnique(cursorPayload.consumedChangeIds, page.map((change) => change.changeId));
-    const lastSequence = page.at(-1)?.sequence ?? cursorPayload.lastSequence;
+    const page = visibleChanges.slice(0, limit);
+    const afterSequence = page.at(-1)?.ledgerSequence ?? cursorPayload.afterSequence;
     const batch: SourceFeedBatchV1 = {
       schemaVersion: "source-feed.v1",
+      cursorVersion: 3,
+      worldRevision,
       connectionId,
-      batchId: stableId("batch", connectionId, cursor ?? "initial", String(limit), this.stateFingerprint(), page.map((change) => change.changeId).join(",")),
+      batchId: stableId("batch", connectionId, cursor ?? "initial", String(limit), worldRevision, page.map((change) => change.changeId).join(",")),
       generatedAt: maxCurrentTime(this.states()),
       records: page.map((change) => change.record),
-      nextCursor: encodeCursor({ v: 2, connectionId, consumedChangeIds: nextConsumedChangeIds, lastSequence }),
-      hasMore: pending.length > page.length,
+      nextCursor: encodeCursor({ v: 3, connectionId, worldRevision, afterSequence }),
+      hasMore: visibleChanges.length > page.length,
     };
     return SourceFeedBatchV1Schema.parse(batch);
   }
@@ -354,6 +443,10 @@ export class SourceSimulator {
       states: this.states(),
       organizationSeed: this.organization.seed,
       organizationConfig: this.organization.config,
+      datasetMetadata: this.datasetMetadata(),
+      worldRevision: this.requireWorldRevision(),
+      sourceChanges: this.storage.listSourceChanges(),
+      sourceObjects: this.storage.listSourceObjects(),
     };
     this.storage.createSnapshot(snapshot);
     return snapshot;
@@ -367,6 +460,7 @@ export class SourceSimulator {
     this.organization = buildCompatibleOrganization(snapshot.organizationConfig);
     this.storage.saveOrganizationConfig(this.organizationConfig);
     this.connections = createConnections(this.organization);
+    this.rotateWorldRevision(`snapshot-restore:${snapshotId}`);
     return snapshot;
   }
 
@@ -374,40 +468,144 @@ export class SourceSimulator {
     return this.storage.listSnapshots();
   }
 
-  private sourceChanges(): SourceChange[] {
-    return scenarios.flatMap((scenario) => this.changesForScenario(scenario)).sort(compareChanges);
+  private ensureWorldRevision(): void {
+    if (!this.storage.getWorldRevision()) {
+      this.storage.saveWorldRevision(stableId("world", "initial", this.stateFingerprint()));
+    }
   }
 
-  private changesForScenario(scenario: ScenarioDefinition): SourceChange[] {
+  private requireWorldRevision(): string {
+    const worldRevision = this.storage.getWorldRevision();
+    if (!worldRevision) {
+      throw new Error("Simulator world revision has not been initialized");
+    }
+    return worldRevision;
+  }
+
+  private rotateWorldRevision(reason: string): void {
+    const previous = this.storage.getWorldRevision() ?? "none";
+    this.storage.saveWorldRevision(stableId("world", reason, previous, this.stateFingerprint()));
+    this.rebuildLedger();
+  }
+
+  private rebuildLedger(): void {
+    const worldRevision = this.requireWorldRevision();
+    const changes = scenarios
+      .flatMap((scenario) => this.changesForScenario(scenario, worldRevision))
+      .sort(compareLedgerDrafts)
+      .map((change, index) => ({
+        ...change,
+        ledgerSequence: index + 1,
+        record: { ...change.record, changeSequence: index + 1 },
+      }));
+    this.storage.replaceSourceChanges(changes);
+    this.refreshSourceObjects();
+  }
+
+  private refreshSourceObjects(): void {
+    this.storage.replaceSourceObjects(this.projectCurrentSourceObjects(this.visibleLedgerEntries()));
+    this.storage.saveDatasetMetadata(this.buildDatasetMetadata());
+  }
+
+  private visibleLedgerEntries(): SourceChangeLedgerEntry[] {
+    return this.storage
+      .listSourceChanges()
+      .filter((change) => this.isChangeVisible(change))
+      .sort(compareChanges);
+  }
+
+  private currentSourceObjects(): SourceObjectProjection[] {
+    return this.projectCurrentSourceObjects(this.visibleLedgerEntries());
+  }
+
+  private projectCurrentSourceObjects(changes: SourceChangeLedgerEntry[]): SourceObjectProjection[] {
+    const bySource = new Map<string, SourceChangeLedgerEntry>();
+    for (const change of changes.sort(compareChanges)) {
+      bySource.set(sourceKey(change.sourceSystem, change.sourceId), change);
+    }
+    return [...bySource.values()].map((change) => ({
+      sourceKey: sourceKey(change.sourceSystem, change.sourceId),
+      worldRevision: change.worldRevision,
+      sourceSystem: change.sourceSystem,
+      sourceId: change.sourceId,
+      currentChangeId: change.changeId,
+      currentChangeType: change.changeType,
+      record: change.record,
+    }));
+  }
+
+  private isChangeVisible(change: SourceChangeLedgerEntry): boolean {
+    const scenario = this.requireScenario(change.scenarioId);
+    const event = scenario.events.find((candidate) => candidate.id === change.businessEventId);
+    if (!event) return false;
+    const state = this.requireState(change.scenarioId);
+    const eventVisible = Date.parse(change.sourceOccurredAt) <= Date.parse(state.currentTime) || state.triggeredEventIds.includes(event.id);
+    return eventVisible && Date.parse(change.changeOccurredAt) <= Date.parse(state.currentTime);
+  }
+
+  private changesForScenario(scenario: ScenarioDefinition, worldRevision: string): SourceChangeLedgerEntry[] {
     const state = this.requireState(scenario.id);
-    const elapsed = elapsedHours(state.startedAt, state.currentTime);
-    return scenario.events
-      .filter((event) => event.atHour <= elapsed || state.triggeredEventIds.includes(event.id))
-      .flatMap((event) =>
+    return this.instanceContextsForScenario(scenario).flatMap((instance) =>
+      scenario.events.flatMap((event) =>
         event.records.flatMap((template) => {
-          const changes = [materializeRecord(this.baseUrl, state, scenario, event, template, this.organization, "created")];
-          const mutationAt = template.updatedAfterHours === undefined ? undefined : addHours(addHours(state.startedAt, event.atHour), template.updatedAfterHours);
-          if (mutationAt && Date.parse(state.currentTime) >= Date.parse(mutationAt)) {
-            changes.push(materializeRecord(this.baseUrl, state, scenario, event, template, this.organization, "updated"));
-          }
-          return changes.map((record) => ({ changeId: record.changeId, sequence: record.changeSequence, record }));
+        const records = [materializeRecord(this.baseUrl, state, scenario, event, template, this.organization, instance, "created")];
+        if (template.updatedAfterHours !== undefined) {
+          records.push(materializeRecord(this.baseUrl, state, scenario, event, template, this.organization, instance, "updated"));
+        }
+        if (template.deletedAfterHours !== undefined) {
+          records.push(materializeRecord(this.baseUrl, state, scenario, event, template, this.organization, instance, "deleted"));
+        }
+          return records.map((record) => ledgerEntry(worldRevision, scenario, event, instance, template, record));
         }),
-      );
+      ),
+    );
   }
 
-  private recordsForScenario(scenario: ScenarioDefinition): SourceRecord[] {
+  private instanceContextsForScenario(scenario: ScenarioDefinition): ScenarioInstanceContext[] {
     const state = this.requireState(scenario.id);
-    const elapsed = elapsedHours(state.startedAt, state.currentTime);
-    return scenario.events
-      .filter((event) => event.atHour <= elapsed || state.triggeredEventIds.includes(event.id))
-      .flatMap((event) =>
-        event.records.map((template) => {
-          const occurredAt = addHours(state.startedAt, event.atHour);
-          const mutationAt = template.updatedAfterHours === undefined ? undefined : addHours(occurredAt, template.updatedAfterHours);
-          const currentChangeType: SourceChangeType = mutationAt && Date.parse(state.currentTime) >= Date.parse(mutationAt) ? "updated" : "created";
-          return materializeRecord(this.baseUrl, state, scenario, event, template, this.organization, currentChangeType);
-        }),
-      );
+    const count = INSTANCE_COUNTS[state.datasetSize];
+    const span = INSTANCE_SPANS_HOURS[state.datasetSize];
+    return Array.from({ length: count }, (_, index) => {
+      const account = INSTANCE_ACCOUNTS[hashNumber(state.seed, scenario.id, String(index), "account") % INSTANCE_ACCOUNTS.length]!;
+      const product = INSTANCE_PRODUCTS[hashNumber(state.seed, scenario.id, String(index), "product") % INSTANCE_PRODUCTS.length]!;
+      const project = INSTANCE_PROJECTS[hashNumber(state.seed, scenario.id, String(index), "project") % INSTANCE_PROJECTS.length]!;
+      const service = INSTANCE_SERVICES[hashNumber(state.seed, scenario.id, String(index), "service") % INSTANCE_SERVICES.length]!;
+      const suffix = index === 0 ? "default" : `${slug(account)}-${String(index + 1).padStart(2, "0")}`;
+      return {
+        scenarioPackId: scenario.id,
+        scenarioInstanceId: `${scenario.id}-${suffix}`,
+        instanceIndex: index,
+        label: `${scenario.title} - ${account}`,
+        seed: stableId("instance", state.seed, scenario.id, String(index)),
+        account,
+        product,
+        project,
+        service,
+        workstream: `${slug(project)}-${slug(service)}`,
+        timeOffsetHours: count <= 1 ? 0 : Math.floor((span * index) / count),
+      };
+    });
+  }
+
+  private buildDatasetMetadata(): DatasetMetadata {
+    const changes = this.storage.listSourceChanges();
+    const objects = this.storage.listSourceObjects();
+    const firstState = this.states()[0];
+    const countsBySourceSystem = Object.fromEntries(sourceSystems.map((source) => [source, 0])) as DatasetMetadata["countsBySourceSystem"];
+    for (const change of changes) countsBySourceSystem[change.sourceSystem] += 1;
+    return {
+      schemaVersion: "dataset-metadata.v1",
+      datasetId: stableId("dataset", this.stateFingerprint(), String(changes.length)),
+      seed: firstState?.seed ?? this.defaultSeed,
+      datasetSize: firstState?.datasetSize ?? this.defaultDatasetSize,
+      generatedAt: maxCurrentTime(this.states()),
+      scenarioPackCount: scenarios.length,
+      scenarioInstanceCount: this.scenarioInstances().length,
+      totalSourceChanges: changes.length,
+      totalSourceObjects: objects.length,
+      countsBySourceSystem,
+      worldRevision: this.requireWorldRevision(),
+    };
   }
 
   private recordReachedEvents(scenario: ScenarioDefinition, state: ScenarioState): void {
@@ -509,30 +707,58 @@ function materializeRecord(
   event: ScenarioEventTemplate,
   template: ScenarioRecordTemplate,
   organization: GeneratedOrganization,
+  instance: ScenarioInstanceContext,
   changeType: SourceChangeType,
 ): SourceRecord {
-  const occurredAt = addHours(state.startedAt, event.atHour);
-  const sourceId = stableId(template.sourceSystem, state.seed, organization.seed, scenario.id, event.id, template.id);
+  const occurredAt = addHours(state.startedAt, event.atHour + instance.timeOffsetHours);
+  const sourceId = stableId(template.sourceSystem, state.seed, organization.seed, scenario.id, instance.scenarioInstanceId, event.id, template.id);
+  const visibleAt = template.visibleAfterHours === undefined ? occurredAt : addHours(occurredAt, template.visibleAfterHours);
   const mutationAt = template.updatedAfterHours === undefined ? undefined : addHours(occurredAt, template.updatedAfterHours);
+  const deletionAt = template.deletedAfterHours === undefined ? undefined : addHours(occurredAt, template.deletedAfterHours);
   const isUpdatedChange = changeType === "updated";
-  const changeOccurredAt = isUpdatedChange && mutationAt ? mutationAt : occurredAt;
-  const actor = selectPersonForRole(organization, template.actorRoleTemplateId, `${scenario.id}:${event.id}:${template.id}:actor`);
+  const isDeletedChange = changeType === "deleted";
+  const changeOccurredAt = isDeletedChange && deletionAt ? deletionAt : isUpdatedChange && mutationAt ? mutationAt : visibleAt;
+  const actor = selectPersonForRole(organization, template.actorRoleTemplateId, `${scenario.id}:${instance.scenarioInstanceId}:${event.id}:${template.id}:actor`);
   const assignee = template.assignmentRoleTemplateId
-    ? selectPersonForRole(organization, template.assignmentRoleTemplateId, `${scenario.id}:${event.id}:${template.id}:assignee`)
+    ? selectPersonForRole(organization, template.assignmentRoleTemplateId, `${scenario.id}:${instance.scenarioInstanceId}:${event.id}:${template.id}:assignee`)
     : null;
+  const managerChain = managementChain(organization, assignee ?? actor);
+  const adapter = requireSourceAdapter(template.sourceSystem);
+  const adapterInput = {
+    baseUrl,
+    sourceId,
+    occurredAt,
+    changeOccurredAt,
+    changeType,
+    scenario,
+    event,
+    template,
+    state,
+    instance,
+    organization,
+    actor,
+    assignee,
+    managerChain,
+  };
+  const draft = changeType === "deleted" ? adapter.remove(adapterInput) : changeType === "updated" ? adapter.update(adapterInput) : adapter.create(adapterInput);
+  const validation = adapter.validatePayload(draft.rawPayload);
+  if (!validation.ok) throw new Error(`Invalid ${template.sourceSystem} payload for ${template.id}: ${validation.errors.join("; ")}`);
   const rawPayload: Record<string, unknown> = {
-    ...template.rawPayload,
+    ...draft.rawPayload,
     simulatorSourceId: sourceId,
+    simulatorScenarioPackId: scenario.id,
+    simulatorScenarioInstanceId: instance.scenarioInstanceId,
     scenarioTime: occurredAt,
     actorPersonId: actor.id,
     actorEmail: actor.email,
     assigneePersonId: assignee?.id ?? null,
     assigneeEmail: assignee?.email ?? null,
-    simulatorVersion: isUpdatedChange ? "updated" : "initial",
+    simulatorVersion: isDeletedChange ? "deleted" : isUpdatedChange ? "updated" : "initial",
   };
   if (isUpdatedChange && mutationAt) rawPayload.simulatorUpdatedAt = mutationAt;
+  if (isDeletedChange && deletionAt) rawPayload.simulatorDeletedAt = deletionAt;
+  if (isDeletedChange) rawPayload.tombstone = true;
 
-  const changeSequence = sequenceForChange(scenario, event, template, changeType);
   const record: SourceRecord = {
     schemaVersion: "source-record.v1",
     sourceSystem: template.sourceSystem,
@@ -540,13 +766,13 @@ function materializeRecord(
     objectType: template.objectType,
     occurredAt,
     title: template.title,
-    sourceUrl: `${baseUrl}/sim/${template.sourceSystem}/${sourceId}`,
+    sourceUrl: draft.sourceUrl,
     actorRef: actor.id,
     acl: template.acl,
     rawPayload,
     changeId: stableId("change", sourceId, changeType),
     changeType,
-    changeSequence,
+    changeSequence: 1,
     changeOccurredAt,
     correlation: {
       scenarioId: scenario.id,
@@ -556,7 +782,35 @@ function materializeRecord(
     },
   };
   if (isUpdatedChange && mutationAt) record.updatedAt = mutationAt;
+  if (isDeletedChange && deletionAt) record.updatedAt = deletionAt;
   return record;
+}
+
+function ledgerEntry(
+  worldRevision: string,
+  scenario: ScenarioDefinition,
+  event: ScenarioEventTemplate,
+  instance: ScenarioInstanceContext,
+  template: ScenarioRecordTemplate,
+  record: SourceRecord,
+): SourceChangeLedgerEntry {
+  return {
+    ledgerSequence: 0,
+    worldRevision,
+    changeId: record.changeId,
+    changeType: record.changeType,
+    sourceSystem: record.sourceSystem,
+    sourceId: record.sourceId,
+    changeOccurredAt: record.changeOccurredAt,
+    sourceOccurredAt: record.occurredAt,
+    scenarioId: scenario.id,
+    scenarioPackId: scenario.id,
+    scenarioInstanceId: instance.scenarioInstanceId,
+    businessEventId: event.id,
+    templateId: template.id,
+    record,
+    permissionScope: record.acl,
+  };
 }
 
 function canConnectionSee(record: SourceRecord, connection: SourceConnection): boolean {
@@ -590,20 +844,25 @@ function decodeCursor(cursor: string): CursorPayload {
   }
 }
 
-function appendUnique(existing: string[], additions: string[]): string[] {
-  const result = [...existing];
-  const seen = new Set(result);
-  for (const addition of additions) {
-    if (!seen.has(addition)) {
-      result.push(addition);
-      seen.add(addition);
-    }
-  }
-  return result;
+function sourceKey(sourceSystem: string, sourceId: string): string {
+  return `${sourceSystem}:${sourceId}`;
 }
 
-function compareChanges(left: SourceChange, right: SourceChange): number {
-  return left.sequence - right.sequence || left.changeId.localeCompare(right.changeId);
+function compareLedgerDrafts(left: SourceChangeLedgerEntry, right: SourceChangeLedgerEntry): number {
+  return (
+    Date.parse(left.changeOccurredAt) - Date.parse(right.changeOccurredAt) ||
+    Date.parse(left.sourceOccurredAt) - Date.parse(right.sourceOccurredAt) ||
+    left.scenarioPackId.localeCompare(right.scenarioPackId) ||
+    left.scenarioInstanceId.localeCompare(right.scenarioInstanceId) ||
+    left.businessEventId.localeCompare(right.businessEventId) ||
+    left.templateId.localeCompare(right.templateId) ||
+    left.changeType.localeCompare(right.changeType) ||
+    left.changeId.localeCompare(right.changeId)
+  );
+}
+
+function compareChanges(left: SourceChangeLedgerEntry, right: SourceChangeLedgerEntry): number {
+  return left.ledgerSequence - right.ledgerSequence || left.changeId.localeCompare(right.changeId);
 }
 
 function elapsedHours(start: string, end: string): number {
@@ -630,54 +889,30 @@ function logEntry(scenarioId: string, event: ScenarioEventTemplate, occurredAt: 
   };
 }
 
-function sequenceForChange(
-  scenario: ScenarioDefinition,
-  event: ScenarioEventTemplate,
-  template: ScenarioRecordTemplate,
-  changeType: SourceChangeType,
-): number {
-  const sequence = CHANGE_SEQUENCE_BY_KEY.get(changeKey(scenario.id, event.id, template.id, changeType));
-  if (!sequence) throw new Error(`Missing deterministic change sequence for ${scenario.id}/${event.id}/${template.id}/${changeType}`);
-  return sequence;
-}
-
-function buildChangeSequenceMap(): Map<string, number> {
-  const changes: Array<{ key: string; orderTime: number; scenarioId: string; eventId: string; templateId: string; changeType: SourceChangeType }> = [];
-  for (const scenario of scenarios) {
-    for (const event of scenario.events) {
-      for (const template of event.records) {
-        changes.push({ key: changeKey(scenario.id, event.id, template.id, "created"), orderTime: event.atHour, scenarioId: scenario.id, eventId: event.id, templateId: template.id, changeType: "created" });
-        if (template.updatedAfterHours !== undefined) {
-          changes.push({
-            key: changeKey(scenario.id, event.id, template.id, "updated"),
-            orderTime: event.atHour + template.updatedAfterHours,
-            scenarioId: scenario.id,
-            eventId: event.id,
-            templateId: template.id,
-            changeType: "updated",
-          });
-        }
-      }
-    }
+function managementChain(organization: GeneratedOrganization, person: Person): Person[] {
+  const peopleById = new Map(organization.people.map((candidate) => [candidate.id, candidate]));
+  const chain: Person[] = [];
+  let managerId = person.managerId;
+  while (managerId) {
+    const manager = peopleById.get(managerId);
+    if (!manager) break;
+    chain.push(manager);
+    managerId = manager.managerId;
   }
-  changes.sort(
-    (left, right) =>
-      left.orderTime - right.orderTime ||
-      left.scenarioId.localeCompare(right.scenarioId) ||
-      left.eventId.localeCompare(right.eventId) ||
-      left.templateId.localeCompare(right.templateId) ||
-      left.changeType.localeCompare(right.changeType),
-  );
-  return new Map(changes.map((change, index) => [change.key, index + 1]));
-}
-
-function changeKey(scenarioId: string, eventId: string, templateId: string, changeType: SourceChangeType): string {
-  return `${scenarioId}:${eventId}:${templateId}:${changeType}`;
+  return chain;
 }
 
 function stableId(prefix: string, ...parts: string[]): string {
   const digest = createHash("sha256").update(parts.join("|"), "utf8").digest("hex").slice(0, 16);
   return `${prefix}-${digest}`;
+}
+
+function hashNumber(...parts: string[]): number {
+  return Number.parseInt(createHash("sha256").update(parts.join("|"), "utf8").digest("hex").slice(0, 8), 16);
+}
+
+function slug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
 function clampNumber(value: number, min: number, max: number): number {

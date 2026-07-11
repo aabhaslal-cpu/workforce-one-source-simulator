@@ -1,65 +1,79 @@
 # Contract
 
-The external feed contract is `SourceFeedBatchV1`.
+The external connector feed contract is `SourceFeedBatchV1`.
 
 ```json
 {
   "schemaVersion": "source-feed.v1",
+  "cursorVersion": 3,
+  "worldRevision": "world-example",
   "connectionId": "conn-product-manager",
   "batchId": "batch-example",
   "generatedAt": "2026-07-10T20:00:00.000Z",
   "records": [],
-  "nextCursor": "opaque-v2-checkpoint",
+  "nextCursor": "opaque-v3-checkpoint",
   "hasMore": false
 }
 ```
 
-## Rules
+## Cursor Semantics
 
-- The simulator must not send a trusted Workforce One tenant ID.
-- Workforce One derives tenant from its configured connection.
-- Every record has a stable source system, source ID, object type, timestamp, raw provider payload, source URL, ACL, change metadata, correlation metadata, and schema version.
-- Each emitted change has `changeId`, `changeType`, `changeSequence`, and `changeOccurredAt`.
-- `updatedAt` appears only after the simulation clock reaches the deterministic source-object update time.
-- Updated source-object versions preserve the same `sourceSystem` and `sourceId`.
-- Cursors are opaque v2 checkpoints bound to one connection and are validated server-side.
-- A checkpoint represents consumed change IDs, not an offset in a dynamically sorted list.
-- The API returns a checkpoint cursor even when `hasMore` is false so a later poll can continue from it.
-- Re-requesting the same cursor returns the same page while scenario and organization state are unchanged.
-- A cursor issued for one connection cannot be used for another connection.
-- Continuing from a saved cursor after the simulation clock advances returns newly visible creates and updates without duplicates or skips.
-- Page size is bounded to 100 records.
-- The feed validates through Zod and the JSON Schema in `schemas/source-feed-batch.v1.json`.
-- Breaking changes require a new contract version.
+The cursor is opaque to clients. Internally it contains:
 
-## Person Context
+- `v: 3`
+- `connectionId`
+- `worldRevision`
+- `afterSequence`
 
-Records are authored by actual generated people. `actorRef` is a generated person ID, and raw payloads may include `actorPersonId`, `actorEmail`, `assigneePersonId`, and `assigneeEmail` for provider-shaped debugging.
+The cursor does not contain all consumed change IDs. It is bound to one connection and one world revision. Reusing it for another connection returns 400. Reusing it after a reset, destructive regeneration, or snapshot restore returns a clear stale-checkpoint 400.
+
+The server returns `nextCursor` even when `hasMore` is false so later polling can continue from the checkpoint.
+
+## Source Records
+
+Every record has:
+
+- stable source system and source ID
+- object type
+- source occurrence time
+- optional update time
+- title
+- simulator-owned `sourceUrl`
+- source ACL
+- provider-shaped `rawPayload`
+- `changeId`
+- `changeType`: `created`, `updated`, or `deleted`
+- deterministic `changeSequence`
+- change occurrence time
+- correlation metadata
+
+Records are authored by concrete generated people. Provider payloads include actor and assignee details where the source would normally expose them. Emails use `@example.test`.
 
 ## Auth
 
-- Connection feed and source deep links: `x-connection-secret` or `Authorization: Bearer <secret>`.
-- Admin controls and detailed catalog: `x-admin-api-key` or `Authorization: Bearer <admin-key>`.
+- Connector feed and source deep links use `x-connection-secret` or `Authorization: Bearer <secret>`.
+- Admin controls use `x-admin-api-key` or `Authorization: Bearer <admin-key>`.
 - Each connection credential resolves server-side to exactly one connection ID.
-- The authenticated connection ID must match the URL connection ID or the request returns 403.
-- Admin credentials must never work as connection credentials.
-- Admin and connection credentials must be different.
-- Known development credentials are rejected outside local development.
+- The URL connection ID must match the authenticated connection ID or the request returns 403.
+- Admin credentials are never accepted as connection credentials.
 
 ## Source Deep Links
 
-Every emitted `sourceUrl` points to:
+Every emitted `sourceUrl` resolves through:
 
 ```text
 GET /sim/{sourceSystem}/{sourceId}
 ```
 
-The endpoint returns the current fictional source object in a simulator-owned view. It requires connection authentication, returns 404 for unknown source objects, and returns 403 when the authenticated connection cannot see the object.
+The endpoint returns the current fictional source object in JSON or simple HTML. It requires connection authentication and enforces the same visibility checks as feeds.
 
-## Catalog Exposure
+## Admin Inspection
 
-The public catalog exposes only safe high-level metadata. Detailed people, teams, source identities, assignments, organization tree, and visibility comparison require admin authentication.
+Admin APIs expose scenario packs, scenario instances, source changes, source objects, source history, dataset metadata, organization relationships, and visibility comparison. These are simulator inspection surfaces and are not connector-feed fields.
 
-## Endpoints
+## Artifacts
 
-See `openapi/source-simulator.v1.yaml` for the source of truth.
+- Zod runtime schema: `src/contracts.ts`
+- JSON Schema: `schemas/source-feed-batch.v1.json`
+- OpenAPI: `openapi/source-simulator.v1.yaml`
+- Examples: `examples/*.json`

@@ -1,6 +1,6 @@
 # Deployment
 
-## Local
+## Local Development
 
 ```bash
 pnpm install
@@ -13,6 +13,7 @@ Local development defaults to SQLite durable storage at `.simulator/source-simul
 ## Verification
 
 ```bash
+pnpm install --frozen-lockfile
 pnpm run verify
 ```
 
@@ -28,37 +29,22 @@ pnpm run verify
 - `SIMULATOR_STORAGE_DRIVER`: `sqlite` or `memory` for development/test only.
 - `SIMULATOR_SQLITE_PATH`: SQLite file path for local durable state.
 - `SIMULATOR_ALLOW_EPHEMERAL_MEMORY`: must be `true` before local memory storage can be selected.
-- `DATABASE_URL`: reserved for future production durable adapters.
+- `DATABASE_URL`: reserved for a future proven Postgres adapter.
 
-## Local Development Credentials
+## SQLite Schema
 
-```bash
-curl -H 'x-admin-api-key: dev-admin-key' http://localhost:3000/v1/catalog/people
-curl -H 'x-connection-secret: dev-connection-secret:conn-product-manager' \
-  'http://localhost:3000/v1/connections/conn-product-manager/records?limit=5'
-```
+The local durable schema is documented in `migrations/001_initial.sql` and checked against `SQLiteSimulatorStorage` in tests.
 
-The development connection credential is still bound to one connection ID. There is no universal development connection secret.
+Tables:
 
-## Production-Like Fail Closed Rules
+- `scenario_states`
+- `organization_config`
+- `world_state`
+- `source_change_ledger`
+- `source_objects`
+- `dataset_metadata`
+- `snapshots`
 
-Preview, Vercel-like, and production runtimes refuse to start when:
+## Production-Like Behavior
 
-- `SIMULATOR_ADMIN_API_KEY` is missing.
-- `SIMULATOR_CONNECTION_CREDENTIALS` is missing or empty.
-- A known development admin or connection credential is configured.
-- An admin credential and connection credential are identical.
-- Memory storage is selected.
-- SQLite storage is selected or injected.
-- An injected simulator uses memory or SQLite storage.
-- Durable Postgres storage is unavailable or unproven.
-
-`DATABASE_URL` is reserved for a future Postgres adapter. In this milestone, setting a Postgres URL in a production-like runtime still fails closed because the adapter is not yet proven.
-
-## Vercel
-
-The repo includes `vercel.json` and `api/index.ts`, but this milestone does not claim durable Vercel deployment readiness. Without a proven production durable adapter, Vercel-like environments should fail closed rather than fall back to process memory.
-
-## Migrations
-
-Migration files live under `migrations/`. They document the durable schema shape expected for future production storage adapters. SQLite local persistence is implemented in `src/storage.ts` for scenario states, organization configuration, and snapshots.
+The repo includes Vercel routing files, but Milestone 2 does not claim durable production deployment readiness. Preview, production, and Vercel-like environments must fail closed until Milestone 3 proves Postgres durability.

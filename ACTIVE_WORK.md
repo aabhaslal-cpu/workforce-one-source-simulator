@@ -2,76 +2,67 @@
 
 ## Current Milestone
 
-Milestone 1: Core Simulator Platform, Contract, and Organization Graph.
+Milestone 2: Complete Department, Level, Source, and Scenario Coverage.
 
-## Status
+## Branch And Baseline
 
-Draft PR #1 is under Milestone 1 hardening review. Do not begin Milestone 2 from this branch.
+- Baseline main commit: `379ed22d77a94f303d7ce1e650431359faee5d90`.
+- Milestone 1 PR #1: merged into `main` before this work started.
+- Baseline verification before modifications: `pnpm install --frozen-lockfile` passed and `pnpm run verify` passed.
+- Baseline test count: 27 Vitest tests.
+- Working branch: `milestone-2/scenarios-and-sources`.
 
-Draft PR: https://github.com/aabhaslal-cpu/workforce-one-source-simulator/pull/1
+## Built In Milestone 2
 
-## What Is Built
+- Compact v3 cursor with `connectionId`, `worldRevision`, and `afterSequence`.
+- Durable source-change ledger, current source-object projection, world revision, and dataset metadata in SQLite storage.
+- Snapshot payloads include dataset metadata, world revision, source changes, and source objects. Restoring a snapshot restores business state, creates a new world revision, rebuilds the deterministic ledger/projection, and invalidates old cursors.
+- Modular adapters for Slack, Gmail, Calendar, Notion, Jira, Productboard, Amplitude, GitHub, PagerDuty, Salesforce, Gainsight, and Zendesk.
+- Ten scenario packs:
+  - `product-launch-readiness`
+  - `feature-adoption-lag`
+  - `roadmap-tradeoff`
+  - `reliability-incident`
+  - `migration-delivery-slip`
+  - `technical-debt-staffing-risk`
+  - `renewal-risk`
+  - `implementation-blocker`
+  - `expansion-opportunity`
+  - `major-cross-functional-product-release`
+- Deterministic scenario instances for small, medium, and large datasets.
+- Source lag, Slack edits, late email, corrected Amplitude metrics, delayed Salesforce changes, reopened Zendesk tickets, GitHub/Jira ordering differences, rescheduled meetings, restricted/archived pages, and deleted/tombstoned source objects.
+- Cross-functional project, account, launch, and incident memberships.
+- Dotted-line relationships that do not replace primary managers.
+- Admin APIs for scenario packs/instances, source objects/history, source changes, dataset generation/current/reset, and organization relationships.
+- Operator console controls for scenario packs/instances, dataset metadata/generation, source objects, source changes, and source history.
 
-- TypeScript service scaffold with strict compiler settings.
-- Deterministic simulation engine using seeded stable identities and injected simulation clock.
-- SourceFeedBatchV1 contract using Zod, JSON Schema, OpenAPI, and example payloads.
-- Configurable organization generator with uneven spans of control.
-- Actual generated people at IC, Manager, Director, and VP levels.
-- Cycle-free primary reporting hierarchy.
-- Manager and direct-report assignments.
-- Teams, work ownership, source identities, permission group memberships, and person-level source connections.
-- One fictional tenant: Acme Digital Operations.
-- Departments: Product, Engineering, Customer Success.
-- Role templates: the original 12 persona categories.
-- Connection-bound authentication where each credential resolves server-side to exactly one connection ID.
-- Admin-gated detailed catalog, organization tree, teams, source identities, assignments, and visibility comparison.
-- Safe unauthenticated catalog metadata only.
-- Permission-aware connection feeds and manifests.
-- Incremental source-change feed with opaque Zod-validated v2 checkpoint cursors and bounded page size.
-- Admin scenario and organization APIs with strict Zod request validation.
-- Snapshot and restore controls that preserve organization configuration.
-- Durable local SQLite storage for scenario state, organization configuration, and snapshots in development/test.
-- Temporal source updates represented as deterministic source-change mutations that do not appear before their update time.
-- Production-like runtime storage enforcement rejects memory, SQLite, injected memory storage, and injected simulators backed by local storage.
-- Organization replacement rejects configs that remove all generated people for role templates required by enabled scenarios.
-- Simulator-owned deep links at `/sim/{sourceSystem}/{sourceId}`.
-- Operator console organization section with tree, people filtering, person records, regeneration, and visibility comparison.
-- Tests for determinism, organization generation, hierarchy validation, saved checkpoint cursors, cursor retry/tampering, permissions, snapshots, authentication, production-like storage fail-closed behavior, public-route exposure, temporal updates, source deep links, SQLite persistence, and contract artifacts.
+## Dataset Counts
 
-## Milestone 1 Scenarios
+With the current deterministic implementation:
 
-- `product-launch-readiness`
-- `reliability-incident`
-- `renewal-risk`
+- Small: 131 source changes, 10 scenario instances.
+- Medium: 1,048 source changes, 80 scenario instances.
+- Large: 5,240 source changes, 400 scenario instances.
 
-## Implemented Source Families in Milestone 1
+## Verification Status
 
-The M1 engine emits provider-shaped payloads for Slack, Gmail, Calendar, Notion, Jira, Productboard, Amplitude, GitHub, PagerDuty, Salesforce, Gainsight, and Zendesk. Records are authored by actual generated people and include actor/assignee identifiers in raw payloads where applicable. Milestone 2 turns these into fuller adapter modules and completes all 10 scenario packs.
+Latest local verification in this working tree:
 
-## Verification
+- `pnpm run typecheck`: passed.
+- `pnpm run test`: passed, 36 tests.
+- `pnpm run lint`: passed.
+- `pnpm run build`: passed.
 
-Latest hardening verification at the time this file was refreshed:
-
-- GitHub Actions workflow: `ci`, run `29143621866`.
-- Verified head before documentation refresh: `db04571e7a0d749fb56fccd42804cd8b1077b8df`.
-- Result: success.
-- `pnpm run verify` completed successfully.
-- TypeScript typecheck passed.
-- Vitest passed 26 tests in `src/__tests__/simulator.test.ts`.
-- ESLint passed.
-- Build passed.
-
-Future sessions must re-check the latest PR head status before calling the PR merge-ready.
+Run `pnpm install --frozen-lockfile` and `pnpm run verify` again before final PR reporting.
 
 ## Known Limitations
 
-- Local durable storage is implemented with SQLite for development/test; production Postgres storage is not yet proven.
-- Production-like environments fail closed rather than silently using memory or SQLite when durable Postgres storage is unavailable/unproven.
-- Failure-mode controls, rate limiting, structured logging, and load testing remain Milestone 3 work.
-- Medium and large dataset expansion is deferred to Milestone 2.
-- Dotted-line relationships are modeled in the type system and docs but not yet richly generated.
-- The operator console is internal and intentionally simple.
+- Production Postgres storage is not implemented or proven. Production-like environments fail closed rather than using memory or SQLite.
+- Scenario instances share a pack-level scenario clock; instance timelines are deterministically offset inside that pack clock.
+- Provider adapters are simplified and simulator-owned. They are not complete vendor API clones.
+- The operator console is intentionally internal and utilitarian.
+- Rate limiting, load testing, structured operational logging, production deployment verification, and final integration hardening remain Milestone 3.
 
-## Next Starting Point
+## Milestone 3 Starting Point
 
-Finish Milestone 1 hardening only: keep PR #1 on the existing branch, refresh the PR body with the latest head SHA/counts/results after final CI, and decide merge readiness honestly. Milestone 2 should start only after Milestone 1 is merged and should preserve all existing contract and organization tests.
+Start Milestone 3 only after this Milestone 2 PR is reviewed and merged. Begin with a proven production Postgres adapter, deployment verification, rate limiting, logging, load tests, and connector-consumption runbooks.

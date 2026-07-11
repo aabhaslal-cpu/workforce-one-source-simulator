@@ -207,6 +207,8 @@ export function generateOrganization(input: OrganizationConfig = defaultOrganiza
     }
   }
 
+  applyCrossFunctionalRelationships(people, teams, reportingRelationships);
+
   const tree = buildTree(people);
   const validation = validateOrganization(people);
   return {
@@ -263,6 +265,126 @@ function connectionForPerson(person: Person, connectionId: string): SourceConnec
     allowedSources: [...sourceSystems],
     allowedGroups: [...person.groupMemberships],
   };
+}
+
+function applyCrossFunctionalRelationships(
+  people: Person[],
+  teams: Team[],
+  reportingRelationships: GeneratedOrganization["reportingRelationships"],
+): void {
+  const productManager = firstByRole(people, "role-product-manager");
+  const productDirector = firstByRole(people, "role-product-director");
+  const productVp = firstByRole(people, "role-product-vp");
+  const engineeringIc = firstByRole(people, "role-engineering-ic");
+  const engineeringManager = firstByRole(people, "role-engineering-manager");
+  const engineeringDirector = firstByRole(people, "role-engineering-director");
+  const csIc = firstByRole(people, "role-customer-success-ic");
+  const csManager = firstByRole(people, "role-customer-success-manager");
+  const csDirector = firstByRole(people, "role-customer-success-director");
+  const csVp = firstByRole(people, "role-customer-success-vp");
+
+  addProjectTeam(teams, "team-project-aurora", "Aurora Cross-Functional Release Team", "product", productManager?.id ?? null, [
+    productManager,
+    productDirector,
+    productVp,
+    engineeringIc,
+    engineeringManager,
+    engineeringDirector,
+    csIc,
+    csManager,
+    csDirector,
+  ]);
+  for (const person of [productManager, productDirector, productVp, engineeringIc, engineeringManager, engineeringDirector, csIc, csManager, csDirector]) {
+    addPersonScope(person, "project-aurora", { project: "aurora-release", product: "operations-control", workstream: "aurora-release" });
+  }
+
+  addProjectTeam(teams, "team-account-northstar", "Northstar Account Team", "customer_success", csManager?.id ?? null, [
+    csIc,
+    csManager,
+    csDirector,
+    csVp,
+    productManager,
+    engineeringManager,
+  ]);
+  for (const person of [csIc, csManager, csDirector, csVp, productManager, engineeringManager]) {
+    addPersonScope(person, "account-northstar", { account: "northstar-medical", workstream: "northstar-account" });
+  }
+
+  addProjectTeam(teams, "team-account-summit", "Summit Implementation Team", "customer_success", csManager?.id ?? null, [
+    csIc,
+    csManager,
+    productManager,
+    engineeringManager,
+  ]);
+  for (const person of [csIc, csManager, productManager, engineeringManager]) {
+    addPersonScope(person, "account-summit", { account: "summit-foods", workstream: "summit-implementation" });
+  }
+
+  addProjectTeam(teams, "team-incident-response", "Incident Response Roster", "engineering", engineeringManager?.id ?? null, [
+    engineeringIc,
+    engineeringManager,
+    engineeringDirector,
+    csManager,
+  ]);
+  for (const person of [engineeringIc, engineeringManager, engineeringDirector, csManager]) {
+    addPersonScope(person, "incident-response", { project: "incident-response", workstream: "incident-response" });
+  }
+
+  if (productDirector && engineeringManager) {
+    reportingRelationships.push({
+      managerId: productDirector.id,
+      reportId: engineeringManager.id,
+      relationshipType: "dotted_line",
+      context: "project-aurora release dependency",
+    });
+  }
+  if (csDirector && productManager) {
+    reportingRelationships.push({
+      managerId: csDirector.id,
+      reportId: productManager.id,
+      relationshipType: "dotted_line",
+      context: "northstar account product gap",
+    });
+  }
+}
+
+function firstByRole(people: Person[], roleTemplateId: string): Person | undefined {
+  return people.find((person) => person.roleTemplateId === roleTemplateId);
+}
+
+function addProjectTeam(
+  teams: Team[],
+  id: string,
+  name: string,
+  department: Department,
+  leadPersonId: string | null,
+  members: Array<Person | undefined>,
+): void {
+  const memberPersonIds = members.filter((person): person is Person => Boolean(person)).map((person) => person.id);
+  teams.push({
+    id,
+    name,
+    department,
+    level: "project",
+    leadPersonId,
+    parentTeamId: null,
+    memberPersonIds: [...new Set(memberPersonIds)],
+    responsibilityScopes: [id.replace("team-", "").replaceAll("-", ":")],
+  });
+}
+
+function addPersonScope(
+  person: Person | undefined,
+  group: string,
+  assignments: { project?: string; product?: string; account?: string; workstream?: string },
+): void {
+  if (!person) return;
+  pushUnique(person.groupMemberships, group);
+  if (assignments.project) pushUnique(person.assignedProjects, assignments.project);
+  if (assignments.product) pushUnique(person.assignedProducts, assignments.product);
+  if (assignments.account) pushUnique(person.assignedAccounts, assignments.account);
+  if (assignments.workstream) pushUnique(person.assignedWorkstreams, assignments.workstream);
+  pushUnique(person.permissionScopes, `group:${group}`);
 }
 
 function createPerson(
@@ -439,6 +561,10 @@ function addMember(teams: Team[], teamId: string, personId: string): void {
 function setLead(teams: Team[], teamId: string, personId: string): void {
   const team = teams.find((candidate) => candidate.id === teamId);
   if (team) team.leadPersonId = personId;
+}
+
+function pushUnique(values: string[], value: string): void {
+  if (!values.includes(value)) values.push(value);
 }
 
 function deterministicName(seed: string, key: string): string {

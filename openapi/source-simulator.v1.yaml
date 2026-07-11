@@ -25,6 +25,16 @@ paths:
       summary: List safe scenario metadata without source records
       responses:
         '200': { description: Scenario metadata }
+  /v1/catalog/scenario-packs:
+    get:
+      summary: List the 10 safe scenario-pack definitions without source records
+      responses:
+        '200': { description: Scenario pack metadata }
+  /v1/catalog/scenario-instances:
+    get:
+      summary: List deterministic scenario instances for the current dataset
+      responses:
+        '200': { description: Scenario instance metadata }
   /v1/catalog/seats:
     get:
       summary: List role templates retained from the original persona categories
@@ -117,7 +127,7 @@ paths:
         - name: cursor
           in: query
           required: false
-          description: Opaque v2 checkpoint cursor bound to this connection and representing consumed change IDs.
+          description: Opaque v3 checkpoint cursor bound to this connection and world revision. It contains a compact afterSequence watermark, not consumed IDs.
           schema: { type: string, maxLength: 65536 }
         - name: limit
           in: query
@@ -186,6 +196,20 @@ paths:
       responses:
         '200': { description: Organization summary }
         '400': { description: Invalid config or organization bounds }
+  /v1/admin/organization/relationships:
+    get:
+      summary: Inspect primary and dotted-line organization relationships
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Relationships }
+  /v1/admin/organization/preview:
+    get:
+      summary: Preview current organization counts
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Organization preview }
   /v1/admin/people/{personId}/records:
     get:
       summary: Inspect source records visible to one person
@@ -266,6 +290,122 @@ paths:
         - adminKey: []
       responses:
         '200': { description: Connections }
+  /v1/admin/scenario-instances:
+    post:
+      summary: Resolve or create a deterministic scenario instance for a pack
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Scenario instance }
+        '400': { description: Invalid scenario instance payload }
+  /v1/admin/scenario-instances/{instanceId}/reset:
+    post:
+      summary: Reset the pack state behind a scenario instance
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Scenario instance }
+  /v1/admin/scenario-instances/{instanceId}/advance:
+    post:
+      summary: Advance the pack clock behind a scenario instance
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Scenario instance }
+  /v1/admin/scenario-instances/{instanceId}/trigger:
+    post:
+      summary: Trigger an event for the pack behind a scenario instance
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Scenario instance }
+  /v1/admin/scenario-instances/{instanceId}/pause:
+    post:
+      summary: Pause the pack clock behind a scenario instance
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Scenario instance }
+  /v1/admin/scenario-instances/{instanceId}/resume:
+    post:
+      summary: Resume the pack clock behind a scenario instance
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Scenario instance }
+  /v1/admin/scenario-instances/{instanceId}:
+    get:
+      summary: Inspect one scenario instance
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Scenario instance detail }
+  /v1/admin/scenario-instances/{instanceId}/events:
+    get:
+      summary: Inspect event history for a scenario instance
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Scenario instance events }
+  /v1/admin/scenario-instances/{instanceId}/changes:
+    get:
+      summary: Inspect source changes for a scenario instance
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Scenario instance changes }
+  /v1/admin/source-objects:
+    get:
+      summary: Inspect current source-object projection
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Source objects }
+  /v1/admin/source-objects/{sourceSystem}/{sourceId}:
+    get:
+      summary: Inspect one current source object
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Source object }
+        '404': { description: Unknown source object }
+  /v1/admin/source-objects/{sourceSystem}/{sourceId}/history:
+    get:
+      summary: Inspect source-object change history
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Source object history }
+        '404': { description: Unknown source object }
+  /v1/admin/source-changes:
+    get:
+      summary: Inspect append-only source-change ledger
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Source changes }
+  /v1/admin/datasets/generate:
+    post:
+      summary: Generate deterministic small, medium, or large dataset
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Dataset metadata }
+        '400': { description: Invalid dataset payload }
+  /v1/admin/datasets/current:
+    get:
+      summary: Inspect current dataset metadata
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Dataset metadata }
+  /v1/admin/datasets/reset:
+    post:
+      summary: Reset dataset to default local seed and small size
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Dataset metadata }
   /v1/admin/snapshots:
     get:
       summary: List snapshots
@@ -307,9 +447,17 @@ components:
   schemas:
     SourceFeedBatchV1:
       type: object
-      required: [schemaVersion, connectionId, batchId, generatedAt, records, nextCursor, hasMore]
+      required: [schemaVersion, cursorVersion, worldRevision, connectionId, batchId, generatedAt, records, nextCursor, hasMore]
       properties:
         schemaVersion: { const: source-feed.v1 }
+        cursorVersion:
+          type: integer
+          enum: [3]
+          description: Incremental feed cursor contract version.
+        worldRevision:
+          type: string
+          minLength: 1
+          description: Current deterministic simulator world revision bound into each checkpoint cursor.
         connectionId: { type: string }
         batchId: { type: string }
         generatedAt: { type: string, format: date-time }

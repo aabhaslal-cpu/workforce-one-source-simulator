@@ -16,3 +16,25 @@ CREATE TABLE IF NOT EXISTS snapshots (
   created_at TEXT NOT NULL,
   snapshot_json TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS world_state (
+  id TEXT PRIMARY KEY CHECK (id = 'singleton'),
+  world_revision TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS dataset_metadata (
+  id TEXT PRIMARY KEY CHECK (id = 'singleton'),
+  metadata_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS source_change_ledger (
+  ledger_sequence INTEGER PRIMARY KEY,
+  world_revision TEXT NOT NULL,
+  change_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS source_objects (
+  source_key TEXT PRIMARY KEY,
+  world_revision TEXT NOT NULL,
+  object_json TEXT NOT NULL
+);

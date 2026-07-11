@@ -3,9 +3,11 @@
   "$id": "https://workforce-one-source-simulator.local/schemas/source-feed-batch.v1.json",
   "title": "SourceFeedBatchV1",
   "type": "object",
-  "required": ["schemaVersion", "connectionId", "batchId", "generatedAt", "records", "nextCursor", "hasMore"],
+  "required": ["schemaVersion", "cursorVersion", "worldRevision", "connectionId", "batchId", "generatedAt", "records", "nextCursor", "hasMore"],
   "properties": {
     "schemaVersion": { "const": "source-feed.v1" },
+    "cursorVersion": { "const": 3 },
+    "worldRevision": { "type": "string", "minLength": 1 },
     "connectionId": { "type": "string", "minLength": 1 },
     "batchId": { "type": "string", "minLength": 1 },
     "generatedAt": { "type": "string", "format": "date-time" },

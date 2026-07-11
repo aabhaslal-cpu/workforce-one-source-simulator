@@ -1,120 +1,57 @@
 # Milestones
 
-Use exactly three milestones. Smaller tasks are checklists inside these milestones, not new milestones.
+Use exactly three milestones. Smaller task lists are internal implementation phases, not new milestones.
 
-## Milestone 1: Core Simulator Platform and Contract
+## Milestone 1: Core Simulator Platform And Contract
 
-Purpose: prove the end-to-end simulator foundation plus a real organizational graph.
+Merged into `main` before Milestone 2 started.
 
-Required proof:
+Delivered:
 
-1. Reset a scenario.
-2. Advance simulation time.
-3. Generate source records.
-4. Retrieve records through an authenticated connection.
-5. Paginate with an opaque cursor.
-6. Retrieve only records authorized for that connection.
-7. Reset and reproduce the same records with the same seed.
-8. Generate a configurable organizational hierarchy.
-9. Select an IC, Manager, Director and VP.
-10. Prove each person has the correct manager, direct reports and source visibility.
-11. Prove the same seed and configuration reproduce the same organization.
-12. Prove connection credentials are bound to one server-side connection ID.
-13. Prove detailed organization/person/team APIs require admin authentication.
-14. Prove temporal source updates do not appear before their update time.
-15. Prove local SQLite state persists across engine recreation.
+- Standalone TypeScript/Hono service.
+- Deterministic organization generator with multiple people per role level.
+- Connection-bound authentication and admin-gated detailed catalog.
+- Safe public metadata catalog.
+- SourceFeedBatchV1, JSON Schema, OpenAPI, and examples.
+- Strict request validation.
+- Local SQLite persistence for core state.
+- Temporal updates, source deep links, snapshots, and operator console foundation.
+- Production-like fail-closed behavior for unsafe credentials/storage.
 
-Implemented in this draft:
+## Milestone 2: Complete Department, Level, Source, And Scenario Coverage
 
-- Repository scaffold.
-- Strict TypeScript setup.
-- Domain model.
-- Deterministic clock and stable IDs.
-- SourceFeedBatchV1.
-- JSON Schema and OpenAPI.
-- Connection-bound credential authentication.
-- Production-like secret validation and fail-closed startup behavior.
-- Cursor-based feed with Zod-validated cursor structure.
-- Pagination with bounded page size.
-- One tenant.
-- Twelve role templates.
-- Configurable organization generator.
-- Multiple people per role level.
-- Deterministic reporting hierarchy.
-- Cycle-free reporting-line validation.
-- Generated fictional identities under `@example.test`.
-- Manager and direct-report relationships.
-- Team and work ownership assignments.
-- Admin-gated organization catalog APIs.
-- Safe public catalog metadata.
-- Organization tree in the operator console.
-- Person-level source visibility inspection.
-- Permission model independent from reporting hierarchy.
-- Admin scenario and organization APIs with strict request validation.
-- Snapshot and restore.
-- Durable local SQLite storage for scenario states, organization configuration, and snapshots.
-- Temporal source update gating.
-- Simulator-owned source deep links.
-- Minimal operator console.
-- One scenario per department.
-- Tests for determinism, organization generation, hierarchy validation, cursors, permissions, snapshots, auth, production fail-closed behavior, public-route exposure, temporal updates, deep links, SQLite persistence, and contract artifacts.
+Current branch: `milestone-2/scenarios-and-sources`.
 
-## Milestone 2: Complete Department, Level, Source and Scenario Coverage
+Delivered in this draft:
 
-Purpose: broaden from the vertical slice into the complete simulation matrix.
+- Compact v3 cursor over an append-only deterministic source-change ledger.
+- Durable world revision, source-change ledger, current source-object projection, and dataset metadata.
+- Modular source adapters for all 12 required source systems.
+- Ten scenario packs across Product, Engineering, Customer Success, and cross-functional release work.
+- Deterministic small, medium, and large datasets.
+- Concrete generated people on source artifacts.
+- Cross-functional project, account, launch, and incident memberships.
+- Dotted-line relationships that do not replace primary managers.
+- Source lag, updates, deleted/tombstoned objects, corrected metrics, reschedules, reopened support tickets, and conflicting source evidence.
+- Admin APIs and operator console expansion for datasets, scenario instances, source changes, source objects, source history, and organization relationships.
+- Tests covering ledger/cursor behavior, adapters, scenarios, datasets, relationships, APIs, SQLite persistence, and existing Milestone 1 protections.
 
-Deliver:
+Acceptance target: Workforce One can ingest a coherent fictional company source surface with different evidence at IC, Manager, Director, and VP levels, without the simulator generating Workforce One conclusions.
 
-- Complete multi-person hierarchies for Product, Engineering, and Customer Success at larger configured sizes.
-- Configurable and uneven spans of control across teams.
-- Actual people assigned to every generated source record.
-- Organization-aware communication patterns by IC, Manager, Director, and VP level.
-- Manager rollups and escalations.
-- Cross-functional project membership.
-- Direct and dotted-line relationships.
-- Person-to-person visibility comparison in the operator console.
-- Tests covering reporting hierarchy, assignment, and permission propagation.
-- All 10 required scenario packs.
-- Full source adapter modules for Slack, Gmail, Calendar, Notion, Jira, Productboard, Amplitude, GitHub, PagerDuty, Salesforce, Gainsight, and Zendesk-style support.
-- Full Product, Engineering, and Customer Success coverage.
-- Record edits, deletions, reschedules, late arrivals, lag, and conflicting information.
-- Medium and large dataset modes.
-- Improved operator inspection.
-- Scenario event log and visibility inspection.
-- Tests for every source and scenario.
+## Milestone 3: Production Hardening And Workforce One Integration Readiness
 
-Acceptance: the same fictional event appears differently across several source systems and organizational levels while preserving coherent chronology, reporting structure, assignments, and permissions.
+Not started.
 
-## Milestone 3: Production Hardening and Workforce One Integration Readiness
+Milestone 3 should begin with:
 
-Purpose: make the simulator deployable and safe for future connector consumption.
-
-Deliver:
-
+- Proven production Postgres storage adapter.
+- Deployment verification and runbooks.
+- Rate limiting.
 - Failure simulation controls.
-- Auth failure behavior beyond M1's credential binding tests.
-- Rate limiting behavior.
-- Stale and invalid cursor behavior.
-- Partial sync behavior.
+- Structured safe logging and operational telemetry.
 - Load and performance tests.
-- Safe logging and error handling.
-- Proven production Postgres storage adapter and deployment verification.
-- Vercel deployment configuration and runbook capture.
-- CI workflow hardening.
-- Health checks.
-- Migration verification.
-- Contract compatibility fixtures.
-- Sample client.
-- Example Workforce One connector request and response.
+- Partial sync/failure compatibility fixtures.
+- Sample connector client and integration runbook.
 - Final security and architecture review.
-- Deployment and integration runbooks.
 
-Acceptance: a deployed endpoint can be consumed by a future Workforce One simulator connector without sharing code or databases.
-
-## PR Workflow
-
-- `milestone-1/core-simulator-platform`
-- `milestone-2/scenarios-and-sources`
-- `milestone-3/integration-hardening`
-
-Use one draft PR per milestone. Do not auto-merge.
+Do not claim production durable deployment readiness before Milestone 3 proves it.

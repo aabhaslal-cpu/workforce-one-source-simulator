@@ -1,5 +1,7 @@
 {
   "schemaVersion": "source-feed.v1",
+  "cursorVersion": 3,
+  "worldRevision": "world-example",
   "connectionId": "conn-product-manager",
   "batchId": "batch-example-product",
   "generatedAt": "2026-07-10T20:00:00.000Z",
@@ -28,6 +30,6 @@
       }
     }
   ],
-  "nextCursor": "opaque-v2-checkpoint-example",
+  "nextCursor": "opaque-v3-checkpoint-example",
   "hasMore": false
 }

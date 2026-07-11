@@ -7,8 +7,10 @@ import { describe, expect, it } from "vitest";
 import { SourceFeedBatchV1Schema } from "../contracts.js";
 import { SourceSimulator } from "../engine.js";
 import { createApp } from "../app.js";
+import { sourceAdapters } from "../adapters/registry.js";
 import { defaultOrganizationConfig, personConnectionId } from "../organization.js";
 import { MemorySimulatorStorage, SQLiteSimulatorStorage } from "../storage.js";
+import { sourceSystems } from "../domain.js";
 
 type TestSQLiteStatement = {
   all(...parameters: unknown[]): unknown[];
@@ -61,6 +63,10 @@ function developmentConnectionHeaders(connectionId: string) {
   return connectionHeaders(`dev-connection-secret:${connectionId}`);
 }
 
+function decodeCursor(cursor: string) {
+  return JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Record<string, unknown>;
+}
+
 function cloneDefaultOrganizationConfig() {
   return JSON.parse(JSON.stringify(defaultOrganizationConfig));
 }
@@ -88,10 +94,14 @@ function openTestSQLiteDatabase(filename: string): TestSQLiteDatabase {
 }
 
 function durableTableSql(database: TestSQLiteDatabase): Record<string, string> {
-  const rows = database.prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'table' AND name IN (?, ?, ?) ORDER BY name").all(
+  const rows = database.prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'table' AND name IN (?, ?, ?, ?, ?, ?, ?) ORDER BY name").all(
     "scenario_states",
     "organization_config",
     "snapshots",
+    "world_state",
+    "source_change_ledger",
+    "source_objects",
+    "dataset_metadata",
   ) as Array<{ name: string; sql: string }>;
   return Object.fromEntries(rows.map((row) => [row.name, normalizeSql(row.sql)]));
 }
@@ -172,6 +182,29 @@ describe("SourceSimulator", () => {
     expect(first.nextCursor).toEqual(expect.any(String));
     expect(second.records.map((record) => record.changeId)).toEqual(retry.records.map((record) => record.changeId));
     expect(new Set([...first.records, ...second.records].map((record) => record.changeId)).size).toBe(4);
+  });
+
+  it("uses a compact v3 checkpoint cursor even for large ledgers", () => {
+    const simulator = new SourceSimulator({ seed: "large-cursor-seed", datasetSize: "large" });
+    const first = simulator.feed("conn-product-manager", undefined, 100);
+    const cursorPayload = decodeCursor(first.nextCursor);
+
+    expect(simulator.datasetMetadata().totalSourceChanges).toBeGreaterThanOrEqual(5_000);
+    expect(first.nextCursor.length).toBeLessThan(256);
+    expect(cursorPayload).toMatchObject({
+      v: 3,
+      connectionId: "conn-product-manager",
+      worldRevision: simulator.datasetMetadata().worldRevision,
+    });
+    expect(cursorPayload.consumedChangeIds).toBeUndefined();
+  });
+
+  it("rejects stale cursors after a world revision change", () => {
+    const simulator = new SourceSimulator({ seed: "stale-cursor-seed" });
+    const first = simulator.feed("conn-product-manager", undefined, 10);
+    simulator.resetScenario("product-launch-readiness", { seed: "new-scenario-seed" });
+
+    expect(() => simulator.feed("conn-product-manager", first.nextCursor, 10)).toThrow("Stale checkpoint");
   });
 
   it("continues from a saved change checkpoint after new creates and updates", () => {
@@ -281,6 +314,88 @@ describe("SourceSimulator", () => {
     expect(afterUpdate?.sourceId).toBe(initial?.sourceId);
     expect(afterUpdate?.updatedAt).toBe("2026-07-11T00:00:00.000Z");
     expect(afterUpdate?.changeType).toBe("updated");
+  });
+
+  it("preserves source identity across created, updated, and deleted history entries", () => {
+    const simulator = new SourceSimulator({ seed: "history-seed" });
+    const deletedChange = simulator.sourceChanges().find((change) => change.record.title === "Deferred retry remediation item" && change.changeType === "deleted");
+    expect(deletedChange).toBeDefined();
+
+    const history = simulator.sourceObjectHistory(deletedChange!.sourceSystem, deletedChange!.sourceId);
+    expect(history.map((change) => change.sourceId)).toEqual(history.map(() => deletedChange!.sourceId));
+    expect(history.map((change) => change.changeType)).toEqual(["created", "deleted"]);
+  });
+});
+
+describe("Milestone 2 scenario packs and adapters", () => {
+  it("registers all required source adapters and validates emitted provider payloads", () => {
+    const simulator = new SourceSimulator({ seed: "adapter-seed" });
+    expect(sourceAdapters.map((adapter) => adapter.sourceSystem).sort()).toEqual([...sourceSystems].sort());
+
+    for (const adapter of sourceAdapters) {
+      const change = simulator.sourceChanges().find((candidate) => candidate.sourceSystem === adapter.sourceSystem);
+      expect(change, adapter.sourceSystem).toBeDefined();
+      expect(adapter.validatePayload(change!.record.rawPayload)).toEqual({ ok: true, errors: [] });
+      expect(change!.record.rawPayload.actor).toMatchObject({ id: expect.any(String), email: expect.stringContaining("@example.test") });
+      expect(adapter.buildSourceUrl({ baseUrl: "http://sim.test", sourceId: "source-123" })).toBe(
+        `http://sim.test/sim/${adapter.sourceSystem}/source-123`,
+      );
+    }
+  });
+
+  it("covers all ten scenario packs, departments, levels, and source systems", () => {
+    const simulator = new SourceSimulator({ seed: "pack-seed" });
+    const packs = simulator.scenarioPacks();
+    const unionSources = new Set(packs.flatMap((pack) => pack.sourceSystems));
+    const unionRoles = new Set(packs.flatMap((pack) => pack.participantRoleTemplateCount));
+
+    expect(packs.map((pack) => pack.scenarioPackId)).toEqual([
+      "product-launch-readiness",
+      "feature-adoption-lag",
+      "roadmap-tradeoff",
+      "reliability-incident",
+      "migration-delivery-slip",
+      "technical-debt-staffing-risk",
+      "renewal-risk",
+      "implementation-blocker",
+      "expansion-opportunity",
+      "major-cross-functional-product-release",
+    ]);
+    expect([...unionSources].sort()).toEqual([...sourceSystems].sort());
+    expect(simulator.organizationSummary().counts.byRoleLevel).toMatchObject({ ic: expect.any(Number), manager: expect.any(Number), director: expect.any(Number), vp: expect.any(Number) });
+    expect([...unionRoles].length).toBeGreaterThan(0);
+  });
+
+  it("generates deterministic dataset sizes inside documented change-count ranges", () => {
+    const small = new SourceSimulator({ seed: "dataset-seed", datasetSize: "small" }).datasetMetadata();
+    const medium = new SourceSimulator({ seed: "dataset-seed", datasetSize: "medium" }).datasetMetadata();
+    const mediumReplay = new SourceSimulator({ seed: "dataset-seed", datasetSize: "medium" }).datasetMetadata();
+    const large = new SourceSimulator({ seed: "dataset-seed", datasetSize: "large" }).datasetMetadata();
+
+    expect(small.totalSourceChanges).toBeGreaterThanOrEqual(100);
+    expect(small.totalSourceChanges).toBeLessThanOrEqual(250);
+    expect(medium.totalSourceChanges).toBeGreaterThanOrEqual(1_000);
+    expect(medium.totalSourceChanges).toBeLessThanOrEqual(2_500);
+    expect(large.totalSourceChanges).toBeGreaterThanOrEqual(5_000);
+    expect(large.totalSourceChanges).toBeLessThanOrEqual(10_000);
+    expect(medium).toEqual(mediumReplay);
+  });
+
+  it("keeps cross-functional relationships explicit and separate from primary reporting", () => {
+    const simulator = new SourceSimulator({ seed: "relationship-seed" });
+    const relationships = simulator.organizationRelationships().relationships;
+    const dotted = relationships.filter((relationship) => relationship.relationshipType === "dotted_line");
+    const primary = relationships.filter((relationship) => relationship.relationshipType === "primary");
+    const peopleById = new Map(simulator.people().map((person) => [person.id, person]));
+
+    expect(dotted.length).toBeGreaterThanOrEqual(2);
+    for (const relationship of dotted) {
+      expect(peopleById.get(relationship.reportId)?.managerId).not.toBe(relationship.managerId);
+    }
+    for (const person of simulator.people().filter((candidate) => candidate.managerId)) {
+      expect(primary.filter((relationship) => relationship.reportId === person.id)).toHaveLength(1);
+    }
+    expect(simulator.teams().some((team) => team.id === "team-project-aurora" && team.level === "project")).toBe(true);
   });
 });
 
@@ -565,6 +680,47 @@ describe("source deep links", () => {
   });
 });
 
+describe("Milestone 2 admin APIs", () => {
+  it("exposes scenario packs, instances, dataset metadata, and source history through admin routes", async () => {
+    const { app } = credentialedApp(new SourceSimulator({ seed: "api-m2-seed", datasetSize: "medium", baseUrl: "http://sim.test" }));
+
+    const packs = await app.request("/v1/catalog/scenario-packs");
+    expect(packs.status).toBe(200);
+    expect((await packs.json()).scenarioPacks).toHaveLength(10);
+
+    const instances = await app.request("/v1/catalog/scenario-instances");
+    const instanceBody = await instances.json();
+    expect(instanceBody.scenarioInstances).toHaveLength(80);
+
+    const dataset = await app.request("/v1/admin/datasets/current", { headers: adminHeaders() });
+    expect((await dataset.json()).totalSourceChanges).toBeGreaterThanOrEqual(1_000);
+
+    const sourceObjects = await app.request("/v1/admin/source-objects", { headers: adminHeaders() });
+    const object = (await sourceObjects.json()).sourceObjects[0];
+    const history = await app.request(`/v1/admin/source-objects/${object.sourceSystem}/${object.sourceId}/history`, { headers: adminHeaders() });
+    expect((await history.json()).history[0].sourceId).toBe(object.sourceId);
+  });
+
+  it("generates and resets datasets through bounded admin endpoints", async () => {
+    const { app } = credentialedApp();
+    const generated = await app.request("/v1/admin/datasets/generate", {
+      method: "POST",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ seed: "dataset-api-seed", datasetSize: "large" }),
+    });
+    expect(generated.status).toBe(200);
+    expect((await generated.json()).totalSourceChanges).toBeGreaterThanOrEqual(5_000);
+
+    const reset = await app.request("/v1/admin/datasets/reset", {
+      method: "POST",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(reset.status).toBe(200);
+    expect((await reset.json()).datasetSize).toBe("small");
+  });
+});
+
 describe("SQLite storage", () => {
   it("keeps the migration schema aligned with the runtime SQLite schema", async () => {
     const migrationSql = await readFile(new URL("../../migrations/001_initial.sql", import.meta.url), "utf8");
@@ -577,9 +733,13 @@ describe("SQLite storage", () => {
     try {
       migrationDatabase.exec(migrationSql);
       const expectedSchema = {
+        dataset_metadata: "CREATE TABLE dataset_metadata ( id TEXT PRIMARY KEY CHECK (id = 'singleton'), metadata_json TEXT NOT NULL )",
         organization_config: "CREATE TABLE organization_config ( id TEXT PRIMARY KEY CHECK (id = 'singleton'), config_json TEXT NOT NULL )",
         scenario_states: "CREATE TABLE scenario_states ( scenario_id TEXT PRIMARY KEY, state_json TEXT NOT NULL )",
+        source_change_ledger: "CREATE TABLE source_change_ledger ( ledger_sequence INTEGER PRIMARY KEY, world_revision TEXT NOT NULL, change_json TEXT NOT NULL )",
+        source_objects: "CREATE TABLE source_objects ( source_key TEXT PRIMARY KEY, world_revision TEXT NOT NULL, object_json TEXT NOT NULL )",
         snapshots: "CREATE TABLE snapshots ( snapshot_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, snapshot_json TEXT NOT NULL )",
+        world_state: "CREATE TABLE world_state ( id TEXT PRIMARY KEY CHECK (id = 'singleton'), world_revision TEXT NOT NULL )",
       };
       expect(durableTableSql(migrationDatabase)).toEqual(expectedSchema);
       expect(durableTableSql(runtimeDatabase)).toEqual(expectedSchema);
@@ -597,6 +757,8 @@ describe("SQLite storage", () => {
     first.regenerateOrganization({ seed: "sqlite-org-seed" });
     const snapshot = first.createSnapshot();
     const stateBefore = first.state("product-launch-readiness");
+    const metadataBefore = first.datasetMetadata();
+    const firstCursor = first.feed("conn-product-manager", undefined, 10).nextCursor;
     firstStorage.close();
 
     const secondStorage = new SQLiteSimulatorStorage(databasePath);
@@ -604,6 +766,9 @@ describe("SQLite storage", () => {
     expect(second.state("product-launch-readiness").currentTime).toBe(stateBefore.currentTime);
     expect(second.organizationSummary().seed).toBe("sqlite-org-seed");
     expect(second.listSnapshots().map((candidate) => candidate.snapshotId)).toContain(snapshot.snapshotId);
+    expect(second.datasetMetadata()).toEqual(metadataBefore);
+    expect(second.feed("conn-product-manager", firstCursor, 10).worldRevision).toBe(metadataBefore.worldRevision);
+    expect(second.sourceChanges().length).toBe(metadataBefore.totalSourceChanges);
     secondStorage.close();
   });
 });

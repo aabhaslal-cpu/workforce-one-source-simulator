@@ -160,6 +160,34 @@ export interface SourceRecord {
   };
 }
 
+export interface SourceChangeLedgerEntry {
+  ledgerSequence: number;
+  worldRevision: string;
+  changeId: string;
+  changeType: SourceChangeType;
+  sourceSystem: SourceSystem;
+  sourceId: string;
+  changeOccurredAt: string;
+  sourceOccurredAt: string;
+  scenarioId: string;
+  scenarioPackId: string;
+  scenarioInstanceId: string;
+  businessEventId: string;
+  templateId: string;
+  record: SourceRecord;
+  permissionScope: Acl;
+}
+
+export interface SourceObjectProjection {
+  sourceKey: string;
+  worldRevision: string;
+  sourceSystem: SourceSystem;
+  sourceId: string;
+  currentChangeId: string;
+  currentChangeType: SourceChangeType;
+  record: SourceRecord;
+}
+
 export interface ScenarioRecordTemplate {
   id: string;
   sourceSystem: SourceSystem;
@@ -169,7 +197,9 @@ export interface ScenarioRecordTemplate {
   assignmentRoleTemplateId?: string;
   acl: Acl;
   rawPayload: Record<string, unknown>;
+  visibleAfterHours?: number;
   updatedAfterHours?: number;
+  deletedAfterHours?: number;
 }
 
 export interface ScenarioEventTemplate {
@@ -188,6 +218,34 @@ export interface ScenarioDefinition {
   participantRoleTemplateIds: string[];
   sourceSystems: SourceSystem[];
   events: ScenarioEventTemplate[];
+}
+
+export interface ScenarioInstanceContext {
+  scenarioPackId: string;
+  scenarioInstanceId: string;
+  instanceIndex: number;
+  label: string;
+  seed: string;
+  account: string;
+  product: string;
+  project: string;
+  service: string;
+  workstream: string;
+  timeOffsetHours: number;
+}
+
+export interface DatasetMetadata {
+  schemaVersion: "dataset-metadata.v1";
+  datasetId: string;
+  seed: string;
+  datasetSize: DatasetSize;
+  generatedAt: string;
+  scenarioPackCount: number;
+  scenarioInstanceCount: number;
+  totalSourceChanges: number;
+  totalSourceObjects: number;
+  countsBySourceSystem: Record<SourceSystem, number>;
+  worldRevision: string;
 }
 
 export interface ScenarioEventLogEntry {
@@ -215,4 +273,8 @@ export interface Snapshot {
   states: ScenarioState[];
   organizationSeed: string;
   organizationConfig: OrganizationConfig;
+  datasetMetadata?: DatasetMetadata;
+  worldRevision?: string;
+  sourceChanges?: SourceChangeLedgerEntry[];
+  sourceObjects?: SourceObjectProjection[];
 }

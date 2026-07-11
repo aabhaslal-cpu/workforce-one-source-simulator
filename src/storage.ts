@@ -1,7 +1,14 @@
 import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
-import type { OrganizationConfig, ScenarioState, Snapshot } from "./domain.js";
+import type {
+  DatasetMetadata,
+  OrganizationConfig,
+  ScenarioState,
+  Snapshot,
+  SourceChangeLedgerEntry,
+  SourceObjectProjection,
+} from "./domain.js";
 
 export type StorageKind = "memory" | "sqlite" | "postgres";
 
@@ -31,6 +38,14 @@ export interface SimulatorStorage {
   replaceScenarioStates(states: ScenarioState[]): void;
   getOrganizationConfig(): OrganizationConfig | undefined;
   saveOrganizationConfig(config: OrganizationConfig): void;
+  getDatasetMetadata(): DatasetMetadata | undefined;
+  saveDatasetMetadata(metadata: DatasetMetadata): void;
+  getWorldRevision(): string | undefined;
+  saveWorldRevision(worldRevision: string): void;
+  listSourceChanges(): SourceChangeLedgerEntry[];
+  replaceSourceChanges(changes: SourceChangeLedgerEntry[]): void;
+  listSourceObjects(): SourceObjectProjection[];
+  replaceSourceObjects(objects: SourceObjectProjection[]): void;
   createSnapshot(snapshot: Snapshot): void;
   getSnapshot(snapshotId: string): Snapshot | undefined;
   listSnapshots(): Snapshot[];
@@ -41,7 +56,11 @@ export class MemorySimulatorStorage implements SimulatorStorage {
   readonly kind = "memory" as const;
   private readonly states = new Map<string, ScenarioState>();
   private readonly snapshots = new Map<string, Snapshot>();
+  private readonly sourceChanges: SourceChangeLedgerEntry[] = [];
+  private readonly sourceObjects = new Map<string, SourceObjectProjection>();
   private organizationConfig: OrganizationConfig | undefined;
+  private datasetMetadata: DatasetMetadata | undefined;
+  private worldRevision: string | undefined;
 
   listScenarioStates(): ScenarioState[] {
     return [...this.states.values()].map(cloneState);
@@ -69,6 +88,41 @@ export class MemorySimulatorStorage implements SimulatorStorage {
 
   saveOrganizationConfig(config: OrganizationConfig): void {
     this.organizationConfig = cloneJson(config);
+  }
+
+  getDatasetMetadata(): DatasetMetadata | undefined {
+    return this.datasetMetadata ? cloneJson(this.datasetMetadata) : undefined;
+  }
+
+  saveDatasetMetadata(metadata: DatasetMetadata): void {
+    this.datasetMetadata = cloneJson(metadata);
+  }
+
+  getWorldRevision(): string | undefined {
+    return this.worldRevision;
+  }
+
+  saveWorldRevision(worldRevision: string): void {
+    this.worldRevision = worldRevision;
+  }
+
+  listSourceChanges(): SourceChangeLedgerEntry[] {
+    return this.sourceChanges.map((change) => cloneJson(change));
+  }
+
+  replaceSourceChanges(changes: SourceChangeLedgerEntry[]): void {
+    this.sourceChanges.splice(0, this.sourceChanges.length, ...changes.map((change) => cloneJson(change)));
+  }
+
+  listSourceObjects(): SourceObjectProjection[] {
+    return [...this.sourceObjects.values()].map((object) => cloneJson(object));
+  }
+
+  replaceSourceObjects(objects: SourceObjectProjection[]): void {
+    this.sourceObjects.clear();
+    for (const object of objects) {
+      this.sourceObjects.set(object.sourceKey, cloneJson(object));
+    }
   }
 
   createSnapshot(snapshot: Snapshot): void {
@@ -110,6 +164,24 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
         snapshot_id TEXT PRIMARY KEY,
         created_at TEXT NOT NULL,
         snapshot_json TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS world_state (
+        id TEXT PRIMARY KEY CHECK (id = 'singleton'),
+        world_revision TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS dataset_metadata (
+        id TEXT PRIMARY KEY CHECK (id = 'singleton'),
+        metadata_json TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS source_change_ledger (
+        ledger_sequence INTEGER PRIMARY KEY,
+        world_revision TEXT NOT NULL,
+        change_json TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS source_objects (
+        source_key TEXT PRIMARY KEY,
+        world_revision TEXT NOT NULL,
+        object_json TEXT NOT NULL
       );
     `);
   }
@@ -166,6 +238,84 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
          ON CONFLICT(id) DO UPDATE SET config_json = excluded.config_json`,
       )
       .run(JSON.stringify(config));
+  }
+
+  getDatasetMetadata(): DatasetMetadata | undefined {
+    const row = this.database.prepare("SELECT metadata_json FROM dataset_metadata WHERE id = 'singleton'").get() as
+      | { metadata_json: string }
+      | undefined;
+    return row ? parseJson<DatasetMetadata>(row.metadata_json) : undefined;
+  }
+
+  saveDatasetMetadata(metadata: DatasetMetadata): void {
+    this.database
+      .prepare(
+        `INSERT INTO dataset_metadata (id, metadata_json)
+         VALUES ('singleton', ?)
+         ON CONFLICT(id) DO UPDATE SET metadata_json = excluded.metadata_json`,
+      )
+      .run(JSON.stringify(metadata));
+  }
+
+  getWorldRevision(): string | undefined {
+    const row = this.database.prepare("SELECT world_revision FROM world_state WHERE id = 'singleton'").get() as
+      | { world_revision: string }
+      | undefined;
+    return row?.world_revision;
+  }
+
+  saveWorldRevision(worldRevision: string): void {
+    this.database
+      .prepare(
+        `INSERT INTO world_state (id, world_revision)
+         VALUES ('singleton', ?)
+         ON CONFLICT(id) DO UPDATE SET world_revision = excluded.world_revision`,
+      )
+      .run(worldRevision);
+  }
+
+  listSourceChanges(): SourceChangeLedgerEntry[] {
+    const rows = this.database.prepare("SELECT change_json FROM source_change_ledger ORDER BY ledger_sequence").all() as Array<{
+      change_json: string;
+    }>;
+    return rows.map((row) => parseJson<SourceChangeLedgerEntry>(row.change_json));
+  }
+
+  replaceSourceChanges(changes: SourceChangeLedgerEntry[]): void {
+    this.database.exec("BEGIN");
+    try {
+      this.database.prepare("DELETE FROM source_change_ledger").run();
+      const statement = this.database.prepare(
+        "INSERT INTO source_change_ledger (ledger_sequence, world_revision, change_json) VALUES (?, ?, ?)",
+      );
+      for (const change of changes) {
+        statement.run(change.ledgerSequence, change.worldRevision, JSON.stringify(change));
+      }
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  listSourceObjects(): SourceObjectProjection[] {
+    const rows = this.database.prepare("SELECT object_json FROM source_objects ORDER BY source_key").all() as Array<{ object_json: string }>;
+    return rows.map((row) => parseJson<SourceObjectProjection>(row.object_json));
+  }
+
+  replaceSourceObjects(objects: SourceObjectProjection[]): void {
+    this.database.exec("BEGIN");
+    try {
+      this.database.prepare("DELETE FROM source_objects").run();
+      const statement = this.database.prepare("INSERT INTO source_objects (source_key, world_revision, object_json) VALUES (?, ?, ?)");
+      for (const object of objects) {
+        statement.run(object.sourceKey, object.worldRevision, JSON.stringify(object));
+      }
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   createSnapshot(snapshot: Snapshot): void {

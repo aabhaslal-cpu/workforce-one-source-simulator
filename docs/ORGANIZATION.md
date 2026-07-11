@@ -1,91 +1,52 @@
 # Organization Graph
 
-The simulator models a real organization with multiple generated people at every level. The 12 persona categories are role templates, not the maximum number of users.
-
-## Core Rule
-
-Reporting hierarchy and source permissions are related but separate models. A Director may manage multiple teams, but record visibility still comes from source memberships, permission groups, meetings, summaries, escalations, shared channels, and explicit portfolio access.
+The simulator models a real fictional organization with multiple generated people at every level.
 
 ## Generated Objects
 
 - Person
-- RoleTemplate
-- RoleLevel
+- Role template
 - Department
 - Team
-- ReportingRelationship
-- ManagerAssignment
-- DirectReportAssignment
-- ResponsibilityScope
-- WorkOwnership
-- AccountAssignment
-- ProjectAssignment
-- SourceMembership
-- PermissionGroupMembership
+- Primary reporting relationship
+- Dotted-line relationship
+- Project membership
+- Account membership
+- Launch membership
+- Incident responder membership
+- Source identity
+- Permission group membership
+- Product, project, account, and workstream ownership
 
-Every generated person has:
+Emails use `@example.test`.
 
-- stable person ID
-- fictional name
-- fictional `@example.test` email
-- department
-- role title
-- role level
-- team
-- manager ID, except organizational roots
-- direct-report IDs
-- source-system identities
-- group memberships
-- assigned projects, products, accounts, or workstreams
-- permission scopes
+## Default Shape
 
-## Default Template
+The default organization is uneven and configurable:
 
-The default organization uses uneven spans of control. Four ICs per manager is a default, not a hard rule. Examples include Product managers with 3 or 5 ICs and Engineering managers with 7 ICs.
+- Product: 1 VP, 2 Directors, 2 Managers per Director, 3-5 ICs per Manager.
+- Engineering: 1 VP, 2 Directors, 3 Managers per Director, 4-7 ICs per Manager.
+- Customer Success: 1 VP, 2 Directors, 2-3 Managers per Director, 4-5 ICs per Manager.
 
-```json
-{
-  "departments": {
-    "product": { "vpCount": 1, "directorsPerVp": 2, "managersPerDirector": 2, "icsPerManager": 4 },
-    "engineering": { "vpCount": 1, "directorsPerVp": 2, "managersPerDirector": 3, "icsPerManager": 5 },
-    "customer_success": { "vpCount": 1, "directorsPerVp": 2, "managersPerDirector": 2, "icsPerManager": 4 }
-  }
-}
-```
+Overrides are available through `customDirectorsPerVp`, `customManagersPerDirector`, and `customIcsPerManager`.
 
-Overrides are available through `customDirectorsPerVp`, `customManagersPerDirector`, and `customIcsPerManager` maps.
+## Relationships
 
-## Bounds
+Primary reporting lines are cycle-free. Every non-root person has exactly one primary manager.
 
-Organization generation is validated before replacement:
+Milestone 2 adds explicit cross-functional relationships:
 
-- VPs per department: maximum 3.
-- Directors per VP: maximum 8.
-- Managers per Director: maximum 10.
-- ICs per Manager: maximum 25.
-- Total generated people: maximum 500.
+- `team-project-aurora`
+- `team-account-northstar`
+- `team-account-summit`
+- `team-incident-response`
+- dotted-line release and account-gap relationships
 
-These caps protect the operator API from accidental oversized generations. They can be revisited in a later performance/load milestone.
-
-Organization replacement also checks compatibility with enabled Milestone 1 scenarios. Configurations that remove every generated person for a required role template return 400 instead of being accepted and failing later during scenario materialization.
-
-## Reporting Rules
-
-- ICs may report to Managers.
-- Managers may report to Directors.
-- Directors may report to VPs.
-- VPs may be organizational roots.
-- Every non-root person has exactly one primary manager.
-- A manager may have zero or more direct reports.
-- Reporting relationships must be cycle-free.
-- Cross-functional project membership does not change the primary reporting line.
-- Dotted-line relationships may be added separately and must not silently replace the primary manager.
+These memberships add permission groups and work assignments but do not change primary managers.
 
 ## APIs
 
-Detailed organization APIs require admin authentication because they expose source identities, assignments, reporting lines, and visibility-related metadata.
-
-Catalog:
+Detailed organization APIs require admin authentication:
 
 - `GET /v1/catalog/people`
 - `GET /v1/catalog/people/{personId}`
@@ -93,20 +54,11 @@ Catalog:
 - `GET /v1/catalog/organization/tree`
 - `GET /v1/catalog/teams`
 - `GET /v1/catalog/teams/{teamId}`
-
-Admin:
-
+- `GET /v1/admin/organization/relationships`
+- `GET /v1/admin/organization/preview`
 - `POST /v1/admin/organization/generate`
 - `POST /v1/admin/organization/reset`
 - `GET /v1/admin/organization/config`
 - `PUT /v1/admin/organization/config`
 - `GET /v1/admin/people/{personId}/records`
 - `GET /v1/admin/people/{personId}/compare/{otherPersonId}`
-
-The public catalog exposes only safe metadata such as source systems, contract version, scenario names, role-template count, and aggregate organization counts.
-
-Person-specific connection IDs are derived from organizational stable keys so current generated people have predictable bindings after regeneration. Role alias connections such as `conn-product-manager` remain predictable. Credential material is never returned by catalog or admin APIs.
-
-## Operator UI
-
-The console includes an Organization section for tree inspection, filters, search, person detail, source visibility, person-to-person visibility comparison, seed-based regeneration, and reset. It uses admin authentication for detailed organization reads.

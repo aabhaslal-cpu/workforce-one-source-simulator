@@ -1,58 +1,50 @@
 # Security
 
-The simulator contains fictional data, but it models production-like boundaries.
+The simulator contains fictional data, but it preserves production-like boundaries.
 
-## Implemented
+## Auth
 
-- Admin and connection credentials are separate credential classes.
+- Admin and connection credentials are separate classes.
 - Each connection credential resolves server-side to exactly one connection ID.
-- A valid credential for connection A receives 403 when used against connection B's URL.
+- A credential for connection A receives 403 when used against connection B's URL.
 - Admin credentials are not accepted as connection credentials.
 - Unknown and revoked connection credentials fail closed.
-- No client-chosen tenant, person, role, department, or permission scope is trusted.
-- Permission filtering happens before pagination output.
-- Detailed people, teams, organization tree, source identities, assignments, and visibility comparison require admin authentication.
-- The unauthenticated catalog exposes only safe high-level metadata.
-- Known local development credentials are rejected in production-like environments.
-- Missing admin credentials, missing connection credentials, identical admin/connection credentials, memory storage, SQLite storage, and local-storage fallback are rejected in production-like environments.
-- Injected app storage and injected simulator instances cannot bypass production-like storage enforcement.
-- No real credentials or routable emails appear in scenario data.
-- Source URLs are simulator links and contain no secrets.
-- Source deep links require connection authentication and enforce source-object visibility.
-- Failed auth returns generic errors.
-- Request bodies, pagination, organization generation, cursor structure, snapshot operations, and time advancement are bounded and validated.
+- Credential material is never emitted through public or admin APIs.
 
-## Local Development Credentials
+## Authorization
 
-Local development may use the documented fictional admin key:
+- Public catalog routes expose safe metadata only.
+- Detailed people, organization, team, relationship, source, dataset, and visibility routes require admin auth.
+- Connector feeds and `/sim/{sourceSystem}/{sourceId}` require connection auth.
+- Source deep links enforce the same visibility rules as source feeds.
+- Reporting hierarchy does not automatically grant record access.
+- Cross-department access requires explicit source ACL/group membership.
 
-```text
-x-admin-api-key: dev-admin-key
-```
+## Production-Like Fail Closed
 
-Local connection credentials are connection-bound, not universal:
+Preview, production, and Vercel-like runtimes reject:
 
-```text
-x-connection-secret: dev-connection-secret:<connectionId>
-```
+- missing admin credentials
+- missing or empty connection credential maps
+- known development credentials
+- identical admin and connection credentials
+- memory storage
+- SQLite storage
+- injected local-storage simulators
 
-For example, `dev-connection-secret:conn-product-manager` may access only `conn-product-manager`.
+Production Postgres remains unproven. Production-like startup fails closed until Milestone 3 provides a proven adapter.
 
-## Production-Like Requirements
+## Data Safety
 
-Preview, Vercel-like, and production runtimes must set:
+- Generated people are fictional.
+- Emails use `@example.test`.
+- Customers, repositories, tickets, and accounts are fictional simulator entities.
+- Source URLs are simulator-owned links and contain no secrets.
 
-- `SIMULATOR_ADMIN_API_KEY` to a strong non-development secret.
-- `SIMULATOR_CONNECTION_CREDENTIALS` to a JSON object mapping each credential to the one connection ID it authenticates.
-- `SIMULATOR_PUBLIC_BASE_URL` to the deployed origin.
-- Proven durable Postgres storage. Memory and SQLite storage are forbidden.
-
-Do not set `dev-admin-key`, `dev-connection-secret`, or `dev-connection-secret:<connectionId>` in production-like environments.
-
-## Deferred to Milestone 3
+## Deferred To Milestone 3
 
 - Rate limiting.
-- Safe structured logging.
+- Structured security logging.
 - Load testing.
-- Proven production Postgres adapter and runbook.
-- Final security review.
+- Production Postgres verification.
+- Final deployment security review.
