@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://workforce-one-source-simulator.local/schemas/source-feed-batch.v1.json",
+  "title": "SourceFeedBatchV1",
+  "type": "object",
+  "required": ["schemaVersion", "connectionId", "batchId", "generatedAt", "records", "nextCursor", "hasMore"],
+  "properties": {
+    "schemaVersion": { "const": "source-feed.v1" },
+    "connectionId": { "type": "string", "minLength": 1 },
+    "batchId": { "type": "string", "minLength": 1 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "records": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/sourceRecord" }
+    },
+    "nextCursor": { "type": ["string", "null"] },
+    "hasMore": { "type": "boolean" }
+  },
+  "$defs": {
+    "acl": {
+      "type": "object",
+      "required": ["visibility", "groups", "users"],
+      "properties": {
+        "visibility": { "enum": ["public", "group", "restricted", "private"] },
+        "groups": { "type": "array", "items": { "type": "string" } },
+        "users": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "sourceRecord": {
+      "type": "object",
+      "required": ["schemaVersion", "sourceSystem", "sourceId", "objectType", "occurredAt", "title", "sourceUrl", "acl", "rawPayload", "correlation"],
+      "properties": {
+        "schemaVersion": { "const": "source-record.v1" },
+        "sourceSystem": { "type": "string" },
+        "sourceId": { "type": "string" },
+        "objectType": { "type": "string" },
+        "occurredAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "title": { "type": "string" },
+        "sourceUrl": { "type": "string" },
+        "actorRef": { "type": "string" },
+        "acl": { "$ref": "#/$defs/acl" },
+        "rawPayload": { "type": "object" },
+        "correlation": { "type": "object" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
