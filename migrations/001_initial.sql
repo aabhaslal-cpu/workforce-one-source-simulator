@@ -6,6 +6,12 @@ CREATE TABLE IF NOT EXISTS scenario_states (
   state_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS scenario_instance_states (
+  scenario_instance_id TEXT PRIMARY KEY,
+  scenario_pack_id TEXT NOT NULL,
+  state_json TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS organization_config (
   id TEXT PRIMARY KEY CHECK (id = 'singleton'),
   config_json TEXT NOT NULL

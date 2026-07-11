@@ -32,6 +32,7 @@ Supports:
 - scenario pack list
 - scenario instance list
 - scenario instance detail
+- independent instance advance/reset/trigger/pause/resume
 
 ## Sources And Dataset
 

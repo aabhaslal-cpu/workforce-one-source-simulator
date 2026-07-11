@@ -234,6 +234,8 @@ export interface ScenarioInstanceContext {
   timeOffsetHours: number;
 }
 
+export type ScenarioCompletionState = "active" | "completed";
+
 export interface DatasetMetadata {
   schemaVersion: "dataset-metadata.v1";
   datasetId: string;
@@ -250,6 +252,7 @@ export interface DatasetMetadata {
 
 export interface ScenarioEventLogEntry {
   scenarioId: string;
+  scenarioInstanceId?: string;
   eventId: string;
   label: string;
   occurredAt: string;
@@ -267,14 +270,24 @@ export interface ScenarioState {
   eventLog: ScenarioEventLogEntry[];
 }
 
+export interface ScenarioInstanceState extends ScenarioInstanceContext {
+  seed: string;
+  datasetSize: DatasetSize;
+  startedAt: string;
+  currentTime: string;
+  paused: boolean;
+  triggeredEventIds: string[];
+  eventLog: ScenarioEventLogEntry[];
+  completionState: ScenarioCompletionState;
+  participantPersonIds: Record<string, string>;
+}
+
 export interface Snapshot {
   snapshotId: string;
   createdAt: string;
-  states: ScenarioState[];
+  instanceStates: ScenarioInstanceState[];
   organizationSeed: string;
   organizationConfig: OrganizationConfig;
   datasetMetadata?: DatasetMetadata;
   worldRevision?: string;
-  sourceChanges?: SourceChangeLedgerEntry[];
-  sourceObjects?: SourceObjectProjection[];
 }

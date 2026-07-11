@@ -14,8 +14,8 @@ The simulator returns source records. Workforce One derives evidence, provenance
 4. The simulator rejects a URL connection ID mismatch with 403.
 5. The connector calls `/v1/connections/{connectionId}/records`.
 6. Workforce One stores the opaque v3 `nextCursor`.
-7. Later polls send the same cursor and receive only later authorized changes for the same world revision.
-8. If the world revision changed, Workforce One receives a stale-checkpoint 400 and must perform an intentional reset/reseed flow.
+7. Later polls send the same cursor and receive only later authorized changes for the same world revision. Normal scenario time advancement and manual triggers append to the same world revision.
+8. If the world revision changed because of scenario instance reset/delete, dataset generation, organization regeneration, or snapshot restore, Workforce One receives a stale-checkpoint 400 and must perform an intentional reset/reseed flow.
 9. Workforce One may fetch simulator `sourceUrl` links with the same connection credential.
 
 ## Cursor
@@ -30,6 +30,8 @@ The cursor is not an offset and does not contain consumed change IDs. It is a co
   "afterSequence": 1452
 }
 ```
+
+The source-change ledger contains occurred changes only. Workforce One should not depend on admin/debug routes for future planned events.
 
 ## Do Not Do
 

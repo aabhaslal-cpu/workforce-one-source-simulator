@@ -32,9 +32,12 @@ paths:
         '200': { description: Scenario pack metadata }
   /v1/catalog/scenario-instances:
     get:
-      summary: List deterministic scenario instances for the current dataset
+      summary: List persisted scenario instances for the current dataset
+      security:
+        - adminKey: []
       responses:
         '200': { description: Scenario instance metadata }
+        '401': { description: Unauthorized }
   /v1/catalog/seats:
     get:
       summary: List role templates retained from the original persona categories
@@ -292,47 +295,74 @@ paths:
         '200': { description: Connections }
   /v1/admin/scenario-instances:
     post:
-      summary: Resolve or create a deterministic scenario instance for a pack
+      summary: Create a new persisted scenario instance from a reusable pack template
       security:
         - adminKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scenarioPackId]
+              additionalProperties: false
+              properties:
+                scenarioPackId: { type: string, minLength: 1, maxLength: 128 }
+                scenarioInstanceId: { type: string, minLength: 1, maxLength: 160 }
+                seed: { type: string, minLength: 1, maxLength: 128 }
+                datasetSize: { enum: [small, medium, large] }
+                startTime: { type: string, format: date-time }
+                account: { type: string, minLength: 1, maxLength: 160 }
+                product: { type: string, minLength: 1, maxLength: 160 }
+                project: { type: string, minLength: 1, maxLength: 160 }
+                service: { type: string, minLength: 1, maxLength: 160 }
+                workstream: { type: string, minLength: 1, maxLength: 160 }
+                participantPersonIds:
+                  type: object
+                  additionalProperties: { type: string, minLength: 1, maxLength: 160 }
       responses:
         '200': { description: Scenario instance }
-        '400': { description: Invalid scenario instance payload }
+        '400': { description: Invalid scenario instance payload, duplicate ID, or unknown scenario pack }
   /v1/admin/scenario-instances/{instanceId}/reset:
     post:
-      summary: Reset the pack state behind a scenario instance
+      summary: Reset one scenario instance and rotate world revision
       security:
         - adminKey: []
       responses:
         '200': { description: Scenario instance }
+        '404': { description: Unknown scenario instance }
   /v1/admin/scenario-instances/{instanceId}/advance:
     post:
-      summary: Advance the pack clock behind a scenario instance
+      summary: Advance one scenario instance without rotating world revision
       security:
         - adminKey: []
       responses:
         '200': { description: Scenario instance }
+        '404': { description: Unknown scenario instance }
   /v1/admin/scenario-instances/{instanceId}/trigger:
     post:
-      summary: Trigger an event for the pack behind a scenario instance
+      summary: Trigger one event for one scenario instance without rotating world revision
       security:
         - adminKey: []
       responses:
         '200': { description: Scenario instance }
+        '404': { description: Unknown scenario instance or event }
   /v1/admin/scenario-instances/{instanceId}/pause:
     post:
-      summary: Pause the pack clock behind a scenario instance
+      summary: Pause one scenario instance
       security:
         - adminKey: []
       responses:
         '200': { description: Scenario instance }
+        '404': { description: Unknown scenario instance }
   /v1/admin/scenario-instances/{instanceId}/resume:
     post:
-      summary: Resume the pack clock behind a scenario instance
+      summary: Resume one scenario instance
       security:
         - adminKey: []
       responses:
         '200': { description: Scenario instance }
+        '404': { description: Unknown scenario instance }
   /v1/admin/scenario-instances/{instanceId}:
     get:
       summary: Inspect one scenario instance
@@ -340,6 +370,14 @@ paths:
         - adminKey: []
       responses:
         '200': { description: Scenario instance detail }
+        '404': { description: Unknown scenario instance }
+    delete:
+      summary: Delete one scenario instance and rotate world revision
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Deleted scenario instance summary }
+        '404': { description: Unknown scenario instance }
   /v1/admin/scenario-instances/{instanceId}/events:
     get:
       summary: Inspect event history for a scenario instance
@@ -379,7 +417,7 @@ paths:
         '404': { description: Unknown source object }
   /v1/admin/source-changes:
     get:
-      summary: Inspect append-only source-change ledger
+      summary: Inspect occurred-only append source-change ledger
       security:
         - adminKey: []
       responses:

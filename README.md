@@ -19,10 +19,13 @@ Built:
 - Safe public catalog metadata only.
 - Modular source adapters for Slack, Gmail, Calendar, Notion, Jira, Productboard, Amplitude-style analytics, GitHub, PagerDuty-style incidents, Salesforce, Gainsight-style customer success, and Zendesk-style support.
 - Ten scenario packs covering launch readiness, adoption lag, roadmap tradeoff, incident response, delivery slip, technical debt/staffing risk, renewal risk, implementation blocker, expansion opportunity, and major cross-functional release.
+- Persisted scenario instance state. Packs are reusable templates; instances hold their own seed, dataset size, clock, pause state, events, completion state, participants, and account/project/product/service/workstream context.
 - Compact v3 source feed cursor over a deterministic source-change ledger: connection ID, world revision, and `afterSequence`.
+- Occurred-only durable source-change ledger. Normal time advancement appends newly reached changes without rotating world revision.
+- Destructive scenario instance reset/delete, dataset generation, organization regeneration, and snapshot restore atomically reconstruct the world and rotate world revision.
 - Source updates, late arrivals, corrected analytics, reschedules, archived/deleted objects, and conflicting partial evidence.
 - Small, medium, and large deterministic datasets.
-- SQLite local persistence for scenario states, organization config, world revision, source-change ledger, current source-object projection, dataset metadata, and snapshots.
+- SQLite local persistence for scenario instance states, legacy scenario states, organization config, world revision, source-change ledger, current source-object projection, dataset metadata, and snapshots.
 - Simulator-owned source deep links at `/sim/{sourceSystem}/{sourceId}` with the same connection visibility checks as feeds.
 - Internal operator console at `/console`.
 
@@ -51,6 +54,7 @@ Examples:
 curl http://localhost:3000/healthz
 curl http://localhost:3000/v1/catalog
 curl http://localhost:3000/v1/catalog/scenario-packs
+curl -H 'x-admin-api-key: dev-admin-key' http://localhost:3000/v1/catalog/scenario-instances
 curl -H 'x-admin-api-key: dev-admin-key' http://localhost:3000/v1/admin/datasets/current
 curl -H 'x-admin-api-key: dev-admin-key' http://localhost:3000/v1/admin/source-changes
 curl -H 'x-connection-secret: dev-connection-secret:conn-product-manager' \
@@ -73,7 +77,7 @@ pnpm install --frozen-lockfile
 pnpm run verify
 ```
 
-At this Milestone 2 draft state, the local suite has 36 Vitest tests.
+At this Milestone 2 draft state, the local suite has 45 Vitest tests.
 
 ## Deployment Honesty
 

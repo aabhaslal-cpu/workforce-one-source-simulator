@@ -30,6 +30,8 @@ The default organization is uneven and configurable:
 
 Overrides are available through `customDirectorsPerVp`, `customManagersPerDirector`, and `customIcsPerManager`.
 
+Organization config is validated against enabled scenario requirements before it is accepted. A config that removes all people for a role required by scenario packs is rejected with a 400 instead of being allowed to fail later during materialization.
+
 ## Relationships
 
 Primary reporting lines are cycle-free. Every non-root person has exactly one primary manager.

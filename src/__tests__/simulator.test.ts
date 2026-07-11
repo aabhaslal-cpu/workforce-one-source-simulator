@@ -27,8 +27,15 @@ const require = createRequire(import.meta.url);
 function advancedSimulator(seed = "test-seed") {
   const simulator = new SourceSimulator({ seed, baseUrl: "http://sim.test" });
   simulator.advanceScenario("product-launch-readiness", { hours: 48 });
+  simulator.triggerScenarioEvent("product-launch-readiness", "exec-pressure");
   simulator.advanceScenario("reliability-incident", { hours: 48 });
   simulator.advanceScenario("renewal-risk", { hours: 48 });
+  return simulator;
+}
+
+function completedDatasetSimulator(seed = "dataset-seed", datasetSize: "small" | "medium" | "large" = "small") {
+  const simulator = new SourceSimulator({ seed, datasetSize, baseUrl: "http://sim.test" });
+  simulator.generateDataset({ seed, datasetSize });
   return simulator;
 }
 
@@ -94,8 +101,9 @@ function openTestSQLiteDatabase(filename: string): TestSQLiteDatabase {
 }
 
 function durableTableSql(database: TestSQLiteDatabase): Record<string, string> {
-  const rows = database.prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'table' AND name IN (?, ?, ?, ?, ?, ?, ?) ORDER BY name").all(
+  const rows = database.prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'table' AND name IN (?, ?, ?, ?, ?, ?, ?, ?) ORDER BY name").all(
     "scenario_states",
+    "scenario_instance_states",
     "organization_config",
     "snapshots",
     "world_state",
@@ -108,6 +116,16 @@ function durableTableSql(database: TestSQLiteDatabase): Record<string, string> {
 
 function normalizeSql(sql: string): string {
   return sql.replace(/\s+/g, " ").trim();
+}
+
+function storageWorldSnapshot(simulator: SourceSimulator) {
+  return {
+    worldRevision: simulator.datasetMetadata().worldRevision,
+    metadata: simulator.datasetMetadata(),
+    instanceStates: simulator.states(),
+    sourceChanges: simulator.sourceChanges(),
+    sourceObjects: simulator.sourceObjects(),
+  };
 }
 
 describe("organization generation", () => {
@@ -185,7 +203,7 @@ describe("SourceSimulator", () => {
   });
 
   it("uses a compact v3 checkpoint cursor even for large ledgers", () => {
-    const simulator = new SourceSimulator({ seed: "large-cursor-seed", datasetSize: "large" });
+    const simulator = completedDatasetSimulator("large-cursor-seed", "large");
     const first = simulator.feed("conn-product-manager", undefined, 100);
     const cursorPayload = decodeCursor(first.nextCursor);
 
@@ -233,6 +251,90 @@ describe("SourceSimulator", () => {
     expect(simulator.feed("conn-product-manager", updatedPage.nextCursor, 100).records).toEqual([]);
   });
 
+  it("keeps same-pack scenario instances independent across advance, trigger, pause, reset, delete, and recreate", () => {
+    const simulator = new SourceSimulator({ seed: "instance-independence-seed", baseUrl: "http://sim.test" });
+    simulator.createScenarioInstance({
+      scenarioPackId: "product-launch-readiness",
+      scenarioInstanceId: "independent-a",
+      seed: "instance-a-seed",
+      account: "Alpha Medical",
+    });
+    simulator.createScenarioInstance({
+      scenarioPackId: "product-launch-readiness",
+      scenarioInstanceId: "independent-b",
+      seed: "instance-b-seed",
+      account: "Beta Foods",
+    });
+    const bInitial = simulator.scenarioInstance("independent-b").state;
+
+    simulator.advanceScenarioInstance("independent-a", { hours: 24 });
+    expect(simulator.scenarioInstance("independent-a").state.currentTime).not.toBe(bInitial.currentTime);
+    expect(simulator.scenarioInstance("independent-b").state.currentTime).toBe(bInitial.currentTime);
+
+    simulator.triggerScenarioInstanceEvent("independent-a", "exec-pressure");
+    expect(simulator.scenarioInstance("independent-a").state.triggeredEventIds).toContain("exec-pressure");
+    expect(simulator.scenarioInstance("independent-b").state.triggeredEventIds).not.toContain("exec-pressure");
+
+    simulator.pauseScenarioInstance("independent-a");
+    const pausedA = simulator.scenarioInstance("independent-a").state;
+    simulator.advanceScenarioInstance("independent-a", { hours: 12 });
+    simulator.advanceScenarioInstance("independent-b", { hours: 8 });
+    expect(simulator.scenarioInstance("independent-a").state.currentTime).toBe(pausedA.currentTime);
+    expect(simulator.scenarioInstance("independent-b").state.currentTime).not.toBe(bInitial.currentTime);
+
+    const bBeforeReset = simulator.scenarioInstance("independent-b").state;
+    simulator.resetScenarioInstance("independent-a", { seed: "instance-a-reset-seed" });
+    expect(simulator.scenarioInstance("independent-a").state.currentTime).not.toBe(pausedA.currentTime);
+    expect(simulator.scenarioInstance("independent-b").state).toEqual(bBeforeReset);
+
+    simulator.deleteScenarioInstance("independent-a");
+    expect(simulator.scenarioInstance("independent-b").state).toEqual(bBeforeReset);
+    expect(() => simulator.scenarioInstance("independent-a")).toThrow("Unknown scenario instance");
+
+    simulator.createScenarioInstance({
+      scenarioPackId: "product-launch-readiness",
+      scenarioInstanceId: "independent-a",
+      seed: "instance-a-recreated-seed",
+      account: "Alpha Medical",
+    });
+    expect(simulator.scenarioInstance("independent-b").state).toEqual(bBeforeReset);
+    expect(simulator.scenarioInstance("independent-a").state.seed).toBe("instance-a-recreated-seed");
+  });
+
+  it("keeps the ledger occurred-only and appends new creates and updates after a saved cursor", () => {
+    const simulator = new SourceSimulator({ seed: "occurred-ledger-seed", baseUrl: "http://sim.test" });
+    const initialWorldRevision = simulator.datasetMetadata().worldRevision;
+    const initialChanges = simulator.sourceChanges();
+    expect(initialChanges.some((change) => change.record.title === "Workflow export API dependency")).toBe(false);
+    expect(initialChanges.every((change, index) => change.ledgerSequence === index + 1)).toBe(true);
+
+    const initialPage = simulator.feed("conn-product-manager", undefined, 100);
+    const initialCheckpoint = initialPage.nextCursor;
+    simulator.advanceScenario("product-launch-readiness", { hours: 24 });
+    expect(simulator.datasetMetadata().worldRevision).toBe(initialWorldRevision);
+
+    const afterCreateChanges = simulator.sourceChanges();
+    expect(afterCreateChanges.slice(0, initialChanges.length).map((change) => change.changeId)).toEqual(
+      initialChanges.map((change) => change.changeId),
+    );
+    expect(afterCreateChanges.every((change, index) => change.ledgerSequence === index + 1)).toBe(true);
+    expect(new Set(afterCreateChanges.map((change) => change.changeId)).size).toBe(afterCreateChanges.length);
+
+    const createdPage = simulator.feed("conn-product-manager", initialCheckpoint, 100);
+    const retryCreatedPage = simulator.feed("conn-product-manager", initialCheckpoint, 100);
+    expect(createdPage.records.map((record) => record.changeId)).toEqual(retryCreatedPage.records.map((record) => record.changeId));
+    expect(createdPage.records.every((record) => Date.parse(record.changeOccurredAt) <= Date.parse(simulator.state("product-launch-readiness").currentTime))).toBe(true);
+    const createdDependency = createdPage.records.find((record) => record.title === "Workflow export API dependency");
+    expect(createdDependency?.changeType).toBe("created");
+
+    simulator.advanceScenario("product-launch-readiness", { hours: 6 });
+    expect(simulator.datasetMetadata().worldRevision).toBe(initialWorldRevision);
+    const updatedPage = simulator.feed("conn-product-manager", createdPage.nextCursor, 100);
+    const updatedDependency = updatedPage.records.find((record) => record.sourceId === createdDependency?.sourceId);
+    expect(updatedDependency?.changeType).toBe("updated");
+    expect(updatedDependency?.sourceId).toBe(createdDependency?.sourceId);
+  });
+
   it("filters executive-only records away from IC, Manager, and Director connections", () => {
     const simulator = advancedSimulator();
     const productIc = simulator.feed("conn-product-ic", undefined, 100);
@@ -257,11 +359,11 @@ describe("SourceSimulator", () => {
 
   it("restores snapshots exactly, including organization config", () => {
     const simulator = advancedSimulator();
-    const before = simulator.allRecords().map((record) => record.sourceId);
+    const before = simulator.allRecords().map((record) => record.sourceId).sort();
     const snapshot = simulator.createSnapshot();
     simulator.regenerateOrganization({ seed: "changed-org" });
     simulator.restoreSnapshot(snapshot.snapshotId);
-    const after = simulator.allRecords().map((record) => record.sourceId);
+    const after = simulator.allRecords().map((record) => record.sourceId).sort();
 
     expect(after).toEqual(before);
   });
@@ -277,6 +379,45 @@ describe("SourceSimulator", () => {
     const after = simulator.feed("conn-engineering-manager", undefined, 100).records.map((record) => record.sourceId);
 
     expect(after).toEqual(before);
+  });
+
+  it("restores multiple scenario instances independently and rebuilds a deterministic ledger under a new revision", () => {
+    const simulator = new SourceSimulator({ seed: "snapshot-instance-seed", baseUrl: "http://sim.test" });
+    simulator.createScenarioInstance({
+      scenarioPackId: "product-launch-readiness",
+      scenarioInstanceId: "snapshot-a",
+      seed: "snapshot-a-seed",
+      account: "Snapshot Alpha",
+    });
+    simulator.createScenarioInstance({
+      scenarioPackId: "product-launch-readiness",
+      scenarioInstanceId: "snapshot-b",
+      seed: "snapshot-b-seed",
+      account: "Snapshot Beta",
+    });
+    simulator.advanceScenarioInstance("snapshot-a", { hours: 24 });
+    simulator.advanceScenarioInstance("snapshot-b", { hours: 8 });
+    const snapshot = simulator.createSnapshot();
+    const aAtSnapshot = simulator.scenarioInstance("snapshot-a").state;
+    const bAtSnapshot = simulator.scenarioInstance("snapshot-b").state;
+    const cursorBeforeRestore = simulator.feed("conn-product-manager", undefined, 100).nextCursor;
+    const revisionBeforeRestore = simulator.datasetMetadata().worldRevision;
+
+    simulator.advanceScenarioInstance("snapshot-a", { hours: 30 });
+    simulator.triggerScenarioInstanceEvent("snapshot-b", "exec-pressure");
+    simulator.restoreSnapshot(snapshot.snapshotId);
+    const firstRestoreRevision = simulator.datasetMetadata().worldRevision;
+    const firstRestoreLedger = simulator.sourceChanges().map((change) => ({ ...change, worldRevision: "<ignored>" }));
+
+    expect(firstRestoreRevision).not.toBe(revisionBeforeRestore);
+    expect(() => simulator.feed("conn-product-manager", cursorBeforeRestore, 100)).toThrow("Stale checkpoint");
+    expect(simulator.scenarioInstance("snapshot-a").state).toEqual(aAtSnapshot);
+    expect(simulator.scenarioInstance("snapshot-b").state).toEqual(bAtSnapshot);
+
+    simulator.advanceScenarioInstance("snapshot-a", { hours: 1 });
+    simulator.restoreSnapshot(snapshot.snapshotId);
+    const secondRestoreLedger = simulator.sourceChanges().map((change) => ({ ...change, worldRevision: "<ignored>" }));
+    expect(secondRestoreLedger).toEqual(firstRestoreLedger);
   });
 
   it("does not expose source updates before the simulation clock reaches the update time", () => {
@@ -317,7 +458,7 @@ describe("SourceSimulator", () => {
   });
 
   it("preserves source identity across created, updated, and deleted history entries", () => {
-    const simulator = new SourceSimulator({ seed: "history-seed" });
+    const simulator = completedDatasetSimulator("history-seed", "small");
     const deletedChange = simulator.sourceChanges().find((change) => change.record.title === "Deferred retry remediation item" && change.changeType === "deleted");
     expect(deletedChange).toBeDefined();
 
@@ -329,7 +470,7 @@ describe("SourceSimulator", () => {
 
 describe("Milestone 2 scenario packs and adapters", () => {
   it("registers all required source adapters and validates emitted provider payloads", () => {
-    const simulator = new SourceSimulator({ seed: "adapter-seed" });
+    const simulator = completedDatasetSimulator("adapter-seed", "small");
     expect(sourceAdapters.map((adapter) => adapter.sourceSystem).sort()).toEqual([...sourceSystems].sort());
 
     for (const adapter of sourceAdapters) {
@@ -367,10 +508,10 @@ describe("Milestone 2 scenario packs and adapters", () => {
   });
 
   it("generates deterministic dataset sizes inside documented change-count ranges", () => {
-    const small = new SourceSimulator({ seed: "dataset-seed", datasetSize: "small" }).datasetMetadata();
-    const medium = new SourceSimulator({ seed: "dataset-seed", datasetSize: "medium" }).datasetMetadata();
-    const mediumReplay = new SourceSimulator({ seed: "dataset-seed", datasetSize: "medium" }).datasetMetadata();
-    const large = new SourceSimulator({ seed: "dataset-seed", datasetSize: "large" }).datasetMetadata();
+    const small = completedDatasetSimulator("dataset-seed", "small").datasetMetadata();
+    const medium = completedDatasetSimulator("dataset-seed", "medium").datasetMetadata();
+    const mediumReplay = completedDatasetSimulator("dataset-seed", "medium").datasetMetadata();
+    const large = completedDatasetSimulator("dataset-seed", "large").datasetMetadata();
 
     expect(small.totalSourceChanges).toBeGreaterThanOrEqual(100);
     expect(small.totalSourceChanges).toBeLessThanOrEqual(250);
@@ -682,13 +823,13 @@ describe("source deep links", () => {
 
 describe("Milestone 2 admin APIs", () => {
   it("exposes scenario packs, instances, dataset metadata, and source history through admin routes", async () => {
-    const { app } = credentialedApp(new SourceSimulator({ seed: "api-m2-seed", datasetSize: "medium", baseUrl: "http://sim.test" }));
+    const { app } = credentialedApp(completedDatasetSimulator("api-m2-seed", "medium"));
 
     const packs = await app.request("/v1/catalog/scenario-packs");
     expect(packs.status).toBe(200);
     expect((await packs.json()).scenarioPacks).toHaveLength(10);
 
-    const instances = await app.request("/v1/catalog/scenario-instances");
+    const instances = await app.request("/v1/catalog/scenario-instances", { headers: adminHeaders() });
     const instanceBody = await instances.json();
     expect(instanceBody.scenarioInstances).toHaveLength(80);
 
@@ -699,6 +840,88 @@ describe("Milestone 2 admin APIs", () => {
     const object = (await sourceObjects.json()).sourceObjects[0];
     const history = await app.request(`/v1/admin/source-objects/${object.sourceSystem}/${object.sourceId}/history`, { headers: adminHeaders() });
     expect((await history.json()).history[0].sourceId).toBe(object.sourceId);
+  });
+
+  it("creates real independent scenario instances through POST and validates duplicate and unknown packs", async () => {
+    const { app, simulator } = credentialedApp(new SourceSimulator({ seed: "api-create-seed", baseUrl: "http://sim.test" }));
+    const created = await app.request("/v1/admin/scenario-instances", {
+      method: "POST",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({
+        scenarioPackId: "product-launch-readiness",
+        scenarioInstanceId: "api-created-instance",
+        seed: "api-created-seed",
+        account: "Created Account",
+      }),
+    });
+    expect(created.status).toBe(200);
+    expect((await created.json()).state).toMatchObject({
+      scenarioPackId: "product-launch-readiness",
+      scenarioInstanceId: "api-created-instance",
+      seed: "api-created-seed",
+      account: "Created Account",
+    });
+    expect(simulator.scenarioInstance("api-created-instance").state.seed).toBe("api-created-seed");
+
+    const duplicate = await app.request("/v1/admin/scenario-instances", {
+      method: "POST",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ scenarioPackId: "product-launch-readiness", scenarioInstanceId: "api-created-instance" }),
+    });
+    expect(duplicate.status).toBe(400);
+
+    const unknown = await app.request("/v1/admin/scenario-instances", {
+      method: "POST",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ scenarioPackId: "not-a-pack", scenarioInstanceId: "missing-pack-instance" }),
+    });
+    expect(unknown.status).toBe(400);
+  });
+
+  it("persists POST-created scenario instances across SQLite restart", async () => {
+    const databasePath = join(mkdtempSync(join(tmpdir(), "source-sim-instance-api-")), "simulator.sqlite");
+    const firstStorage = new SQLiteSimulatorStorage(databasePath);
+    const firstSimulator = new SourceSimulator({ seed: "sqlite-instance-create", storage: firstStorage, baseUrl: "http://sim.test" });
+    const { app } = credentialedApp(firstSimulator);
+    const created = await app.request("/v1/admin/scenario-instances", {
+      method: "POST",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({
+        scenarioPackId: "reliability-incident",
+        scenarioInstanceId: "sqlite-created-instance",
+        seed: "sqlite-created-seed",
+        service: "connector-gateway",
+      }),
+    });
+    expect(created.status).toBe(200);
+    firstStorage.close();
+
+    const secondStorage = new SQLiteSimulatorStorage(databasePath);
+    const secondSimulator = new SourceSimulator({ seed: "ignored-seed", storage: secondStorage, baseUrl: "http://sim.test" });
+    expect(secondSimulator.scenarioInstance("sqlite-created-instance").state).toMatchObject({
+      scenarioPackId: "reliability-incident",
+      seed: "sqlite-created-seed",
+      service: "connector-gateway",
+    });
+    secondStorage.close();
+  });
+
+  it("does not expose future changes through the admin source-change route", async () => {
+    const { app } = credentialedApp(new SourceSimulator({ seed: "api-ledger-seed", baseUrl: "http://sim.test" }));
+    const initial = await app.request("/v1/admin/source-changes", { headers: adminHeaders() });
+    expect((await initial.json()).sourceChanges.some((change: { record: { title: string } }) => change.record.title === "Workflow export API dependency")).toBe(
+      false,
+    );
+
+    await app.request("/v1/admin/scenarios/product-launch-readiness/advance", {
+      method: "POST",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ hours: 24 }),
+    });
+    const advanced = await app.request("/v1/admin/source-changes", { headers: adminHeaders() });
+    expect((await advanced.json()).sourceChanges.some((change: { record: { title: string } }) => change.record.title === "Workflow export API dependency")).toBe(
+      true,
+    );
   });
 
   it("generates and resets datasets through bounded admin endpoints", async () => {
@@ -735,6 +958,7 @@ describe("SQLite storage", () => {
       const expectedSchema = {
         dataset_metadata: "CREATE TABLE dataset_metadata ( id TEXT PRIMARY KEY CHECK (id = 'singleton'), metadata_json TEXT NOT NULL )",
         organization_config: "CREATE TABLE organization_config ( id TEXT PRIMARY KEY CHECK (id = 'singleton'), config_json TEXT NOT NULL )",
+        scenario_instance_states: "CREATE TABLE scenario_instance_states ( scenario_instance_id TEXT PRIMARY KEY, scenario_pack_id TEXT NOT NULL, state_json TEXT NOT NULL )",
         scenario_states: "CREATE TABLE scenario_states ( scenario_id TEXT PRIMARY KEY, state_json TEXT NOT NULL )",
         source_change_ledger: "CREATE TABLE source_change_ledger ( ledger_sequence INTEGER PRIMARY KEY, world_revision TEXT NOT NULL, change_json TEXT NOT NULL )",
         source_objects: "CREATE TABLE source_objects ( source_key TEXT PRIMARY KEY, world_revision TEXT NOT NULL, object_json TEXT NOT NULL )",
@@ -747,6 +971,55 @@ describe("SQLite storage", () => {
       migrationDatabase.close();
       runtimeDatabase.close();
     }
+  });
+
+  it("rolls back failed world replacement during scenario instance creation", () => {
+    const databasePath = join(mkdtempSync(join(tmpdir(), "source-sim-atomic-create-")), "simulator.sqlite");
+    const storage = new SQLiteSimulatorStorage(databasePath);
+    const simulator = new SourceSimulator({ seed: "atomic-create-seed", storage, baseUrl: "http://sim.test" });
+    const before = storageWorldSnapshot(simulator);
+
+    storage.injectWorldReplacementFailureForTesting();
+    expect(() =>
+      simulator.createScenarioInstance({
+        scenarioPackId: "product-launch-readiness",
+        scenarioInstanceId: "should-roll-back",
+        seed: "should-roll-back-seed",
+      }),
+    ).toThrow("Injected world replacement failure");
+
+    expect(storageWorldSnapshot(simulator)).toEqual(before);
+    expect(() => simulator.scenarioInstance("should-roll-back")).toThrow("Unknown scenario instance");
+    storage.close();
+  });
+
+  it("rolls back failed world replacement during scenario instance reset", () => {
+    const databasePath = join(mkdtempSync(join(tmpdir(), "source-sim-atomic-reset-")), "simulator.sqlite");
+    const storage = new SQLiteSimulatorStorage(databasePath);
+    const simulator = new SourceSimulator({ seed: "atomic-reset-seed", storage, baseUrl: "http://sim.test" });
+    simulator.advanceScenario("product-launch-readiness", { hours: 24 });
+    const before = storageWorldSnapshot(simulator);
+
+    storage.injectWorldReplacementFailureForTesting();
+    expect(() => simulator.resetScenarioInstance("product-launch-readiness-default", { seed: "failed-reset-seed" })).toThrow(
+      "Injected world replacement failure",
+    );
+
+    expect(storageWorldSnapshot(simulator)).toEqual(before);
+    storage.close();
+  });
+
+  it("rolls back failed world replacement during dataset generation", () => {
+    const databasePath = join(mkdtempSync(join(tmpdir(), "source-sim-atomic-dataset-")), "simulator.sqlite");
+    const storage = new SQLiteSimulatorStorage(databasePath);
+    const simulator = new SourceSimulator({ seed: "atomic-dataset-seed", storage, baseUrl: "http://sim.test" });
+    const before = storageWorldSnapshot(simulator);
+
+    storage.injectWorldReplacementFailureForTesting();
+    expect(() => simulator.generateDataset({ seed: "failed-dataset-seed", datasetSize: "medium" })).toThrow("Injected world replacement failure");
+
+    expect(storageWorldSnapshot(simulator)).toEqual(before);
+    storage.close();
   });
 
   it("persists scenario states, organization config, and snapshots across engine recreation", () => {

@@ -25,7 +25,9 @@ The cursor is opaque to clients. Internally it contains:
 - `worldRevision`
 - `afterSequence`
 
-The cursor does not contain all consumed change IDs. It is bound to one connection and one world revision. Reusing it for another connection returns 400. Reusing it after a reset, destructive regeneration, or snapshot restore returns a clear stale-checkpoint 400.
+The cursor does not contain all consumed change IDs. It is bound to one connection and one world revision. Reusing it for another connection returns 400.
+
+Normal scenario instance advance and manual trigger append source changes to the same world revision, so a saved cursor continues from its `afterSequence`. Scenario instance reset/delete, dataset generation, organization regeneration, and snapshot restore are destructive world replacements; reusing an old cursor after those operations returns a clear stale-checkpoint 400.
 
 The server returns `nextCursor` even when `hasMore` is false so later polling can continue from the checkpoint.
 
@@ -69,7 +71,7 @@ The endpoint returns the current fictional source object in JSON or simple HTML.
 
 ## Admin Inspection
 
-Admin APIs expose scenario packs, scenario instances, source changes, source objects, source history, dataset metadata, organization relationships, and visibility comparison. These are simulator inspection surfaces and are not connector-feed fields.
+Admin APIs expose scenario packs, scenario instances, source changes, source objects, source history, dataset metadata, organization relationships, and visibility comparison. Scenario packs are templates. Scenario instances are persisted runtime entities and include concrete participants and context, so instance listing/detail requires admin authentication.
 
 ## Artifacts
 

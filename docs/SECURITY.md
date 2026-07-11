@@ -14,11 +14,12 @@ The simulator contains fictional data, but it preserves production-like boundari
 ## Authorization
 
 - Public catalog routes expose safe metadata only.
-- Detailed people, organization, team, relationship, source, dataset, and visibility routes require admin auth.
+- Detailed people, organization, team, scenario instance, relationship, source, dataset, and visibility routes require admin auth.
 - Connector feeds and `/sim/{sourceSystem}/{sourceId}` require connection auth.
 - Source deep links enforce the same visibility rules as source feeds.
 - Reporting hierarchy does not automatically grant record access.
 - Cross-department access requires explicit source ACL/group membership.
+- Scenario instance participants and runtime context are admin inspection data, not public catalog data.
 
 ## Production-Like Fail Closed
 

@@ -1,6 +1,6 @@
 # Scenarios
 
-Milestone 2 implements 10 scenario packs. Packs define business events; source adapters shape how those events appear in provider payloads.
+Milestone 2 implements 10 scenario packs. Packs define reusable business-event templates; source adapters shape how those events appear in provider payloads.
 
 The simulator creates source evidence only. It does not define expected Workforce One conclusions.
 
@@ -39,3 +39,5 @@ Dataset size controls deterministic scenario instances:
 - Large: 400 instances total.
 
 Each instance has a scenario pack ID and distinct scenario instance ID.
+
+Instances, not packs, hold runtime state: seed, dataset size, started time, current time, pause state, triggered event IDs, event log, completion state, concrete participants, and account/product/project/service/workstream context. Instance APIs mutate only the selected instance.

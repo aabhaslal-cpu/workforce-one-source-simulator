@@ -6,8 +6,12 @@
   "required": ["schemaVersion", "cursorVersion", "worldRevision", "connectionId", "batchId", "generatedAt", "records", "nextCursor", "hasMore"],
   "properties": {
     "schemaVersion": { "const": "source-feed.v1" },
-    "cursorVersion": { "const": 3 },
-    "worldRevision": { "type": "string", "minLength": 1 },
+    "cursorVersion": { "const": 3, "description": "Compact checkpoint cursor contract version." },
+    "worldRevision": {
+      "type": "string",
+      "minLength": 1,
+      "description": "World revision bound into the checkpoint cursor. Normal advance/trigger preserves it; destructive reset/restore changes it."
+    },
     "connectionId": { "type": "string", "minLength": 1 },
     "batchId": { "type": "string", "minLength": 1 },
     "generatedAt": { "type": "string", "format": "date-time" },
@@ -15,7 +19,11 @@
       "type": "array",
       "items": { "$ref": "#/$defs/sourceRecord" }
     },
-    "nextCursor": { "type": "string", "minLength": 1 },
+    "nextCursor": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Opaque v3 cursor containing connectionId, worldRevision, and afterSequence."
+    },
     "hasMore": { "type": "boolean" }
   },
   "$defs": {
@@ -72,7 +80,7 @@
         "rawPayload": { "type": "object" },
         "changeId": { "type": "string", "minLength": 1 },
         "changeType": { "enum": ["created", "updated", "deleted"] },
-        "changeSequence": { "type": "integer", "minimum": 1 },
+        "changeSequence": { "type": "integer", "minimum": 1, "description": "Monotonic occurred-ledger sequence for this emitted change." },
         "changeOccurredAt": { "type": "string", "format": "date-time" },
         "correlation": { "$ref": "#/$defs/correlation" }
       },

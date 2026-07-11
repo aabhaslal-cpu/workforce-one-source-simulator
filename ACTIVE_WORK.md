@@ -15,8 +15,11 @@ Milestone 2: Complete Department, Level, Source, and Scenario Coverage.
 ## Built In Milestone 2
 
 - Compact v3 cursor with `connectionId`, `worldRevision`, and `afterSequence`.
+- Independent persisted `ScenarioInstanceState` per scenario instance. Scenario packs are templates; runtime state lives on instances.
 - Durable source-change ledger, current source-object projection, world revision, and dataset metadata in SQLite storage.
-- Snapshot payloads include dataset metadata, world revision, source changes, and source objects. Restoring a snapshot restores business state, creates a new world revision, rebuilds the deterministic ledger/projection, and invalidates old cursors.
+- Source-change ledger contains only occurred changes. Normal advance and trigger append newly reached changes without rotating world revision.
+- Destructive scenario instance reset/delete, dataset generation, organization regeneration, and snapshot restore rotate world revision and atomically reconstruct scenario instance states, ledger, projection, and metadata.
+- Snapshot payloads include independent scenario instance states, organization config, dataset metadata, and world revision. Restoring a snapshot restores instance states, creates a new world revision, rebuilds the deterministic ledger/projection, and invalidates old cursors.
 - Modular adapters for Slack, Gmail, Calendar, Notion, Jira, Productboard, Amplitude, GitHub, PagerDuty, Salesforce, Gainsight, and Zendesk.
 - Ten scenario packs:
   - `product-launch-readiness`
@@ -49,7 +52,7 @@ With the current deterministic implementation:
 Latest local verification in this working tree:
 
 - `pnpm run typecheck`: passed.
-- `pnpm run test`: passed, 36 tests.
+- `pnpm run test`: passed, 45 tests.
 - `pnpm run lint`: passed.
 - `pnpm run build`: passed.
 
@@ -58,7 +61,6 @@ Run `pnpm install --frozen-lockfile` and `pnpm run verify` again before final PR
 ## Known Limitations
 
 - Production Postgres storage is not implemented or proven. Production-like environments fail closed rather than using memory or SQLite.
-- Scenario instances share a pack-level scenario clock; instance timelines are deterministically offset inside that pack clock.
 - Provider adapters are simplified and simulator-owned. They are not complete vendor API clones.
 - The operator console is intentionally internal and utilitarian.
 - Rate limiting, load testing, structured operational logging, production deployment verification, and final integration hardening remain Milestone 3.

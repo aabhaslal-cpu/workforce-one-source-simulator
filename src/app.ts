@@ -1,6 +1,13 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
-import { SourceSimulator, HttpError, badRequest, validateOrganizationConfigCompatibility, type SimulatorOptions } from "./engine.js";
+import {
+  SourceSimulator,
+  HttpError,
+  badRequest,
+  validateOrganizationConfigCompatibility,
+  type ScenarioInstanceCreateInput,
+  type SimulatorOptions,
+} from "./engine.js";
 import { scenarios } from "./data.js";
 import { previewOrganizationCounts, roleTemplates } from "./organization.js";
 import { MemorySimulatorStorage, SQLiteSimulatorStorage, type SimulatorStorage } from "./storage.js";
@@ -106,6 +113,16 @@ const DatasetGenerateSchema = z
 const ScenarioInstanceCreateSchema = z
   .object({
     scenarioPackId: z.string().min(1).max(128),
+    scenarioInstanceId: z.string().min(1).max(160).optional(),
+    seed: BoundedSeedSchema.optional(),
+    datasetSize: DatasetSizeSchema.optional(),
+    startTime: z.string().datetime().optional(),
+    account: z.string().min(1).max(160).optional(),
+    product: z.string().min(1).max(160).optional(),
+    project: z.string().min(1).max(160).optional(),
+    service: z.string().min(1).max(160).optional(),
+    workstream: z.string().min(1).max(160).optional(),
+    participantPersonIds: z.record(z.string().min(1).max(128), z.string().min(1).max(160)).optional(),
   })
   .strict();
 
@@ -157,7 +174,7 @@ export function createApp(options: AppOptions = {}) {
     }),
   );
   app.get("/v1/catalog/scenario-packs", (c) => c.json({ scenarioPacks: simulator.scenarioPacks() }));
-  app.get("/v1/catalog/scenario-instances", (c) => c.json({ scenarioInstances: simulator.scenarioInstances() }));
+  app.get("/v1/catalog/scenario-instances", (c) => withAdmin(c, auth, () => c.json({ scenarioInstances: simulator.scenarioInstances() })));
   app.get("/v1/catalog/seats", (c) => c.json({ roleTemplates }));
   app.get("/v1/catalog/people", (c) => withAdmin(c, auth, () => c.json({ people: simulator.people() })));
   app.get("/v1/catalog/people/:personId", (c) => withAdmin(c, auth, () => c.json(simulator.person(c.req.param("personId")))));
@@ -221,42 +238,31 @@ export function createApp(options: AppOptions = {}) {
   app.get("/v1/admin/records", (c) => c.json({ records: simulator.allRecords() }));
   app.get("/v1/admin/connections", (c) => c.json({ connections: simulator.connectionsForAdmin() }));
   app.post("/v1/admin/scenario-instances", async (c) => {
-    const body = await readJsonBody(c.req.raw, ScenarioInstanceCreateSchema);
-    const instance = simulator.scenarioInstances().find((candidate) => candidate.scenarioPackId === body.scenarioPackId);
-    if (!instance) throw badRequest(`Unknown scenario pack: ${body.scenarioPackId}`);
-    return c.json(simulator.scenarioInstance(instance.scenarioInstanceId));
+    const body = compactOptional(await readJsonBody(c.req.raw, ScenarioInstanceCreateSchema)) as unknown as ScenarioInstanceCreateInput;
+    return c.json(simulator.createScenarioInstance(body));
   });
   app.post("/v1/admin/scenario-instances/:instanceId/reset", async (c) => {
     const body = compactOptional(await readJsonBody(c.req.raw, ScenarioResetSchema)) as ScenarioResetInput;
-    const instance = simulator.scenarioInstance(c.req.param("instanceId")).instance;
-    simulator.resetScenario(instance.scenarioPackId, body);
-    return c.json(simulator.scenarioInstance(c.req.param("instanceId")));
+    return c.json(simulator.resetScenarioInstance(c.req.param("instanceId"), body));
   });
   app.post("/v1/admin/scenario-instances/:instanceId/advance", async (c) => {
     const body = compactOptional(await readJsonBody(c.req.raw, ScenarioAdvanceSchema)) as ScenarioAdvanceInput;
-    const instance = simulator.scenarioInstance(c.req.param("instanceId")).instance;
-    simulator.advanceScenario(instance.scenarioPackId, body);
-    return c.json(simulator.scenarioInstance(c.req.param("instanceId")));
+    return c.json(simulator.advanceScenarioInstance(c.req.param("instanceId"), body));
   });
   app.post("/v1/admin/scenario-instances/:instanceId/trigger", async (c) => {
     const body = await readJsonBody(c.req.raw, TriggerSchema);
-    const instance = simulator.scenarioInstance(c.req.param("instanceId")).instance;
-    simulator.triggerScenarioEvent(instance.scenarioPackId, body.eventId);
-    return c.json(simulator.scenarioInstance(c.req.param("instanceId")));
+    return c.json(simulator.triggerScenarioInstanceEvent(c.req.param("instanceId"), body.eventId));
   });
   app.post("/v1/admin/scenario-instances/:instanceId/pause", async (c) => {
     await readJsonBody(c.req.raw, EmptyBodySchema);
-    const instance = simulator.scenarioInstance(c.req.param("instanceId")).instance;
-    simulator.pauseScenario(instance.scenarioPackId);
-    return c.json(simulator.scenarioInstance(c.req.param("instanceId")));
+    return c.json(simulator.pauseScenarioInstance(c.req.param("instanceId")));
   });
   app.post("/v1/admin/scenario-instances/:instanceId/resume", async (c) => {
     await readJsonBody(c.req.raw, EmptyBodySchema);
-    const instance = simulator.scenarioInstance(c.req.param("instanceId")).instance;
-    simulator.resumeScenario(instance.scenarioPackId);
-    return c.json(simulator.scenarioInstance(c.req.param("instanceId")));
+    return c.json(simulator.resumeScenarioInstance(c.req.param("instanceId")));
   });
   app.get("/v1/admin/scenario-instances/:instanceId", (c) => c.json(simulator.scenarioInstance(c.req.param("instanceId"))));
+  app.delete("/v1/admin/scenario-instances/:instanceId", (c) => c.json(simulator.deleteScenarioInstance(c.req.param("instanceId"))));
   app.get("/v1/admin/scenario-instances/:instanceId/events", (c) => c.json({ events: simulator.scenarioInstance(c.req.param("instanceId")).events }));
   app.get("/v1/admin/scenario-instances/:instanceId/changes", (c) => c.json({ changes: simulator.scenarioInstance(c.req.param("instanceId")).changes }));
   app.get("/v1/admin/snapshots", (c) => c.json({ snapshots: simulator.listSnapshots() }));
@@ -607,7 +613,7 @@ async function callAdmin(action, method) { show(await getJson('/v1/admin/scenari
 async function advance() { show(await getJson('/v1/admin/scenarios/' + scenario() + '/advance', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ hours: 24 }) })); }
 async function records() { show(await getJson('/v1/admin/records', { headers: headers() })); }
 async function packs() { show(await getJson('/v1/catalog/scenario-packs')); }
-async function instances() { show(await getJson('/v1/catalog/scenario-instances')); }
+async function instances() { show(await getJson('/v1/catalog/scenario-instances', { headers: headers() })); }
 async function instanceDetail() { show(await getJson('/v1/admin/scenario-instances/' + document.getElementById('instance').value, { headers: headers() })); }
 async function datasetCurrent() { show(await getJson('/v1/admin/datasets/current', { headers: headers() })); }
 async function datasetGenerate() { show(await getJson('/v1/admin/datasets/generate', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ seed: document.getElementById('datasetSeed').value, datasetSize: document.getElementById('dataset').value }) })); }

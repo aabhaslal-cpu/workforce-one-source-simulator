@@ -4,8 +4,8 @@ import type {
   ScenarioDefinition,
   ScenarioEventTemplate,
   ScenarioInstanceContext,
+  ScenarioInstanceState,
   ScenarioRecordTemplate,
-  ScenarioState,
   SourceChangeType,
   SourceSystem,
 } from "../domain.js";
@@ -19,7 +19,7 @@ export interface SourceEmissionInput {
   scenario: ScenarioDefinition;
   event: ScenarioEventTemplate;
   template: ScenarioRecordTemplate;
-  state: ScenarioState;
+  state: ScenarioInstanceState;
   instance: ScenarioInstanceContext;
   organization: GeneratedOrganization;
   actor: Person;

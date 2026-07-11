@@ -38,6 +38,7 @@ The local durable schema is documented in `migrations/001_initial.sql` and check
 Tables:
 
 - `scenario_states`
+- `scenario_instance_states`
 - `organization_config`
 - `world_state`
 - `source_change_ledger`

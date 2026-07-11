@@ -25,6 +25,9 @@ Current branch: `milestone-2/scenarios-and-sources`.
 Delivered in this draft:
 
 - Compact v3 cursor over an append-only deterministic source-change ledger.
+- Independent persisted scenario instance runtime state.
+- Occurred-only source-change ledger with append semantics for normal advance/trigger.
+- Atomic world replacement for destructive reset/delete, dataset generation, organization regeneration, and snapshot restore.
 - Durable world revision, source-change ledger, current source-object projection, and dataset metadata.
 - Modular source adapters for all 12 required source systems.
 - Ten scenario packs across Product, Engineering, Customer Success, and cross-functional release work.
