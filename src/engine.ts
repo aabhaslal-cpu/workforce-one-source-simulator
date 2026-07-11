@@ -1,18 +1,19 @@
 import { createHash } from "node:crypto";
 import { SourceFeedBatchV1Schema, type SourceFeedBatchV1 } from "./contracts.js";
 import { scenarios, tenant } from "./data.js";
-import type {
-  DatasetSize,
-  GeneratedOrganization,
-  OrganizationConfig,
-  Person,
-  ScenarioDefinition,
-  ScenarioEventTemplate,
-  ScenarioState,
-  Snapshot,
-  SourceConnection,
-  SourceRecord,
-  Team,
+import {
+  sourceSystems,
+  type DatasetSize,
+  type GeneratedOrganization,
+  type OrganizationConfig,
+  type Person,
+  type ScenarioDefinition,
+  type ScenarioEventTemplate,
+  type ScenarioState,
+  type Snapshot,
+  type SourceConnection,
+  type SourceRecord,
+  type Team,
 } from "./domain.js";
 import { MemorySimulatorStorage, type SimulatorStorage } from "./storage.js";
 import {
@@ -376,13 +377,12 @@ function materializeRecord(
   const assignee = template.assignmentRoleTemplateId
     ? selectPersonForRole(organization, template.assignmentRoleTemplateId, `${scenario.id}:${event.id}:${template.id}:assignee`)
     : null;
-  return removeUndefined({
-    schemaVersion: "source-record.v1" as const,
+  const record: SourceRecord = {
+    schemaVersion: "source-record.v1",
     sourceSystem: template.sourceSystem,
     sourceId,
     objectType: template.objectType,
     occurredAt,
-    updatedAt,
     title: template.title,
     sourceUrl: `${baseUrl}/sim/${template.sourceSystem}/${sourceId}`,
     actorRef: actor.id,
@@ -402,7 +402,9 @@ function materializeRecord(
       templateId: template.id,
       seedFingerprint: stableId("seed", state.seed, organization.seed),
     },
-  });
+  };
+  if (updatedAt) record.updatedAt = updatedAt;
+  return record;
 }
 
 function canConnectionSee(record: SourceRecord, connection: SourceConnection): boolean {
@@ -476,10 +478,6 @@ function stableId(prefix: string, ...parts: string[]): string {
 function clampNumber(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(Math.max(value, min), max);
-}
-
-function removeUndefined<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as T;
 }
 
 export class HttpError extends Error {
