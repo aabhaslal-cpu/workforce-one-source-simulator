@@ -30,12 +30,13 @@
 - Bounded catch-up reports consumed wall time, remaining backlog, and whether the catch-up limit applied.
 - Clock/orchestration configuration updates now reject with `clock_backlog_conflict` while bounded realtime catch-up backlog remains, so historical intervals are never processed under the wrong speed, mode, pause state, activity profile, or successor cadence.
 - Reconciliation reports source-object create, update, delete, and total changed counts from projection changes.
+- Source adapters now emit vendor-native supported-subset `rawPayload` objects validated by provider-family Zod schemas, with simulator metadata kept in the outer source record.
 - Error responses include safe classifications and correlation IDs without credentials, stack traces, or database strings.
 
 ### Verification
 
-- Local suite: 78 Vitest tests total; 72 pass locally and 6 Postgres tests skip without `SIMULATOR_POSTGRES_TEST_URL`.
-- GitHub Actions provides Postgres and is expected to run all 78 tests plus Vercel config validation, route smoke tests, Docker build, and container readiness smoke. A real Vercel CLI build runs only when `VERCEL_TOKEN` is configured; a tokenless early exit is not Vercel deployment proof.
+- Local suite: 79 Vitest tests total; 73 pass locally and 6 Postgres tests skip without `SIMULATOR_POSTGRES_TEST_URL`.
+- GitHub Actions provides Postgres and is expected to run all 79 tests plus Vercel config validation, route smoke tests, Docker build, and container readiness smoke. A real Vercel CLI build runs only when `VERCEL_TOKEN` is configured; a tokenless early exit is not Vercel deployment proof.
 
 ### Performance Snapshot
 

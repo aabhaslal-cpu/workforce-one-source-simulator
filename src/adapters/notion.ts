@@ -1,14 +1,58 @@
-import { isPerson, makeSimpleAdapter, personPayload, statusFor } from "./shared.js";
+import { makeVendorAdapter, templateStatus, templateText, uuidLike } from "./shared.js";
 
-export const notionAdapter = makeSimpleAdapter("notion", ["page", "database_item", "decision_log"], (input) => ({
-  pageId: input.template.rawPayload.pageId ?? `notion-${input.sourceId}`,
-  workspace: input.template.rawPayload.workspace ?? "Acme Ops",
-  database: input.template.rawPayload.database ?? input.instance.workstream,
-  owner: personPayload(input.actor),
-  editors: [input.actor, input.assignee, ...input.managerChain.slice(0, 2)].filter(isPerson).map(personPayload),
-  body: input.template.rawPayload.body ?? input.template.rawPayload.summary ?? input.template.title,
-  restricted: input.template.acl.visibility === "restricted" || input.template.rawPayload.restricted === true,
-  archived: input.changeType === "deleted" || input.template.rawPayload.archived === true,
-  lastEditedTime: input.changeOccurredAt,
-  status: statusFor(input, "draft"),
-}));
+export const notionAdapter = makeVendorAdapter(
+  "notion",
+  ["page", "database_item", "decision_log"],
+  (input) => {
+    const pageId = uuidLike(String(input.template.rawPayload.pageId ?? input.sourceId));
+    const databaseId = uuidLike(
+      String(input.template.rawPayload.database ?? input.instance.workstream ?? input.scenario.id),
+    );
+    const status = templateStatus(input, "Draft");
+    const user = { object: "user", id: uuidLike(input.actor.stableKey) };
+    return {
+      objectType: "page",
+      rawPayload: {
+        object: "page",
+        id: pageId,
+        created_time: input.occurredAt,
+        last_edited_time: input.changeOccurredAt,
+        created_by: user,
+        last_edited_by: user,
+        archived: input.changeType === "deleted" || input.template.rawPayload.archived === true,
+        in_trash: input.changeType === "deleted",
+        url: `https://notion.example.test/${pageId.replaceAll("-", "")}`,
+        parent: { type: "database_id", database_id: databaseId },
+        properties: {
+          Name: {
+            id: "title",
+            type: "title",
+            title: [
+              {
+                type: "text",
+                text: { content: input.template.title },
+                plain_text: input.template.title,
+              },
+            ],
+          },
+          Status: {
+            id: "status",
+            type: "status",
+            status: { name: status, color: "default" },
+          },
+          Summary: {
+            id: "summary",
+            type: "title",
+            title: [
+              {
+                type: "text",
+                text: { content: templateText(input) },
+                plain_text: templateText(input),
+              },
+            ],
+          },
+        },
+      },
+    };
+  },
+);

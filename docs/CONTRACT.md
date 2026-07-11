@@ -55,7 +55,9 @@ Every record has:
 - change occurrence time
 - correlation metadata
 
-Records are authored by concrete generated people. Provider payloads include actor and assignee details where the source would normally expose them. Emails use `@example.test`.
+Records are authored by concrete generated people. Provider payloads include person references where the source would normally expose them, such as Slack users, Gmail headers, Calendar attendees, Jira reporter/assignee objects, GitHub reviewers, PagerDuty assignments, Salesforce owner IDs, and Zendesk assignee IDs. Emails use `@example.test`.
+
+`rawPayload` is vendor-native supported-subset data, not the simulator's internal metadata carrier. Generic simulator fields such as `provider`, `sourceId`, `objectType`, `lifecycle`, scenario IDs, management chains, `simulator*` keys, and tombstone flags are rejected by runtime validation. Source contract manifests are in `src/source-contracts.ts`; readable notes are in `docs/SOURCE_CONTRACTS.md`.
 
 ## Auth
 

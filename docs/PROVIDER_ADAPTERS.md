@@ -2,7 +2,7 @@
 
 Provider adapters live in `src/adapters`.
 
-Adapters shape simulator records into provider-like raw payloads. They do not call external APIs and they do not import Workforce One code.
+Adapters shape simulator records into vendor-native supported-subset raw payloads. They do not call external APIs and they do not import Workforce One code.
 
 ## Rules
 
@@ -11,6 +11,7 @@ Adapters shape simulator records into provider-like raw payloads. They do not ca
 - Keep provider payloads fictional and deterministic.
 - Represent updates/deletes through provider-shaped lifecycle fields.
 - Keep ACL and permission behavior in the simulator record, not hidden inside adapter-only fields.
+- Keep simulator metadata out of `rawPayload`; use the outer `SourceRecord` for scenario correlation, actorRef, ACLs, source identity, and change identity.
 - Do not generate real routable emails, real customer names, real repository URLs, or real secrets.
 
 ## Adding A Provider
@@ -18,7 +19,9 @@ Adapters shape simulator records into provider-like raw payloads. They do not ca
 1. Add the source system to `sourceSystems` in `src/domain.ts`.
 2. Add an adapter in `src/adapters`.
 3. Register it in `src/adapters/registry.ts`.
-4. Add scenario records that use the provider.
-5. Update `docs/SOURCE_SYSTEMS.md`, OpenAPI/examples if needed, and tests.
+4. Add or update Zod schemas in `src/adapters/vendor-schemas.ts`.
+5. Add provider documentation and fidelity status in `src/source-contracts.ts`.
+6. Add scenario records that use the provider.
+7. Update `docs/SOURCE_SYSTEMS.md`, OpenAPI/examples if needed, and tests.
 
 The connector feed contract remains `SourceFeedBatchV1`.

@@ -46,7 +46,7 @@ Each ledger entry has:
 - change time and source occurrence time
 - scenario pack and scenario instance IDs
 - business event and template IDs
-- current source record or tombstone payload
+- current source record payload
 - permission scope
 
 The v3 cursor stores only connection ID, world revision, and `afterSequence`. It remains compact regardless of dataset size.
@@ -80,7 +80,7 @@ Feed polling calls reconciliation before reading authorized ledger changes in re
 
 The current source-object projection stores only the latest occurred source object per stable source identity for the current simulation clock.
 
-Updates and deletions preserve source identity. Deleted provider semantics are represented as tombstoned source records.
+Updates and deletions preserve source identity. Deleted or archived provider semantics are represented with provider-native status/archive fields where available and the outer source-change `changeType`.
 
 ## Scenario Packs And Instances
 

@@ -89,7 +89,7 @@ pnpm install --frozen-lockfile
 pnpm run verify
 ```
 
-The Milestone 3 suite has 78 Vitest tests. Local runs without `SIMULATOR_POSTGRES_TEST_URL` execute 72 tests and skip the 6 Postgres integration tests. GitHub Actions provides Postgres and runs the full suite plus Vercel config validation, route smoke tests, Docker build, and a container readiness smoke test. A real `vercel build` runs in CI only when `VERCEL_TOKEN` is configured; without that token, the optional Vercel build step is intentionally skipped and the owner-run preview verification command in `docs/DEPLOYMENT.md` remains required before calling Vercel deployability fully proven.
+The Milestone 3 suite has 79 Vitest tests. Local runs without `SIMULATOR_POSTGRES_TEST_URL` execute 73 tests and skip the 6 Postgres integration tests. GitHub Actions provides Postgres and runs the full suite plus Vercel config validation, route smoke tests, Docker build, and a container readiness smoke test. A real `vercel build` runs in CI only when `VERCEL_TOKEN` is configured; without that token, the optional Vercel build step is intentionally skipped and the owner-run preview verification command in `docs/DEPLOYMENT.md` remains required before calling Vercel deployability fully proven.
 
 ## Deployment Honesty
 
@@ -113,6 +113,7 @@ Postgres is implemented and CI-proven for the simulator storage, clock, orchestr
 - `docs/PROVIDER_ADAPTERS.md`: provider adapter expansion rules.
 - `docs/CHANGE_LEDGER.md`: v3 cursor and world-revision behavior.
 - `docs/SOURCE_ADAPTERS.md`: adapter responsibilities and coverage.
+- `docs/SOURCE_CONTRACTS.md`: vendor-native raw payload contract manifest notes.
 - `docs/SCENARIOS.md`: 10 scenario packs.
 - `docs/DATASET_GENERATION.md`: small/medium/large behavior.
 - `docs/ORGANIZATION.md`: organization graph and relationships.

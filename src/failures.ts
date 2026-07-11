@@ -107,7 +107,10 @@ export class FailureController {
   }
 }
 
-export function applyFeedFailure(batch: SourceFeedBatchV1, decision: FailureDecision): SourceFeedBatchV1 {
+export function applyFeedFailure(
+  batch: SourceFeedBatchV1,
+  decision: FailureDecision,
+): SourceFeedBatchV1 {
   const next = JSON.parse(JSON.stringify(batch)) as SourceFeedBatchV1;
   if (decision.pageSize !== undefined) {
     next.records = next.records.slice(0, decision.pageSize);
@@ -124,21 +127,19 @@ export function applyFeedFailure(batch: SourceFeedBatchV1, decision: FailureDeci
     next.generatedAt = next.records[0].occurredAt;
   }
   if (decision.malformedPayload && next.records[0]) {
-    delete (next.records[0].rawPayload as Record<string, unknown>).actor;
-    (next.records[0].rawPayload as Record<string, unknown>).simulatorMalformedPayload = true;
+    const rawPayload = next.records[0].rawPayload as Record<string, unknown>;
+    const firstKey = Object.keys(rawPayload)[0];
+    if (firstKey) delete rawPayload[firstKey];
   }
   if (decision.deletedObject && next.records[0]) {
     next.records[0].changeType = "deleted";
-    (next.records[0].rawPayload as Record<string, unknown>).simulatorDeletedObject = true;
   }
   if (decision.editedObject && next.records[0]) {
     next.records[0].title = `${next.records[0].title} (simulated edit)`;
-    (next.records[0].rawPayload as Record<string, unknown>).simulatorEditedObject = true;
   }
   if (decision.lateArrivingObject && next.records[0]) {
     next.records[0].occurredAt = backdateIso(next.records[0].occurredAt, 48);
     next.records[0].changeOccurredAt = next.generatedAt;
-    (next.records[0].rawPayload as Record<string, unknown>).simulatorLateArrivingObject = true;
   }
   if (decision.corruptCursor) {
     next.nextCursor = "corrupted-cursor-for-failure-test";
@@ -160,7 +161,8 @@ function matchesRule(rule: FailureRule, context: FailureContext): boolean {
 }
 
 function applyRule(decision: FailureDecision, rule: FailureRule): void {
-  if (rule.mode === "network_latency") decision.latencyMs = Math.max(decision.latencyMs ?? 0, rule.latencyMs ?? 250);
+  if (rule.mode === "network_latency")
+    decision.latencyMs = Math.max(decision.latencyMs ?? 0, rule.latencyMs ?? 250);
   if (rule.mode === "timeout") {
     decision.latencyMs = Math.max(decision.latencyMs ?? 0, rule.latencyMs ?? 1_000);
     decision.errorStatus = rule.status ?? 504;
@@ -187,7 +189,8 @@ function applyRule(decision: FailureDecision, rule: FailureRule): void {
     decision.errorClassification = rule.mode;
     decision.message = rule.message ?? "Simulated authentication failure";
   }
-  if (rule.mode === "partial_page") decision.pageSize = Math.min(decision.pageSize ?? Number.POSITIVE_INFINITY, rule.pageSize ?? 1);
+  if (rule.mode === "partial_page")
+    decision.pageSize = Math.min(decision.pageSize ?? Number.POSITIVE_INFINITY, rule.pageSize ?? 1);
   if (rule.mode === "cursor_corruption") decision.corruptCursor = true;
   if (rule.mode === "malformed_payload") decision.malformedPayload = true;
   if (rule.mode === "permission_changes") decision.permissionChange = true;

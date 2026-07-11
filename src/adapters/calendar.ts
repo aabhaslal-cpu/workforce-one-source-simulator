@@ -1,14 +1,39 @@
-import { isPerson, makeSimpleAdapter, personPayload, statusFor } from "./shared.js";
+import {
+  addHoursIso,
+  isPerson,
+  makeVendorAdapter,
+  slug,
+  templateText,
+  vendorUserEmail,
+} from "./shared.js";
 
-export const calendarAdapter = makeSimpleAdapter("calendar", ["meeting", "event"], (input) => ({
-  eventId: input.template.rawPayload.eventId ?? `cal-${input.sourceId}`,
-  organizer: personPayload(input.actor),
-  attendees: [input.assignee, ...input.managerChain].filter(isPerson).map(personPayload),
-  agenda: input.template.rawPayload.agenda ?? input.template.rawPayload.summary ?? input.template.title,
-  start: input.template.rawPayload.start ?? input.occurredAt,
-  end: input.template.rawPayload.end ?? input.changeOccurredAt,
-  recurring: input.template.rawPayload.recurring ?? false,
-  attendeeChanges: input.changeType === "updated" ? input.template.rawPayload.attendeeChanges ?? [] : [],
-  cancelled: input.changeType === "deleted" || input.template.rawPayload.status === "cancelled",
-  status: statusFor(input, "confirmed"),
-}));
+export const calendarAdapter = makeVendorAdapter("calendar", ["meeting", "event"], (input) => {
+  const eventId = slug(input.template.rawPayload.eventId ?? input.sourceId, "event");
+  const start = String(input.template.rawPayload.start ?? input.changeOccurredAt);
+  const end = String(input.template.rawPayload.end ?? addHoursIso(start, 1));
+  const attendees = [input.assignee, ...input.managerChain].filter(isPerson).map((person) => ({
+    ...vendorUserEmail(person),
+    responseStatus: "accepted",
+  }));
+  return {
+    objectType: "event",
+    rawPayload: {
+      kind: "calendar#event",
+      etag: `"${eventId}-${Date.parse(input.changeOccurredAt)}"`,
+      id: eventId,
+      htmlLink: `${input.baseUrl}/sim/calendar/${input.sourceId}`,
+      status: input.changeType === "deleted" ? "cancelled" : "confirmed",
+      summary: input.template.title,
+      description: templateText(input),
+      organizer: { ...vendorUserEmail(input.actor), self: true },
+      creator: vendorUserEmail(input.actor),
+      attendees,
+      start: { dateTime: start, timeZone: "America/Los_Angeles" },
+      end: { dateTime: end, timeZone: "America/Los_Angeles" },
+      recurrence:
+        input.template.rawPayload.recurring === true ? ["RRULE:FREQ=WEEKLY;COUNT=4"] : undefined,
+      created: input.occurredAt,
+      updated: input.changeOccurredAt,
+    },
+  };
+});

@@ -29,6 +29,7 @@ export interface SourceEmissionInput {
 
 export interface SourceChangeDraft {
   sourceUrl: string;
+  objectType?: string;
   rawPayload: Record<string, unknown>;
 }
 
@@ -43,6 +44,6 @@ export interface SourceAdapter {
   create(input: SourceEmissionInput): SourceChangeDraft;
   update(input: SourceEmissionInput): SourceChangeDraft;
   remove(input: SourceEmissionInput): SourceChangeDraft;
-  validatePayload(payload: unknown): ValidationResult;
+  validatePayload(payload: unknown, objectType?: string): ValidationResult;
   buildSourceUrl(input: Pick<SourceEmissionInput, "baseUrl" | "sourceId">): string;
 }

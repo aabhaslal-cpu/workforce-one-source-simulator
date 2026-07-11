@@ -17,7 +17,36 @@
       "sourceUrl": "http://localhost:3000/sim/slack/slack-product-launch-readiness-example",
       "actorRef": "person-product-manager",
       "acl": { "visibility": "group", "groups": ["product-launch-team"], "users": [] },
-      "rawPayload": { "channel": "#launch-readiness", "threadTs": "1720634400.000", "text": "Launch readiness has a dependency risk." },
+      "rawPayload": {
+        "type": "message",
+        "channel": "CEXAMPLE01",
+        "user": "UEXAMPLE01",
+        "text": "Launch readiness has a dependency risk.",
+        "ts": "1720634400.000000",
+        "event_ts": "1720635600.000000",
+        "channel_type": "channel",
+        "thread_ts": "1720634400.000000",
+        "subtype": "message_changed",
+        "message": {
+          "type": "message",
+          "channel": "CEXAMPLE01",
+          "user": "UEXAMPLE01",
+          "text": "Launch readiness has a dependency risk.",
+          "ts": "1720634400.000000",
+          "event_ts": "1720635600.000000",
+          "channel_type": "channel"
+        },
+        "previous_message": {
+          "type": "message",
+          "channel": "CEXAMPLE01",
+          "user": "UEXAMPLE01",
+          "text": "Launch readiness review opened.",
+          "ts": "1720634400.000000",
+          "event_ts": "1720634400.000000",
+          "channel_type": "channel"
+        },
+        "edited": { "user": "UEXAMPLE01", "ts": "1720635600.000000" }
+      },
       "changeId": "change-slack-product-launch-readiness-example-updated",
       "changeType": "updated",
       "changeSequence": 2,

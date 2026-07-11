@@ -16,7 +16,69 @@
       "sourceUrl": "http://localhost:3000/sim/jira/jira-reliability-incident-example",
       "actorRef": "person-engineering-manager",
       "acl": { "visibility": "group", "groups": ["engineering-platform"], "users": [] },
-      "rawPayload": { "key": "ENG-1842", "status": "In Progress", "priority": "High" },
+      "rawPayload": {
+        "expand": "renderedFields,names,schema,operations,editmeta,changelog",
+        "id": "1842",
+        "self": "https://jira.example.test/rest/api/3/issue/1842",
+        "key": "ENG-1842",
+        "fields": {
+          "summary": "Stabilize ingestion latency regression",
+          "issuetype": { "id": "3", "name": "Task" },
+          "project": { "id": "10000", "key": "ENG", "name": "ENG project" },
+          "status": {
+            "name": "In Progress",
+            "statusCategory": { "key": "indeterminate", "name": "In Progress" }
+          },
+          "priority": { "name": "High" },
+          "reporter": {
+            "self": "https://jira.example.test/rest/api/3/user?accountId=sim-example-reporter",
+            "accountId": "sim-example-reporter",
+            "emailAddress": "eng.manager@example.test",
+            "displayName": "Engineering Manager",
+            "active": true
+          },
+          "assignee": {
+            "self": "https://jira.example.test/rest/api/3/user?accountId=sim-example-assignee",
+            "accountId": "sim-example-assignee",
+            "emailAddress": "eng.ic@example.test",
+            "displayName": "Engineering IC",
+            "active": true
+          },
+          "created": "2026-07-10T19:00:00.000Z",
+          "updated": "2026-07-10T19:00:00.000Z",
+          "duedate": "2026-07-10",
+          "labels": ["reliability-incident", "engineering-platform"],
+          "description": {
+            "type": "doc",
+            "version": 1,
+            "content": [
+              {
+                "type": "paragraph",
+                "content": [
+                  { "type": "text", "text": "Backfill retry controls for connector queue." }
+                ]
+              }
+            ]
+          },
+          "customfield_10020": [{ "name": "Simulation Sprint" }]
+        },
+        "changelog": {
+          "histories": [
+            {
+              "id": "1001",
+              "created": "2026-07-10T19:00:00.000Z",
+              "author": {
+                "self": "https://jira.example.test/rest/api/3/user?accountId=sim-example-reporter",
+                "accountId": "sim-example-reporter",
+                "emailAddress": "eng.manager@example.test",
+                "displayName": "Engineering Manager",
+                "active": true
+              },
+              "items": [{ "field": "status", "fromString": null, "toString": "In Progress" }]
+            }
+          ]
+        }
+      },
       "changeId": "change-jira-reliability-incident-example-created",
       "changeType": "created",
       "changeSequence": 1,
