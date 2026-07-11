@@ -6,7 +6,7 @@ Milestone 1: Core Simulator Platform, Contract, and Organization Graph.
 
 ## Status
 
-Implemented as an initial foundation and ready for draft PR review.
+Draft PR #1 is under Milestone 1 hardening review. Do not begin Milestone 2 from this branch.
 
 Draft PR: https://github.com/aabhaslal-cpu/workforce-one-source-simulator/pull/1
 
@@ -23,12 +23,18 @@ Draft PR: https://github.com/aabhaslal-cpu/workforce-one-source-simulator/pull/1
 - One fictional tenant: Acme Digital Operations.
 - Departments: Product, Engineering, Customer Success.
 - Role templates: the original 12 persona categories.
+- Connection-bound authentication where each credential resolves server-side to exactly one connection ID.
+- Admin-gated detailed catalog, organization tree, teams, source identities, assignments, and visibility comparison.
+- Safe unauthenticated catalog metadata only.
 - Permission-aware connection feeds and manifests.
-- Cursor pagination with opaque base64url cursors.
-- Admin scenario and organization APIs.
+- Cursor pagination with opaque Zod-validated base64url cursors and bounded page size.
+- Admin scenario and organization APIs with strict Zod request validation.
 - Snapshot and restore controls that preserve organization configuration.
+- Durable local SQLite storage for scenario state, organization configuration, and snapshots.
+- Temporal source updates represented as timeline mutations that do not appear before their update time.
+- Simulator-owned deep links at `/sim/{sourceSystem}/{sourceId}`.
 - Operator console organization section with tree, people filtering, person records, regeneration, and visibility comparison.
-- Tests for determinism, organization generation, hierarchy validation, cursor retry, permissions, snapshots, and authentication.
+- Tests for determinism, organization generation, hierarchy validation, cursor retry/tampering, permissions, snapshots, authentication, production secret validation, public-route exposure, temporal updates, source deep links, SQLite persistence, and contract artifacts.
 
 ## Milestone 1 Scenarios
 
@@ -42,27 +48,25 @@ The M1 engine emits provider-shaped payloads for Slack, Gmail, Calendar, Notion,
 
 ## Verification
 
-Latest confirmed cloud verification before this documentation update:
+Latest pre-hardening baseline:
 
-- GitHub Actions workflow: `ci`, run #5.
-- Head SHA: `08579a0b440703ebbc13b69983f3bf4e7601aced`.
+- GitHub Actions workflow: `ci`, run #6.
+- Head SHA: `571a0691f647afd3950699a6ed5255802e5f7fa3`.
 - Result: success.
 - `pnpm run verify` completed successfully.
-- TypeScript typecheck passed.
 - Vitest passed 8 tests in `src/__tests__/simulator.test.ts`.
-- ESLint passed.
-- Build passed.
 
-This file update triggers a follow-up documentation-only CI run. Future sessions should re-check the latest PR head status before merge.
+This hardening update expands the suite and triggers a new CI run. Future sessions must re-check the latest PR head status before calling the PR merge-ready.
 
 ## Known Limitations
 
-- Storage is currently an in-process repository abstraction with migration documents for Postgres/SQLite readiness.
-- Failure modes are documented but not yet exposed as admin controls.
+- Local durable storage is implemented with SQLite; production Postgres storage is not yet proven.
+- Production-like environments fail closed rather than silently using memory when durable storage is unavailable.
+- Failure-mode controls, rate limiting, structured logging, and load testing remain Milestone 3 work.
 - Medium and large dataset expansion is deferred to Milestone 2.
 - Dotted-line relationships are modeled in the type system and docs but not yet richly generated.
 - The operator console is internal and intentionally simple.
 
 ## Next Starting Point
 
-Milestone 2 should preserve all existing contract and organization tests, then expand adapter modules, the remaining scenario packs, cross-functional project membership, manager rollups/escalations, and person-to-person visibility comparison depth.
+Finish Milestone 1 hardening only: verify the new CI run, refresh PR #1 body with exact counts/results, and decide merge readiness honestly. Milestone 2 should start only after Milestone 1 is merged and should preserve all existing contract and organization tests.
