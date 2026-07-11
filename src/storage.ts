@@ -1,7 +1,25 @@
 import { mkdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import type { OrganizationConfig, ScenarioState, Snapshot } from "./domain.js";
+
+type SQLiteStatement = {
+  all(...parameters: unknown[]): unknown[];
+  get(...parameters: unknown[]): unknown;
+  run(...parameters: unknown[]): unknown;
+};
+
+type SQLiteDatabase = {
+  exec(sql: string): void;
+  prepare(sql: string): SQLiteStatement;
+  close(): void;
+};
+
+type SQLiteModule = {
+  DatabaseSync: new (filename: string) => SQLiteDatabase;
+};
+
+const require = createRequire(import.meta.url);
 
 export interface SimulatorStorage {
   listScenarioStates(): ScenarioState[];
@@ -64,7 +82,7 @@ export class MemorySimulatorStorage implements SimulatorStorage {
 }
 
 export class SQLiteSimulatorStorage implements SimulatorStorage {
-  private readonly database: DatabaseSync;
+  private readonly database: SQLiteDatabase;
 
   constructor(filename: string) {
     if (!filename.trim()) {
@@ -73,7 +91,7 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
     if (filename !== ":memory:") {
       mkdirSync(dirname(filename), { recursive: true });
     }
-    this.database = new DatabaseSync(filename);
+    this.database = openSQLiteDatabase(filename);
     this.database.exec(`
       CREATE TABLE IF NOT EXISTS scenario_states (
         scenario_id TEXT PRIMARY KEY,
@@ -172,6 +190,11 @@ export class SQLiteSimulatorStorage implements SimulatorStorage {
   close(): void {
     this.database.close();
   }
+}
+
+function openSQLiteDatabase(filename: string): SQLiteDatabase {
+  const sqlite = require("node:sqlite") as SQLiteModule;
+  return new sqlite.DatabaseSync(filename);
 }
 
 function cloneState(state: ScenarioState): ScenarioState {
