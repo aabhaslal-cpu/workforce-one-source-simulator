@@ -30,3 +30,5 @@ Scenario packs define what happened. Adapters define how that event appears in a
 - Zendesk
 
 Adapters are simplified simulator-owned representations. They do not clone complete vendor APIs.
+
+For expansion rules, see `docs/PROVIDER_ADAPTERS.md`.

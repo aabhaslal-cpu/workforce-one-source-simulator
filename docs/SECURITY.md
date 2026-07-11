@@ -33,7 +33,7 @@ Preview, production, and Vercel-like runtimes reject:
 - SQLite storage
 - injected local-storage simulators
 
-Production Postgres remains unproven. Production-like startup fails closed until Milestone 3 provides a proven adapter.
+Production-like startup requires Postgres through `DATABASE_URL`. If Postgres is missing or unavailable, startup fails closed instead of falling back to memory or SQLite.
 
 ## Data Safety
 
@@ -42,10 +42,22 @@ Production Postgres remains unproven. Production-like startup fails closed until
 - Customers, repositories, tickets, and accounts are fictional simulator entities.
 - Source URLs are simulator-owned links and contain no secrets.
 
-## Deferred To Milestone 3
+## Logging And Errors
 
-- Rate limiting.
-- Structured security logging.
-- Load testing.
-- Production Postgres verification.
-- Final deployment security review.
+- Structured request logs are sanitized and disabled locally unless `SIMULATOR_STRUCTURED_LOGS=true`.
+- Logs include request ID, operation, status, duration, connection ID, cursor metadata, and world revision when available.
+- Logs and error responses must not include credentials, internal stack traces, or database connection strings.
+- Error responses include a safe classification and correlation ID.
+
+## Failure Simulation Safety
+
+- Failure modes are admin-controlled and disabled by default.
+- Failure modes are deterministic and scoped by operation, connection, source system, and optional every-Nth invocation.
+- Failure modes are for connector testing only; they do not bypass authentication or return otherwise unauthorized records.
+
+## Remaining Deployment Responsibilities
+
+- Rotate admin and connection credentials outside the simulator.
+- Restrict network access to the simulator and Postgres.
+- Configure external logging, alerting, backups, and retention.
+- Review generated connector credentials before exposing a deployment to other services.

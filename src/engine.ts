@@ -23,7 +23,7 @@ import {
   type SourceRecord,
   type Team,
 } from "./domain.js";
-import { MemorySimulatorStorage, type SimulatorStorage, type StorageKind } from "./storage.js";
+import { MemorySimulatorStorage, type SimulatorStorage, type StorageHealth, type StorageKind } from "./storage.js";
 import {
   createConnections,
   defaultOrganizationConfig,
@@ -125,6 +125,10 @@ export class SourceSimulator {
 
   storageKind(): StorageKind {
     return this.storage.kind;
+  }
+
+  storageHealth(): StorageHealth {
+    return this.storage.health();
   }
 
   publicCatalog() {

@@ -1,6 +1,6 @@
 # Change Ledger
 
-Milestone 2 replaces consumed-ID cursors with a compact v3 checkpoint over a deterministic source-change ledger.
+The simulator uses a compact v3 checkpoint over a deterministic source-change ledger.
 
 The durable ledger is occurred-only. Scenario definitions may describe future records, updates, or deletions, but the stored ledger contains only source changes whose business event and mutation time have been reached.
 
@@ -53,4 +53,4 @@ Snapshot restore restores business state, creates a new world revision, rebuilds
 
 ## Atomicity
 
-World replacements commit scenario instance states, organization config when applicable, world revision, source-change ledger, current source-object projection, and dataset metadata together. SQLite uses one transaction; rollback tests inject failures during replacement and assert the previous world remains intact.
+World replacements commit scenario instance states, organization config when applicable, world revision, source-change ledger, current source-object projection, and dataset metadata together. SQLite and Postgres use one transaction; rollback tests inject failures during replacement and assert the previous world remains intact.

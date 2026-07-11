@@ -9,7 +9,7 @@ import { SourceSimulator } from "../engine.js";
 import { createApp } from "../app.js";
 import { sourceAdapters } from "../adapters/registry.js";
 import { defaultOrganizationConfig, personConnectionId } from "../organization.js";
-import { MemorySimulatorStorage, SQLiteSimulatorStorage } from "../storage.js";
+import { MemorySimulatorStorage, PostgresSimulatorStorage, SQLiteSimulatorStorage } from "../storage.js";
 import { sourceSystems } from "../domain.js";
 
 type TestSQLiteStatement = {
@@ -133,6 +133,9 @@ function storageWorldSnapshot(simulator: SourceSimulator) {
     sourceObjects: simulator.sourceObjects(),
   };
 }
+
+const postgresTestUrl = process.env.SIMULATOR_POSTGRES_TEST_URL;
+const describePostgres = postgresTestUrl ? describe : describe.skip;
 
 describe("organization generation", () => {
   it("generates a deterministic multi-person reporting hierarchy", () => {
@@ -907,6 +910,123 @@ describe("source deep links", () => {
   });
 });
 
+describe("Milestone 3 operations", () => {
+  it("exposes production health, metrics, request inspection, and storage inspection", async () => {
+    const { app } = credentialedApp();
+    const health = await app.request("/healthz");
+    expect(health.status).toBe(200);
+    const healthBody = await health.json();
+    expect(healthBody).toMatchObject({
+      ok: true,
+      schemaVersion: "simulator-health.v1",
+      contractVersion: "source-feed.v1",
+      storage: { kind: "memory", ok: true },
+    });
+    expect(healthBody.worldRevision).toMatch(/^world-/);
+
+    await app.request("/v1/connections/conn-product-manager/records?limit=2", {
+      headers: connectionHeaders("secret-product-manager"),
+    });
+    const metrics = await app.request("/v1/admin/metrics", { headers: adminHeaders() });
+    expect(metrics.status).toBe(200);
+    const metricsBody = await metrics.json();
+    expect(metricsBody.schemaVersion).toBe("simulator-metrics.v1");
+    expect(metricsBody.requests.total).toBeGreaterThan(0);
+    expect(metricsBody.simulator.sourceChanges).toBeGreaterThan(0);
+    expect(metricsBody.simulator.worldRevision).toBe(healthBody.worldRevision);
+
+    const requests = await app.request("/v1/admin/requests", { headers: adminHeaders() });
+    expect((await requests.json()).requests.some((request: { connectionId?: string }) => request.connectionId === "conn-product-manager")).toBe(true);
+
+    const storage = await app.request("/v1/admin/storage", { headers: adminHeaders() });
+    expect((await storage.json()).counts.sourceChanges).toBeGreaterThan(0);
+  });
+
+  it("applies deterministic failure modes without random behavior", async () => {
+    const { app } = credentialedApp();
+    const configured = await app.request("/v1/admin/failure-modes", {
+      method: "PUT",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({
+        schemaVersion: "failure-modes.v1",
+        rules: [
+          { id: "partial", enabled: true, mode: "partial_page", operation: "feed", connectionId: "conn-product-manager", pageSize: 1 },
+          { id: "duplicate", enabled: true, mode: "duplicate_objects", operation: "feed", connectionId: "conn-product-manager" },
+          { id: "edited", enabled: true, mode: "edited_objects", operation: "feed", connectionId: "conn-product-manager" },
+        ],
+      }),
+    });
+    expect(configured.status).toBe(200);
+
+    const feed = await app.request("/v1/connections/conn-product-manager/records?limit=10", {
+      headers: connectionHeaders("secret-product-manager"),
+    });
+    expect(feed.status).toBe(200);
+    const body = SourceFeedBatchV1Schema.parse(await feed.json());
+    expect(body.records).toHaveLength(2);
+    expect(body.records[0]!.sourceId).toBe(body.records[1]!.sourceId);
+    expect(body.records[0]!.title).toContain("simulated edit");
+
+    await app.request("/v1/admin/failure-modes", {
+      method: "PUT",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({
+        schemaVersion: "failure-modes.v1",
+        rules: [{ id: "auth", enabled: true, mode: "auth_failure", operation: "manifest", connectionId: "conn-product-manager" }],
+      }),
+    });
+    const authFailure = await app.request("/v1/connections/conn-product-manager/manifest", {
+      headers: connectionHeaders("secret-product-manager"),
+    });
+    expect(authFailure.status).toBe(401);
+    expect((await authFailure.json()).classification).toBe("auth_failure");
+
+    await app.request("/v1/admin/failure-modes", {
+      method: "PUT",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({
+        schemaVersion: "failure-modes.v1",
+        rules: [{ id: "cursor", enabled: true, mode: "cursor_corruption", operation: "feed", connectionId: "conn-product-manager" }],
+      }),
+    });
+    const corrupted = await app.request("/v1/connections/conn-product-manager/records?limit=1", {
+      headers: connectionHeaders("secret-product-manager"),
+    });
+    expect((await corrupted.json()).nextCursor).toBe("corrupted-cursor-for-failure-test");
+
+    const reset = await app.request("/v1/admin/failure-modes/reset", {
+      method: "POST",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: "{}",
+    });
+    expect((await reset.json()).rules).toHaveLength(0);
+  });
+
+  it("runs the connector lifecycle kit and a bounded performance benchmark", async () => {
+    const { app } = credentialedApp();
+    const kit = await app.request("/v1/admin/connector-test-kit/run", {
+      method: "POST",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(kit.status).toBe(200);
+    const kitBody = await kit.json();
+    expect(kitBody.schemaVersion).toBe("connector-test-kit.v1");
+    expect(kitBody.steps.every((step: { ok: boolean }) => step.ok)).toBe(true);
+
+    const benchmark = await app.request("/v1/admin/performance/benchmark", {
+      method: "POST",
+      headers: { ...adminHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ storage: "memory", seed: "test-benchmark", datasetSizes: ["small"] }),
+    });
+    expect(benchmark.status).toBe(200);
+    const benchmarkBody = await benchmark.json();
+    expect(benchmarkBody.schemaVersion).toBe("simulator-performance-benchmark.v1");
+    expect(benchmarkBody.results[0].operations.generate.durationMs).toBeGreaterThanOrEqual(0);
+    expect(benchmarkBody.results[0].counts.sourceChanges).toBeGreaterThan(0);
+  });
+});
+
 describe("Milestone 2 admin APIs", () => {
   it("exposes scenario packs, instances, dataset metadata, and source history through admin routes", async () => {
     const { app } = credentialedApp(completedDatasetSimulator("api-m2-seed", "medium"));
@@ -1153,15 +1273,96 @@ describe("SQLite storage", () => {
   });
 });
 
+describePostgres("Postgres storage", () => {
+  it("matches SQLite source-ledger behavior and persists across engine recreation", () => {
+    const sqlitePath = join(mkdtempSync(join(tmpdir(), "source-sim-pg-parity-")), "sqlite.sqlite");
+    const sqliteStorage = new SQLiteSimulatorStorage(sqlitePath);
+    const postgresStorage = new PostgresSimulatorStorage({ connectionString: postgresTestUrl!, resetForTesting: true });
+    try {
+      const sqlite = new SourceSimulator({ seed: "postgres-parity", storage: sqliteStorage, baseUrl: "http://sim.test" });
+      const postgres = new SourceSimulator({ seed: "postgres-parity", storage: postgresStorage, baseUrl: "http://sim.test" });
+      sqlite.generateDataset({ seed: "postgres-parity-dataset", datasetSize: "medium" });
+      postgres.generateDataset({ seed: "postgres-parity-dataset", datasetSize: "medium" });
+      sqlite.advanceScenario("product-launch-readiness", { hours: 24 });
+      postgres.advanceScenario("product-launch-readiness", { hours: 24 });
+      sqlite.triggerScenarioEvent("product-launch-readiness", "exec-pressure");
+      postgres.triggerScenarioEvent("product-launch-readiness", "exec-pressure");
+
+      expect(postgres.datasetMetadata()).toMatchObject({
+        scenarioInstanceCount: sqlite.datasetMetadata().scenarioInstanceCount,
+        totalSourceChanges: sqlite.datasetMetadata().totalSourceChanges,
+        totalSourceObjects: sqlite.datasetMetadata().totalSourceObjects,
+      });
+      expect(postgres.feed("conn-product-manager", undefined, 20).records.map((record) => record.sourceId)).toEqual(
+        sqlite.feed("conn-product-manager", undefined, 20).records.map((record) => record.sourceId),
+      );
+      const metadataBeforeRestart = postgres.datasetMetadata();
+      postgresStorage.close();
+
+      const restartedStorage = new PostgresSimulatorStorage({ connectionString: postgresTestUrl!, resetForTesting: false });
+      try {
+        const restarted = new SourceSimulator({ seed: "ignored", storage: restartedStorage, baseUrl: "http://sim.test" });
+        expect(restarted.datasetMetadata()).toEqual(metadataBeforeRestart);
+      } finally {
+        restartedStorage.close();
+      }
+    } finally {
+      sqliteStorage.close();
+      postgresStorage.close();
+    }
+  });
+
+  it("rolls back failed Postgres world replacements and is accepted in production-like apps", async () => {
+    const storage = new PostgresSimulatorStorage({ connectionString: postgresTestUrl!, resetForTesting: true });
+    try {
+      const simulator = new SourceSimulator({ seed: "postgres-atomic", storage, baseUrl: "http://sim.test" });
+      const before = storageWorldSnapshot(simulator);
+      storage.injectWorldReplacementFailureForTesting();
+      expect(() =>
+        simulator.createScenarioInstance({
+          scenarioPackId: "product-launch-readiness",
+          scenarioInstanceId: "postgres-should-roll-back",
+          seed: "postgres-rollback-seed",
+        }),
+      ).toThrow("Injected world replacement failure");
+      expect(storageWorldSnapshot(simulator)).toEqual(before);
+
+      const app = createApp({
+        simulator,
+        runtimeEnv: "preview",
+        adminKey: "prod-admin",
+        connectionCredentials: { "prod-product-manager": "conn-product-manager" },
+      });
+      const health = await app.request("/healthz");
+      expect(health.status).toBe(200);
+      expect((await health.json()).storage.kind).toBe("postgres");
+    } finally {
+      storage.close();
+    }
+  });
+});
+
 describe("contract artifacts", () => {
   it("keeps OpenAPI and JSON Schema examples aligned with the runtime contract", async () => {
     const example = JSON.parse(await readFile(new URL("../../examples/jira-engineering-feed.v1.json", import.meta.url), "utf8"));
     expect(SourceFeedBatchV1Schema.safeParse(example).success).toBe(true);
 
     const openApi = await readFile(new URL("../../openapi/source-simulator.v1.yaml", import.meta.url), "utf8");
+    const postgresMigration = await readFile(new URL("../../migrations/postgres_001_initial.sql", import.meta.url), "utf8");
     const jsonSchema = JSON.parse(await readFile(new URL("../../schemas/source-feed-batch.v1.json", import.meta.url), "utf8"));
 
     expect(openApi).toContain("/sim/{sourceSystem}/{sourceId}");
+    expect(openApi).toContain("/v1/admin/metrics");
+    for (const table of [
+      "scenario_instance_states",
+      "organization_config",
+      "source_change_ledger",
+      "source_objects",
+      "dataset_metadata",
+      "snapshots",
+    ]) {
+      expect(postgresMigration).toContain(`CREATE TABLE IF NOT EXISTS ${table}`);
+    }
     expect(openApi).toContain("connectionBoundCredential");
     expect(jsonSchema.$defs.sourceRecord.required).toContain("correlation");
   });

@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.3.0 - Milestone 3 Draft
+
+### Added
+
+- Production Postgres storage adapter with migrations and transaction-backed world replacement.
+- CI Postgres service and conditional local Postgres parity tests.
+- Storage health checks for memory, SQLite, and Postgres.
+- Structured request telemetry with request ID, connection ID, world revision, cursor metadata, operation, status, duration, and safe error classification.
+- Rich `/healthz`, admin metrics, request inspector, storage inspector, deterministic benchmark endpoint, failure-mode configuration endpoints, and connector test-kit endpoint.
+- Deterministic failure modes for rate limits, timeouts, 500/503, latency, partial pages, cursor corruption, auth failures, expired credentials, outages, malformed payloads, permission changes, deleted objects, edited objects, late-arriving objects, duplicate objects, and stale objects.
+- Connector lifecycle test kit covering initial sync, incremental sync, late arrivals, updates/deletes, world reset, stale cursor rejection, new cursor acquisition, permission differences, and connection regeneration behavior.
+- Operator console controls for metrics, storage, ledger, snapshots, failure toggles, benchmark, and connector kit.
+- Production configuration docs, `.env.example` updates, storage docs, operations docs, failure-mode docs, testing docs, scenario-authoring docs, provider-adapter docs, and Milestone 3 review notes.
+
+### Changed
+
+- Production-like runtimes now accept Postgres when `DATABASE_URL` is configured and continue to reject memory/SQLite.
+- OpenAPI now includes operational, failure-mode, benchmark, and connector-kit endpoints.
+- Benchmark output is compact and reports durations/counts only.
+- Error responses include safe classifications and correlation IDs without credentials, stack traces, or database strings.
+
+### Verification
+
+- Local suite: 53 Vitest tests total; 51 pass locally and 2 Postgres tests skip without `SIMULATOR_POSTGRES_TEST_URL`.
+- GitHub Actions provides Postgres and is expected to run all 53 tests.
+
+### Performance Snapshot
+
+Measured locally on July 11, 2026 with `docs-benchmark`:
+
+- Memory large: generate 151.97 ms, advance 205.48 ms, trigger 196.19 ms, feed 55.02 ms, snapshot 8.70 ms, restore 134.29 ms, organization regeneration 154.50 ms.
+- SQLite large: generate 160.21 ms, advance 231.39 ms, trigger 218.81 ms, feed 37.37 ms, snapshot 7.83 ms, restore 191.81 ms, organization regeneration 197.34 ms.
+- Postgres benchmark is run when `DATABASE_URL` is available in the target environment.
+
 ## 0.2.0 - Milestone 2 Draft
 
 ### Added

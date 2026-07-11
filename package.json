@@ -20,11 +20,13 @@
   "dependencies": {
     "@hono/node-server": "^1.13.8",
     "hono": "^4.6.16",
+    "pg": "^8.22.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
     "@types/node": "^22.10.2",
+    "@types/pg": "^8.20.0",
     "eslint": "^9.17.0",
     "prettier": "^3.4.2",
     "tsx": "^4.19.2",

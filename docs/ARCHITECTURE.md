@@ -10,12 +10,16 @@ The simulator owns fictional source data only. Workforce One owns interpretation
 
 ## Runtime Components
 
-- `src/app.ts`: HTTP API, admin auth, connection-bound auth, request validation, operator console, source deep links, and admin inspection routes.
+- `src/app.ts`: HTTP API, admin auth, connection-bound auth, request validation, operator console, source deep links, admin inspection routes, health, metrics, failure controls, benchmark, and connector-kit routes.
 - `src/engine.ts`: deterministic organization-aware scenario engine, scenario instances, source-change ledger, v3 cursor feed, world revision, snapshots, dataset metadata, and visibility filtering.
 - `src/adapters/*`: provider-shaped payload adapters and adapter registry.
 - `src/data.ts`: fictional tenant and 10 scenario-pack definitions.
 - `src/organization.ts`: role templates, deterministic people/teams/reporting graph, dotted-line relationships, cross-functional memberships, and connection IDs.
-- `src/storage.ts`: storage interface, memory test adapter, and SQLite local durable adapter.
+- `src/storage.ts`: storage interface, memory test adapter, SQLite local durable adapter, and Postgres production adapter.
+- `src/observability.ts`: structured request telemetry and operational counters.
+- `src/failures.ts`: deterministic failure-mode configuration and feed mutation helpers.
+- `src/performance.ts`: deterministic benchmark harness.
+- `src/connector-kit.ts`: reference connector lifecycle kit.
 - `src/contracts.ts`: Zod runtime contract for `SourceFeedBatchV1`.
 
 ## Determinism
@@ -87,7 +91,7 @@ Reporting hierarchy does not grant record visibility by itself. Visibility comes
 
 ## Storage
 
-SQLite local storage persists:
+SQLite and Postgres persist:
 
 - `scenario_states`
 - `scenario_instance_states`
@@ -98,7 +102,21 @@ SQLite local storage persists:
 - `dataset_metadata`
 - `snapshots`
 
-Memory storage is for tests or explicitly selected local ephemeral development. Preview, production, and Vercel-like environments reject memory and SQLite. Production Postgres remains Milestone 3 and is not claimed as ready.
+Memory storage is for tests or explicitly selected local ephemeral development. SQLite is for local development and CI-level local durability. Preview, production, and Vercel-like environments reject memory and SQLite and require Postgres through `DATABASE_URL`.
+
+The Postgres adapter preserves the synchronous storage interface by delegating database work to a worker-thread bridge backed by `pg.Pool`. This keeps the engine API stable while still using real Postgres transactions for world replacement. A future async storage interface could remove that bridge, but it is not required for Milestone 3 correctness.
+
+## Observability
+
+Every request receives a request ID and sanitized telemetry record. Logs and metrics include operation, path, status, duration, connection ID when present, cursor version/position when present, world revision, and safe error classification. Credentials, stack traces, and database connection strings are not logged by the simulator.
+
+`/healthz` reports storage health, world revision, dataset metadata, organization summary, uptime, build version, and schema version. Admin-only metrics and request-inspection routes expose recent sanitized request data for connector debugging.
+
+## Failure Simulation
+
+Failure simulation is rule-based and deterministic. Rules can target operation, connection, source system, and every-Nth invocation. Supported modes include rate limits, timeouts, service outages, latency, partial pages, cursor corruption, auth failures, expired credentials, malformed payloads, permission changes, deletes, edits, late arrivals, duplicates, and stale objects.
+
+Failure controls are disabled by default and require admin authentication at runtime.
 
 ## Public Vs Admin
 

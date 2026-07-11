@@ -75,6 +75,14 @@ The endpoint returns the current fictional source object in JSON or simple HTML.
 
 Admin APIs expose scenario packs, scenario instances, source changes, source objects, source history, dataset metadata, organization relationships, and visibility comparison. Scenario packs are templates. Scenario instances are persisted runtime entities and include concrete participants and context, so instance listing/detail requires admin authentication.
 
+Operational admin APIs expose metrics, recent sanitized requests, storage health/counts, deterministic failure-mode configuration, performance benchmark runs, and the connector test kit.
+
+## Failure And Reset Semantics
+
+Deterministic failure modes are simulator-owned test controls. They can alter feed responses or return provider-like errors, but they do not alter the underlying durable source ledger unless the operator separately advances, triggers, resets, restores, or regenerates the world.
+
+Destructive world operations rotate `worldRevision`. Connectors must treat stale-checkpoint 400 responses as an intentional reset boundary and acquire a fresh cursor.
+
 ## Artifacts
 
 - Zod runtime schema: `src/contracts.ts`

@@ -10,6 +10,13 @@ pnpm run dev
 
 Local development defaults to SQLite durable storage at `.simulator/source-simulator.sqlite`.
 
+Memory storage is allowed only when both are true:
+
+- `SIMULATOR_STORAGE_DRIVER=memory`
+- `SIMULATOR_ALLOW_EPHEMERAL_MEMORY=true`
+
+Memory storage is never allowed in preview or production.
+
 ## Verification
 
 ```bash
@@ -26,14 +33,19 @@ pnpm run verify
 - `SIMULATOR_PUBLIC_BASE_URL`: base URL used in generated source links.
 - `SIMULATOR_DEFAULT_SEED`: default deterministic seed.
 - `SIMULATOR_DEFAULT_DATASET_SIZE`: `small`, `medium`, or `large`.
-- `SIMULATOR_STORAGE_DRIVER`: `sqlite` or `memory` for development/test only.
+- `SIMULATOR_STORAGE_DRIVER`: `sqlite`, `memory`, or `postgres`.
 - `SIMULATOR_SQLITE_PATH`: SQLite file path for local durable state.
 - `SIMULATOR_ALLOW_EPHEMERAL_MEMORY`: must be `true` before local memory storage can be selected.
-- `DATABASE_URL`: reserved for a future proven Postgres adapter.
+- `DATABASE_URL`: Postgres connection string. Required in preview and production.
+- `SIMULATOR_FAILURE_MODES`: optional JSON failure-mode configuration.
+- `SIMULATOR_STRUCTURED_LOGS`: `true` emits sanitized JSON request logs.
+- `SIMULATOR_POSTGRES_TEST_URL`: CI/local test-only Postgres URL for parity tests.
 
-## SQLite Schema
+## Storage Schemas
 
-The local durable schema is documented in `migrations/001_initial.sql` and checked against `SQLiteSimulatorStorage` in tests.
+The local SQLite schema is documented in `migrations/001_initial.sql` and checked against `SQLiteSimulatorStorage` in tests.
+
+The production Postgres schema is documented in `migrations/postgres_001_initial.sql` and exercised by CI when `SIMULATOR_POSTGRES_TEST_URL` is configured.
 
 Tables:
 
@@ -48,4 +60,30 @@ Tables:
 
 ## Production-Like Behavior
 
-The repo includes Vercel routing files, but Milestone 2 does not claim durable production deployment readiness. Preview, production, and Vercel-like environments must fail closed until Milestone 3 proves Postgres durability.
+Preview, production, and Vercel-like environments must:
+
+- set `SIMULATOR_ADMIN_API_KEY`
+- set `SIMULATOR_CONNECTION_CREDENTIALS`
+- avoid known development credentials
+- avoid identical admin and connection credentials
+- set `DATABASE_URL` to Postgres
+- reject memory and SQLite, including injected storage/simulator instances
+
+Postgres is implemented and CI-proven for the simulator storage contract. Production deployment still requires external backups, secret rotation, log shipping, alerting, database patching, and network controls.
+
+## CI
+
+GitHub Actions runs `pnpm install --frozen-lockfile` and `pnpm run verify` with a Postgres 16 service. The workflow sets `SIMULATOR_POSTGRES_TEST_URL`, so Postgres parity and rollback tests run in CI.
+
+## Smoke Test
+
+After deployment:
+
+```bash
+curl "$BASE_URL/healthz"
+curl -H "x-admin-api-key: $SIMULATOR_ADMIN_API_KEY" "$BASE_URL/v1/admin/metrics"
+curl -H "x-admin-api-key: $SIMULATOR_ADMIN_API_KEY" "$BASE_URL/v1/admin/storage"
+curl -H "x-connection-secret: $PRODUCT_MANAGER_SECRET" "$BASE_URL/v1/connections/conn-product-manager/records?limit=5"
+```
+
+`/healthz` should report `storage.kind: postgres` in preview and production.

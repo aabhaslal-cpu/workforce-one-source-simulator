@@ -46,3 +46,19 @@ Supports:
 - simulator deep-link targets
 
 The console requires the admin credential for detailed reads and writes. It does not display credential material.
+
+## Operations
+
+Supports:
+
+- health inspection
+- live metrics
+- recent sanitized request inspection
+- storage inspection
+- ledger inspection
+- snapshot browsing
+- deterministic failure-mode configuration and reset
+- benchmark execution
+- connector test-kit execution
+
+The console is intentionally utilitarian. It is for simulator operators and connector developers, not end users.

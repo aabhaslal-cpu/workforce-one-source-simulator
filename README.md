@@ -6,7 +6,7 @@ The simulator behaves like an external source platform. It emits fictional, perm
 
 ## Current State
 
-Milestone 2 is implemented on `milestone-2/scenarios-and-sources` as a draft PR.
+Milestone 3 is implemented on `milestone-3/production-hardening` as the final production-hardening draft PR.
 
 Built:
 
@@ -27,8 +27,13 @@ Built:
 - Source updates, late arrivals, corrected analytics, reschedules, archived/deleted objects, and conflicting partial evidence.
 - Small, medium, and large deterministic datasets.
 - SQLite local persistence for scenario instance states, legacy scenario states, organization config, world revision, source-change ledger, current source-object projection, dataset metadata, and snapshots.
+- Production Postgres persistence for the same durable state, with transaction-backed world replacement and CI parity tests.
+- Structured request telemetry, sanitized error envelopes with correlation IDs, operational metrics, richer `/healthz`, storage inspection, and request inspection.
+- Deterministic failure simulation for connector development: rate limits, timeouts, 500/503, latency, partial pages, cursor corruption, auth failures, expired credentials, outages, malformed payloads, permission changes, deletes, edits, late arrivals, duplicate objects, and stale objects.
+- Connector test kit covering initial sync, incremental sync, late arrivals, updates/deletes, world reset, stale cursor rejection, new cursor acquisition, permission differences, and connection-regeneration behavior.
+- Built-in deterministic benchmark harness for small, medium, and large datasets across memory, SQLite, and Postgres when `DATABASE_URL` is configured.
 - Simulator-owned source deep links at `/sim/{sourceSystem}/{sourceId}` with the same connection visibility checks as feeds.
-- Internal operator console at `/console`.
+- Internal operator console at `/console` with organization, scenario, ledger, storage, snapshot, metrics, failure-mode, benchmark, and connector-kit controls.
 
 Dataset counts with the current implementation:
 
@@ -57,6 +62,7 @@ curl http://localhost:3000/v1/catalog
 curl http://localhost:3000/v1/catalog/scenario-packs
 curl -H 'x-admin-api-key: dev-admin-key' http://localhost:3000/v1/catalog/scenario-instances
 curl -H 'x-admin-api-key: dev-admin-key' http://localhost:3000/v1/admin/datasets/current
+curl -H 'x-admin-api-key: dev-admin-key' http://localhost:3000/v1/admin/metrics
 curl -H 'x-admin-api-key: dev-admin-key' http://localhost:3000/v1/admin/source-changes
 curl -H 'x-connection-secret: dev-connection-secret:conn-product-manager' \
   'http://localhost:3000/v1/connections/conn-product-manager/records?limit=5'
@@ -78,13 +84,15 @@ pnpm install --frozen-lockfile
 pnpm run verify
 ```
 
-At this Milestone 2 draft state, the local suite has 45 Vitest tests.
+The Milestone 3 suite has 53 Vitest tests. Local runs without `SIMULATOR_POSTGRES_TEST_URL` execute 51 tests and skip the 2 Postgres parity tests. GitHub Actions provides Postgres and runs the full suite.
 
 ## Deployment Honesty
 
-Local durable storage is SQLite. Preview, production, and Vercel-like runtimes reject missing credentials, known development credentials, identical admin/connection credentials, memory storage, SQLite storage, and injected local-storage simulators.
+Local durable storage defaults to SQLite. Memory storage is available only for tests or explicitly selected local ephemeral development.
 
-A production Postgres adapter is not yet proven. Production-like startup fails closed and this repository must not be described as durable deployment-ready until Milestone 3 proves that adapter.
+Preview, production, and Vercel-like runtimes reject missing credentials, known development credentials, identical admin/connection credentials, memory storage, SQLite storage, and injected local-storage simulators. Production-like runtimes require `DATABASE_URL` with Postgres.
+
+Postgres is implemented and CI-proven for the simulator storage contract. Operational readiness still depends on the deployment owner providing database backups, network controls, secret rotation, and monitoring around this service.
 
 ## Documentation Map
 
@@ -92,6 +100,12 @@ A production Postgres adapter is not yet proven. Production-like startup fails c
 - `ACTIVE_WORK.md`: current branch, baseline, implementation status, verification, and limitations.
 - `docs/MILESTONES.md`: exactly three milestones.
 - `docs/ARCHITECTURE.md`: engine, ledger, storage, adapter, and API architecture.
+- `docs/OPERATIONS.md`: health, metrics, logs, diagnostics, backups, and recovery.
+- `docs/STORAGE.md`: memory, SQLite, Postgres, migrations, and transaction behavior.
+- `docs/FAILURE_MODES.md`: deterministic failure simulation matrix.
+- `docs/TESTING.md`: verification suite, Postgres parity, connector kit, and performance sanity.
+- `docs/SCENARIO_AUTHORING.md`: how to author scenario packs without breaking ledger semantics.
+- `docs/PROVIDER_ADAPTERS.md`: provider adapter expansion rules.
 - `docs/CHANGE_LEDGER.md`: v3 cursor and world-revision behavior.
 - `docs/SOURCE_ADAPTERS.md`: adapter responsibilities and coverage.
 - `docs/SCENARIOS.md`: 10 scenario packs.
@@ -99,7 +113,7 @@ A production Postgres adapter is not yet proven. Production-like startup fails c
 - `docs/ORGANIZATION.md`: organization graph and relationships.
 - `docs/SECURITY.md`: auth, catalog exposure, permissions, and fail-closed rules.
 - `docs/CONTRACT.md` and `openapi/source-simulator.v1.yaml`: external contract.
-- `docs/DEPLOYMENT.md`: local operation and production limitations.
+- `docs/DEPLOYMENT.md`: local, CI, preview, and production deployment.
 - `docs/WORKFORCE_ONE_INTEGRATION.md`: integration boundary.
 
 ## Non-Goals

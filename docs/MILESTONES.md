@@ -20,9 +20,9 @@ Delivered:
 
 ## Milestone 2: Complete Department, Level, Source, And Scenario Coverage
 
-Current branch: `milestone-2/scenarios-and-sources`.
+Merged before Milestone 3 started.
 
-Delivered in this draft:
+Delivered:
 
 - Compact v3 cursor over an append-only deterministic source-change ledger.
 - Independent persisted scenario instance runtime state.
@@ -43,18 +43,20 @@ Acceptance target: Workforce One can ingest a coherent fictional company source 
 
 ## Milestone 3: Production Hardening And Workforce One Integration Readiness
 
-Not started.
+Current branch: `milestone-3/production-hardening`.
 
-Milestone 3 should begin with:
+Delivered in this draft:
 
 - Proven production Postgres storage adapter.
-- Deployment verification and runbooks.
-- Rate limiting.
-- Failure simulation controls.
+- SQLite/Postgres storage parity and restart persistence tests.
+- Production-like startup with Postgres and continued fail-closed behavior for memory/SQLite.
+- Deployment verification, smoke-test guidance, and runbooks.
+- Deterministic failure simulation controls.
 - Structured safe logging and operational telemetry.
-- Load and performance tests.
-- Partial sync/failure compatibility fixtures.
-- Sample connector client and integration runbook.
-- Final security and architecture review.
+- Health, metrics, request inspection, storage inspection, benchmark, and connector-kit admin APIs.
+- Connector lifecycle compatibility kit for initial sync, incremental sync, late arrivals, updates/deletes, reset, stale cursor, new cursor, permission differences, and connection regeneration.
+- Performance sanity benchmark for small, medium, and large datasets.
+- Operator console operational controls.
+- Final architecture, security, operations, and Workforce One integration reviews.
 
-Do not claim production durable deployment readiness before Milestone 3 proves it.
+Acceptance target: the simulator can run as an independent internal platform beside Workforce One with production Postgres persistence, deterministic replay, operational diagnostics, connector failure testing, and truthful deployment documentation.

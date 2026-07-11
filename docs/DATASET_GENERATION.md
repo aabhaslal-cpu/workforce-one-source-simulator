@@ -26,6 +26,8 @@ Automatically scheduled events use `startedAt + atHour`. Manual triggers use the
 
 The source-change ledger is occurred-only. Dataset generation creates completed instances and reconstructs the current world from changes that have occurred by each instance clock; ordinary instance advancement appends newly reached changes.
 
+The benchmark harness creates one additional manual-trigger instance while measuring each dataset size, so benchmark count rows show 11, 81, and 401 instances.
+
 ## Normal And Risk Activity
 
 The scenarios include routine planning, product discovery, standups/meetings, completed milestones, support and customer updates, merged code, incidents, slips, adoption issues, renewals, expansion, and cross-functional releases.

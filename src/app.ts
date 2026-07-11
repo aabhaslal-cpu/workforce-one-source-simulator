@@ -10,8 +10,12 @@ import {
 } from "./engine.js";
 import { scenarios } from "./data.js";
 import { previewOrganizationCounts, roleTemplates } from "./organization.js";
-import { MemorySimulatorStorage, SQLiteSimulatorStorage, type SimulatorStorage } from "./storage.js";
+import { MemorySimulatorStorage, PostgresSimulatorStorage, SQLiteSimulatorStorage, type SimulatorStorage } from "./storage.js";
 import { datasetSizes, sourceSystems, type DatasetSize, type OrganizationConfig } from "./domain.js";
+import { applyFeedFailure, FailureController, FailureModeConfigSchema, parseFailureConfig, type FailureDecision } from "./failures.js";
+import { OperationalTelemetry, type RequestTelemetryInput } from "./observability.js";
+import { BenchmarkRequestSchema, runPerformanceBenchmark } from "./performance.js";
+import { runConnectorTestKit } from "./connector-kit.js";
 
 export interface AppOptions {
   simulator?: SourceSimulator;
@@ -149,17 +153,56 @@ export function createApp(options: AppOptions = {}) {
   const simulator = options.simulator ?? new SourceSimulator(simulatorOptions);
   enforceProductionSimulatorStorage(runtimeEnv, simulator);
   const auth = buildAuthConfig(simulator, options, runtimeEnv);
+  const telemetry = new OperationalTelemetry(process.env.SIMULATOR_STRUCTURED_LOGS === "true" || isProductionLike(runtimeEnv));
+  const failureController = new FailureController();
+  failureController.setConfig(parseFailureConfig(process.env.SIMULATOR_FAILURE_MODES));
+  const requestIds = new WeakMap<Request, string>();
   const app = new Hono();
 
   app.onError((error, c) => {
+    const correlationId = requestIds.get(c.req.raw) ?? "unknown";
     if (error instanceof HttpError) {
-      return c.json({ error: error.message }, error.status as 400 | 401 | 403 | 404);
+      return jsonError(error.status, { error: error.message, classification: "request_error", correlationId });
     }
-    return c.json({ error: "Internal simulator error" }, 500);
+    return jsonError(500, { error: "Internal simulator error", classification: "internal_error", correlationId });
+  });
+
+  app.use("*", async (c, next) => {
+    const requestId = telemetry.nextRequestId();
+    requestIds.set(c.req.raw, requestId);
+    c.header("x-request-id", requestId);
+    const started = Date.now();
+    let thrown: unknown;
+    try {
+      await next();
+    } catch (error) {
+      thrown = error;
+      throw error;
+    } finally {
+      const cursor = readCursorTelemetry(c.req.query("cursor"));
+      const status = thrown instanceof HttpError ? thrown.status : thrown ? 500 : c.res.status;
+      const telemetryInput: RequestTelemetryInput = {
+        requestId,
+        method: c.req.method,
+        path: c.req.path,
+        operation: operationFromPath(c.req.method, c.req.path),
+        status,
+        durationMs: Date.now() - started,
+      };
+      const connectionId = connectionIdFromPath(c.req.path);
+      const worldRevision = safeWorldRevision(simulator);
+      const errorClassification = thrown ? (thrown instanceof HttpError ? "request_error" : "internal_error") : undefined;
+      if (connectionId) telemetryInput.connectionId = connectionId;
+      if (worldRevision) telemetryInput.worldRevision = worldRevision;
+      if (cursor?.version !== undefined) telemetryInput.cursorVersion = cursor.version;
+      if (cursor?.afterSequence !== undefined) telemetryInput.cursorPosition = cursor.afterSequence;
+      if (errorClassification) telemetryInput.errorClassification = errorClassification;
+      telemetry.recordRequest(telemetryInput);
+    }
   });
 
   app.get("/", (c) => c.redirect("/console"));
-  app.get("/healthz", (c) => c.json({ ok: true, schemaVersion: "source-feed.v1" }));
+  app.get("/healthz", (c) => c.json(buildHealth(simulator, telemetry)));
   app.get("/console", (c) => c.html(consoleHtml));
 
   app.get("/v1/catalog", (c) => c.json(simulator.publicCatalog()));
@@ -183,22 +226,34 @@ export function createApp(options: AppOptions = {}) {
   app.get("/v1/catalog/teams", (c) => withAdmin(c, auth, () => c.json({ teams: simulator.teams() })));
   app.get("/v1/catalog/teams/:teamId", (c) => withAdmin(c, auth, () => c.json(simulator.team(c.req.param("teamId")))));
 
-  app.get("/v1/connections/:connectionId/manifest", (c) => {
+  app.get("/v1/connections/:connectionId/manifest", async (c) => {
     const authenticated = authenticateConnection(c, auth, simulator, c.req.param("connectionId"));
     if (!authenticated.ok) return authenticated.response;
+    const failure = await failureResponse(c, failureController.evaluate({ operation: "manifest", connectionId: authenticated.connectionId }), requestIds);
+    if (failure) return failure;
     return c.json(simulator.manifest(authenticated.connectionId));
   });
 
-  app.get("/v1/connections/:connectionId/records", (c) => {
+  app.get("/v1/connections/:connectionId/records", async (c) => {
     const authenticated = authenticateConnection(c, auth, simulator, c.req.param("connectionId"));
     if (!authenticated.ok) return authenticated.response;
     const pagination = parseSchema(PaginationSchema, { cursor: c.req.query("cursor"), limit: c.req.query("limit") });
-    return c.json(simulator.feed(authenticated.connectionId, pagination.cursor, pagination.limit));
+    const decision = failureController.evaluate({ operation: "feed", connectionId: authenticated.connectionId });
+    const failure = await failureResponse(c, decision, requestIds);
+    if (failure) return failure;
+    const boundedLimit = decision.pageSize ? Math.min(pagination.limit ?? MAX_PAGE_SIZE, decision.pageSize) : pagination.limit;
+    return c.json(applyFeedFailure(simulator.feed(authenticated.connectionId, pagination.cursor, boundedLimit), decision));
   });
 
-  app.get("/sim/:sourceSystem/:sourceId", (c) => {
+  app.get("/sim/:sourceSystem/:sourceId", async (c) => {
     const authenticated = authenticateConnection(c, auth, simulator);
     if (!authenticated.ok) return authenticated.response;
+    const failure = await failureResponse(
+      c,
+      failureController.evaluate({ operation: "deep_link", connectionId: authenticated.connectionId, sourceSystem: c.req.param("sourceSystem") }),
+      requestIds,
+    );
+    if (failure) return failure;
     const record = simulator.findRecordForConnection(authenticated.connectionId, c.req.param("sourceSystem"), c.req.param("sourceId"));
     const accept = c.req.header("accept") ?? "";
     if (accept.includes("text/html")) {
@@ -301,6 +356,23 @@ export function createApp(options: AppOptions = {}) {
     c.json({ history: simulator.sourceObjectHistory(c.req.param("sourceSystem"), c.req.param("sourceId")) }),
   );
   app.get("/v1/admin/source-changes", (c) => c.json({ sourceChanges: simulator.sourceChanges() }));
+  app.get("/v1/admin/metrics", (c) => c.json(buildMetrics(simulator, telemetry, failureController)));
+  app.get("/v1/admin/requests", (c) => c.json({ requests: telemetry.snapshot().requests.recent }));
+  app.get("/v1/admin/storage", (c) => c.json(buildStorageInspector(simulator)));
+  app.get("/v1/admin/failure-modes", (c) => c.json(failureController.getConfig()));
+  app.put("/v1/admin/failure-modes", async (c) => c.json(failureController.setConfig(await readJsonBody(c.req.raw, FailureModeConfigSchema))));
+  app.post("/v1/admin/failure-modes/reset", async (c) => {
+    await readJsonBody(c.req.raw, EmptyBodySchema);
+    return c.json(failureController.reset());
+  });
+  app.post("/v1/admin/performance/benchmark", async (c) => {
+    const body = await readJsonBody(c.req.raw, BenchmarkRequestSchema);
+    return c.json(runPerformanceBenchmark(body));
+  });
+  app.post("/v1/admin/connector-test-kit/run", async (c) => {
+    await readJsonBody(c.req.raw, EmptyBodySchema);
+    return c.json(runConnectorTestKit());
+  });
   app.post("/v1/admin/datasets/generate", async (c) => {
     const body = compactOptional(await readJsonBody(c.req.raw, DatasetGenerateSchema)) as DatasetGenerateInput;
     return c.json(simulator.generateDataset(body));
@@ -312,6 +384,128 @@ export function createApp(options: AppOptions = {}) {
   });
 
   return app;
+}
+
+function buildHealth(simulator: SourceSimulator, telemetry: OperationalTelemetry) {
+  const storage = simulator.storageHealth();
+  const metadata = simulator.datasetMetadata();
+  const organization = simulator.organizationSummary();
+  return {
+    ok: storage.ok,
+    schemaVersion: "simulator-health.v1",
+    uptimeMs: telemetry.snapshot().uptimeMs,
+    build: {
+      version: process.env.npm_package_version ?? "0.1.0",
+      commit: process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.GITHUB_SHA ?? "local",
+    },
+    contractVersion: "source-feed.v1",
+    schemaVersionStorage: "simulator-storage.v1",
+    storage,
+    worldRevision: metadata.worldRevision,
+    datasetMetadata: metadata,
+    organization: {
+      seed: organization.seed,
+      counts: organization.counts,
+      validationOk: organization.validation.ok,
+    },
+  };
+}
+
+function buildMetrics(simulator: SourceSimulator, telemetry: OperationalTelemetry, failureController: FailureController) {
+  const snapshot = telemetry.snapshot();
+  const metadata = simulator.datasetMetadata();
+  return {
+    ...snapshot,
+    simulator: {
+      activeScenarioInstances: simulator.states().filter((state) => state.completionState === "active").length,
+      scenarioInstances: metadata.scenarioInstanceCount,
+      sourceChanges: metadata.totalSourceChanges,
+      sourceObjects: metadata.totalSourceObjects,
+      datasetSize: metadata.datasetSize,
+      organizationSize: simulator.organizationSummary().counts.totalPeople,
+      ledgerSize: simulator.sourceChanges().length,
+      worldRevision: metadata.worldRevision,
+      storage: simulator.storageHealth(),
+      failureRules: failureController.getConfig().rules.filter((rule) => rule.enabled).length,
+    },
+  };
+}
+
+function buildStorageInspector(simulator: SourceSimulator) {
+  const metadata = simulator.datasetMetadata();
+  return {
+    schemaVersion: "simulator-storage-inspector.v1",
+    storage: simulator.storageHealth(),
+    datasetMetadata: metadata,
+    worldRevision: metadata.worldRevision,
+    counts: {
+      scenarioInstances: simulator.states().length,
+      snapshots: simulator.listSnapshots().length,
+      sourceChanges: simulator.sourceChanges().length,
+      sourceObjects: simulator.sourceObjects().length,
+    },
+  };
+}
+
+async function failureResponse(c: Context, decision: FailureDecision, requestIds: WeakMap<Request, string>): Promise<Response | null> {
+  if (decision.latencyMs) await sleep(decision.latencyMs);
+  if (!decision.errorStatus) return null;
+  return jsonError(decision.errorStatus, {
+    error: decision.message ?? "Simulated provider failure",
+    classification: decision.errorClassification ?? "simulated_failure",
+    correlationId: requestIds.get(c.req.raw) ?? "unknown",
+  });
+}
+
+function jsonError(status: number, body: Record<string, unknown>): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function operationFromPath(method: string, path: string): string {
+  if (path.includes("/records")) return "feed";
+  if (path.includes("/manifest")) return "manifest";
+  if (path.startsWith("/sim/")) return "deep_link";
+  if (path.includes("/failure-modes")) return "failure_modes";
+  if (path.includes("/performance/benchmark")) return "benchmark";
+  if (path.includes("/connector-test-kit")) return "connector_test_kit";
+  if (path.includes("/metrics")) return "metrics";
+  if (path.includes("/healthz")) return "health";
+  if (path.includes("/snapshots")) return "snapshot";
+  if (path.includes("/organization")) return "organization";
+  if (path.includes("/scenario-instances")) return "scenario_instance";
+  return `${method.toLowerCase()} ${path.split("/").slice(0, 4).join("/") || "/"}`;
+}
+
+function connectionIdFromPath(path: string): string | undefined {
+  return /^\/v1\/connections\/([^/]+)/.exec(path)?.[1];
+}
+
+function readCursorTelemetry(cursor: string | undefined): { version?: number; afterSequence?: number } | undefined {
+  if (!cursor) return undefined;
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Record<string, unknown>;
+    const telemetry: { version?: number; afterSequence?: number } = {};
+    if (typeof parsed.v === "number") telemetry.version = parsed.v;
+    if (typeof parsed.afterSequence === "number") telemetry.afterSequence = parsed.afterSequence;
+    return telemetry;
+  } catch {
+    return undefined;
+  }
+}
+
+function safeWorldRevision(simulator: SourceSimulator): string | undefined {
+  try {
+    return simulator.datasetMetadata().worldRevision;
+  } catch {
+    return undefined;
+  }
 }
 
 async function readJsonBody<TSchema extends z.ZodTypeAny>(request: Request, schema: TSchema): Promise<z.infer<TSchema>> {
@@ -470,6 +664,7 @@ function rejectProductionStorageKind(kind: SimulatorStorage["kind"], label: stri
 function createStorageForRuntime(runtimeEnv: RuntimeEnv): SimulatorStorage {
   const productionLike = isProductionLike(runtimeEnv);
   const driver = process.env.SIMULATOR_STORAGE_DRIVER;
+  const databaseUrl = process.env.DATABASE_URL;
   if (driver === "memory") {
     if (productionLike || process.env.SIMULATOR_ALLOW_EPHEMERAL_MEMORY !== "true") {
       throw new Error("In-memory storage must be explicitly selected and is forbidden in production-like environments");
@@ -479,17 +674,18 @@ function createStorageForRuntime(runtimeEnv: RuntimeEnv): SimulatorStorage {
   if (driver === "sqlite" && productionLike) {
     throw new Error("SQLite storage is forbidden in production-like environments");
   }
-  if (driver === "sqlite" || (!productionLike && !process.env.DATABASE_URL)) {
-    return new SQLiteSimulatorStorage(process.env.SIMULATOR_SQLITE_PATH ?? ".simulator/source-simulator.sqlite");
+  if (driver === "postgres") {
+    if (!databaseUrl?.startsWith("postgres")) throw new Error("SIMULATOR_STORAGE_DRIVER=postgres requires a Postgres DATABASE_URL");
+    return new PostgresSimulatorStorage(databaseUrl);
   }
-  if (productionLike && process.env.DATABASE_URL?.startsWith("postgres")) {
-    throw new Error("Postgres durable storage is required for this environment but the adapter is not yet proven; refusing memory fallback");
+  if (databaseUrl?.startsWith("postgres")) {
+    return new PostgresSimulatorStorage(databaseUrl);
+  }
+  if (driver === "sqlite" || (!productionLike && !databaseUrl)) {
+    return new SQLiteSimulatorStorage(process.env.SIMULATOR_SQLITE_PATH ?? ".simulator/source-simulator.sqlite");
   }
   if (productionLike) {
     throw new Error("Durable Postgres storage is required in production-like environments");
-  }
-  if (process.env.DATABASE_URL?.startsWith("postgres")) {
-    throw new Error("Postgres durable storage is configured but the adapter is not yet proven");
   }
   return new SQLiteSimulatorStorage(process.env.SIMULATOR_SQLITE_PATH ?? ".simulator/source-simulator.sqlite");
 }
@@ -584,6 +780,49 @@ const consoleHtml = `<!doctype html>
       </div>
     </section>
     <section class="panel">
+      <h2>Operations</h2>
+      <div class="row">
+        <button onclick="health()">Health</button>
+        <button onclick="metrics()">Metrics</button>
+        <button onclick="requests()">Request Inspector</button>
+        <button onclick="storageInspector()">Storage Inspector</button>
+        <button onclick="sourceChanges()">Ledger Inspector</button>
+        <button onclick="snapshots()">Snapshot Browser</button>
+        <button onclick="connectorKit()">Connector Test Kit</button>
+      </div>
+      <div class="row">
+        <label>Failure mode <select id="failureMode">
+          <option>rate_limit</option>
+          <option>timeout</option>
+          <option>service_unavailable</option>
+          <option>internal_error</option>
+          <option>network_latency</option>
+          <option>partial_page</option>
+          <option>cursor_corruption</option>
+          <option>auth_failure</option>
+          <option>expired_credentials</option>
+          <option>provider_outage</option>
+          <option>malformed_payload</option>
+          <option>permission_changes</option>
+          <option>deleted_objects</option>
+          <option>edited_objects</option>
+          <option>late_arriving_objects</option>
+          <option>duplicate_objects</option>
+          <option>stale_objects</option>
+        </select></label>
+        <label>Operation <input id="failureOperation" value="feed" /></label>
+        <label>Connection <input id="failureConnection" value="conn-product-manager" /></label>
+        <button onclick="setFailure()">Set Failure</button>
+        <button onclick="failureModes()">Failure Config</button>
+        <button onclick="resetFailures()">Reset Failures</button>
+      </div>
+      <div class="row">
+        <label>Benchmark storage <select id="benchmarkStorage"><option>memory</option><option>sqlite</option><option>postgres</option></select></label>
+        <label>Benchmark size <select id="benchmarkSize"><option>small</option><option>medium</option><option>large</option></select></label>
+        <button onclick="benchmark()">Run Benchmark</button>
+      </div>
+    </section>
+    <section class="panel">
       <h2>Sources And Dataset</h2>
       <div class="row">
         <label>Dataset <select id="dataset"><option>small</option><option>medium</option><option>large</option></select></label>
@@ -612,6 +851,21 @@ async function getJson(url, opts = {}) { const res = await fetch(url, opts); ret
 async function callAdmin(action, method) { show(await getJson('/v1/admin/scenarios/' + scenario() + '/' + action, { method, headers: headers({ 'content-type': 'application/json' }), body: method === 'POST' ? '{}' : undefined })); }
 async function advance() { show(await getJson('/v1/admin/scenarios/' + scenario() + '/advance', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ hours: 24 }) })); }
 async function records() { show(await getJson('/v1/admin/records', { headers: headers() })); }
+async function health() { show(await getJson('/healthz')); }
+async function metrics() { show(await getJson('/v1/admin/metrics', { headers: headers() })); }
+async function requests() { show(await getJson('/v1/admin/requests', { headers: headers() })); }
+async function storageInspector() { show(await getJson('/v1/admin/storage', { headers: headers() })); }
+async function snapshots() { show(await getJson('/v1/admin/snapshots', { headers: headers() })); }
+async function connectorKit() { show(await getJson('/v1/admin/connector-test-kit/run', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: '{}' })); }
+async function benchmark() { show(await getJson('/v1/admin/performance/benchmark', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ storage: document.getElementById('benchmarkStorage').value, datasetSizes: [document.getElementById('benchmarkSize').value] }) })); }
+async function failureModes() { show(await getJson('/v1/admin/failure-modes', { headers: headers() })); }
+async function setFailure() {
+  const mode = document.getElementById('failureMode').value;
+  const operation = document.getElementById('failureOperation').value;
+  const connectionId = document.getElementById('failureConnection').value;
+  show(await getJson('/v1/admin/failure-modes', { method: 'PUT', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ schemaVersion: 'failure-modes.v1', rules: [{ id: 'console-' + mode, enabled: true, mode, operation, connectionId, pageSize: 1, latencyMs: 250 }] }) }));
+}
+async function resetFailures() { show(await getJson('/v1/admin/failure-modes/reset', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: '{}' })); }
 async function packs() { show(await getJson('/v1/catalog/scenario-packs')); }
 async function instances() { show(await getJson('/v1/catalog/scenario-instances', { headers: headers() })); }
 async function instanceDetail() { show(await getJson('/v1/admin/scenario-instances/' + document.getElementById('instance').value, { headers: headers() })); }
