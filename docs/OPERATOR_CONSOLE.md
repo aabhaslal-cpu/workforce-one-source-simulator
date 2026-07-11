@@ -46,3 +46,42 @@ Supports:
 - simulator deep-link targets
 
 The console requires the admin credential for detailed reads and writes. It does not display credential material.
+
+## Clock
+
+Supports:
+
+- current clock mode
+- current simulated time through the persisted clock state
+- last reconciled wall time
+- speed multiplier
+- pause/running state
+- continuous activity state
+- last reconciliation report
+- active and completed scenario instance counts
+- recent successor instances
+- recent appended source changes
+- switch manual/realtime mode
+- set bounded speed multiplier
+- select continuous activity profile
+- set maximum successors per reconciliation
+- set minimum successor interval hours
+- pause/resume global clock
+- reconcile now
+- enable/disable continuous activity
+
+## Operations
+
+Supports:
+
+- health inspection
+- live metrics
+- recent sanitized request inspection
+- storage inspection
+- ledger inspection
+- snapshot browsing
+- deterministic failure-mode configuration and reset
+- benchmark execution
+- connector test-kit execution
+
+The console is intentionally utilitarian. It is for simulator operators and connector developers, not end users.

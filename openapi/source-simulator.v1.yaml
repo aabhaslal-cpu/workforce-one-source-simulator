@@ -7,9 +7,24 @@ servers:
 paths:
   /healthz:
     get:
-      summary: Health check
+      summary: Liveness check that does not depend on storage
       responses:
         '200': { description: OK }
+  /readyz:
+    get:
+      summary: Readiness check with storage health, world revision, safe clock state, dataset metadata, and organization summary
+      responses:
+        '200': { description: Ready }
+        '503': { description: Storage or world state is not ready }
+  /api/cron/tick:
+    get:
+      summary: Vercel-compatible cron tick that reconciles the persisted realtime simulation clock
+      security:
+        - cronBearer: []
+      responses:
+        '200': { description: Concise reconciliation report }
+        '401': { description: Missing or incorrect cron bearer secret }
+        '503': { description: Cron secret or durable state unavailable }
   /v1/catalog:
     get:
       summary: Safe public catalog metadata only
@@ -117,9 +132,10 @@ paths:
         '200': { description: Manifest }
         '401': { description: Missing, unknown, revoked, or wrong credential type }
         '403': { description: Credential is valid for a different connection ID }
+        '429': { description: Request rate limited for this authenticated connection }
   /v1/connections/{connectionId}/records:
     get:
-      summary: Cursor-paginated source feed for the authenticated connection only
+      summary: Cursor-paginated source feed for the authenticated connection only. In realtime mode this reconciles the persisted company clock before reading the ledger.
       security:
         - connectionBoundCredential: []
       parameters:
@@ -146,6 +162,7 @@ paths:
         '400': { description: Malformed pagination or cursor }
         '401': { description: Missing, unknown, revoked, or wrong credential type }
         '403': { description: Credential is valid for a different connection ID }
+        '429': { description: Request rate limited for this authenticated connection }
   /sim/{sourceSystem}/{sourceId}:
     get:
       summary: Simulator-owned readable source object view
@@ -165,6 +182,7 @@ paths:
         '401': { description: Missing, unknown, revoked, or wrong credential type }
         '403': { description: Source object is not visible to this connection }
         '404': { description: Unknown source object }
+        '429': { description: Request rate limited for this authenticated connection }
   /v1/admin/organization/generate:
     post:
       summary: Generate organization with optional seed/config overrides
@@ -422,6 +440,172 @@ paths:
         - adminKey: []
       responses:
         '200': { description: Source changes }
+  /v1/admin/clock:
+    get:
+      summary: Inspect persisted simulation clock and continuous activity state
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Clock status }
+    put:
+      summary: Update safe clock and orchestration controls such as mode, speed, pause state, catch-up bound, continuous activity, profile, and successor cadence
+      security:
+        - adminKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                mode: { enum: [manual, realtime] }
+                speedMultiplier: { type: number, exclusiveMinimum: 0, maximum: 1440 }
+                paused: { type: boolean }
+                continuousActivity: { type: boolean }
+                maxCatchUpSeconds: { type: integer, minimum: 1, maximum: 604800 }
+                activityProfile: { enum: [quiet, standard, intense] }
+                maxSuccessorInstancesPerReconciliation: { type: integer, minimum: 0, maximum: 100 }
+                minSuccessorIntervalHours: { type: integer, minimum: 0, maximum: 720 }
+      responses:
+        '200': { description: Updated clock state }
+        '400': { description: Invalid clock update }
+        '409':
+          description: Clock backlog must be reconciled before changing time-affecting clock or orchestration configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, classification, correlationId, wallTimeBacklogRemainingMs]
+                properties:
+                  error: { type: string }
+                  classification: { const: clock_backlog_conflict }
+                  correlationId: { type: string }
+                  wallTimeBacklogRemainingMs: { type: integer, minimum: 1 }
+  /v1/admin/clock/reconcile:
+    post:
+      summary: Manually run the canonical simulation clock reconciliation operation
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Simulation reconciliation report including consumed wall time, remaining backlog, catch-up limit flag, appended changes, and projection create/update/delete counts }
+  /v1/admin/clock/pause:
+    post:
+      summary: Pause global realtime simulation clock progression
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Paused clock state }
+  /v1/admin/clock/resume:
+    post:
+      summary: Resume global realtime simulation clock progression
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Resumed clock state }
+  /v1/admin/metrics:
+    get:
+      summary: Inspect operational counters, request telemetry, simulator counts, storage health, and world revision
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Operational metrics snapshot }
+  /v1/admin/requests:
+    get:
+      summary: Inspect sanitized recent request telemetry
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Recent request list without credentials or stack traces }
+  /v1/admin/storage:
+    get:
+      summary: Inspect storage health, dataset metadata, world revision, and durable object counts
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Storage inspector snapshot }
+  /v1/admin/failure-modes:
+    get:
+      summary: Inspect deterministic failure-mode configuration
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Failure mode configuration }
+    put:
+      summary: Replace deterministic failure-mode configuration
+      security:
+        - adminKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [schemaVersion, rules]
+              properties:
+                schemaVersion: { const: failure-modes.v1 }
+                rules:
+                  type: array
+                  maxItems: 100
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [id, mode]
+                    properties:
+                      id: { type: string, minLength: 1, maxLength: 80 }
+                      enabled: { type: boolean }
+                      mode:
+                        enum:
+                          - rate_limit
+                          - timeout
+                          - service_unavailable
+                          - internal_error
+                          - network_latency
+                          - partial_page
+                          - cursor_corruption
+                          - auth_failure
+                          - expired_credentials
+                          - provider_outage
+                          - malformed_payload
+                          - permission_changes
+                          - deleted_objects
+                          - edited_objects
+                          - late_arriving_objects
+                          - duplicate_objects
+                          - stale_objects
+                      operation: { type: string, minLength: 1, maxLength: 80 }
+                      connectionId: { type: string, minLength: 1, maxLength: 200 }
+                      sourceSystem: { type: string, minLength: 1, maxLength: 80 }
+                      everyNth: { type: integer, minimum: 1, maximum: 10000 }
+                      latencyMs: { type: integer, minimum: 0, maximum: 30000 }
+                      pageSize: { type: integer, minimum: 1, maximum: 100 }
+                      status: { type: integer, minimum: 400, maximum: 599 }
+                      message: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        '200': { description: Updated failure mode configuration }
+        '400': { description: Invalid failure mode payload }
+  /v1/admin/failure-modes/reset:
+    post:
+      summary: Disable all deterministic failure modes
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Empty failure mode configuration }
+  /v1/admin/performance/benchmark:
+    post:
+      summary: Run deterministic small/medium/large benchmark operations against memory, SQLite, or an isolated benchmark Postgres schema
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Benchmark report }
+        '400': { description: Invalid benchmark request, missing SIMULATOR_BENCHMARK_DATABASE_URL for Postgres, or benchmark URL matches DATABASE_URL }
+  /v1/admin/connector-test-kit/run:
+    post:
+      summary: Run reference connector lifecycle test kit
+      security:
+        - adminKey: []
+      responses:
+        '200': { description: Connector lifecycle report }
   /v1/admin/datasets/generate:
     post:
       summary: Generate deterministic small, medium, or large dataset
@@ -482,6 +666,9 @@ components:
       type: apiKey
       in: header
       name: x-connection-secret
+    cronBearer:
+      type: http
+      scheme: bearer
   schemas:
     SourceFeedBatchV1:
       type: object

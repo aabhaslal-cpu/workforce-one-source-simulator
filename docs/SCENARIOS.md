@@ -1,6 +1,6 @@
 # Scenarios
 
-Milestone 2 implements 10 scenario packs. Packs define reusable business-event templates; source adapters shape how those events appear in provider payloads.
+The simulator implements 10 scenario packs. Packs define reusable business-event templates; source adapters shape how those events appear in provider payloads.
 
 The simulator creates source evidence only. It does not define expected Workforce One conclusions.
 
@@ -43,3 +43,13 @@ Each instance has a scenario pack ID and distinct scenario instance ID.
 Instances, not packs, hold runtime state: seed, dataset size, started time, current time, pause state, event occurrence times, triggered event IDs, event log, completion state, concrete participants, and account/product/project/service/workstream context. Instance APIs mutate only the selected instance.
 
 When an operator manually triggers an event, that event occurs at the instance's current simulation time. It does not wait for the template's scheduled `atHour`, and no other instance from the same pack is affected.
+
+## Realtime Continuous Mode
+
+Realtime reconciliation never inserts manual event IDs and never assigns occurrence times to untriggered manual events. Manual events occur only through the explicit trigger API, remain idempotent, and keep the selected instance's current simulation time as the occurrence time.
+
+Continuous mode determines lifecycle completion from scheduled nonmanual events plus their delayed visible/update/delete horizons. Completed instances become eligible for successors after their persisted successor due time; due successors are created in deterministic bounded batches.
+
+Continuous mode reuses these same 10 packs. It does not add hidden Workforce One-specific scenario logic.
+
+Scenario authoring rules live in `docs/SCENARIO_AUTHORING.md`.

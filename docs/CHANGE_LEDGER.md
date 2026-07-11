@@ -1,6 +1,6 @@
 # Change Ledger
 
-Milestone 2 replaces consumed-ID cursors with a compact v3 checkpoint over a deterministic source-change ledger.
+The simulator uses a compact v3 checkpoint over a deterministic source-change ledger.
 
 The durable ledger is occurred-only. Scenario definitions may describe future records, updates, or deletions, but the stored ledger contains only source changes whose business event and mutation time have been reached.
 
@@ -41,9 +41,15 @@ Cursor payload:
 
 The cursor is connection-bound, world-bound, retry-safe, and compact regardless of total change count.
 
-Normal time advancement and manual triggers append new changes with increasing `ledgerSequence` values and do not rotate `worldRevision`. A saved cursor can be reused after those operations and returns only newly visible authorized changes after its `afterSequence`.
+Normal time advancement, manual triggers, feed-triggered realtime reconciliation, and cron-triggered realtime reconciliation append new changes with increasing `ledgerSequence` values and do not rotate `worldRevision`. A saved cursor can be reused after those operations and returns only newly visible authorized changes after its `afterSequence`.
 
 Manual triggers use the selected scenario instance's current simulation time as the business event occurrence time. Initial source changes become eligible immediately. `updatedAfterHours` and `deletedAfterHours` are calculated from the actual trigger time, not from the template's original `atHour`.
+
+Realtime reconciliation never inserts a manual event ID and never assigns an occurrence time to an untriggered manual event. Continuous orchestration relies on scheduled nonmanual lifecycle horizons plus persisted successor due times.
+
+Bounded catch-up advances the persisted wall checkpoint only by the wall time consumed in that reconciliation. Unprocessed wall backlog remains available to later reconciliation, and appended ledger sequences remain monotonic across the drain.
+
+Clock configuration changes do not consume historical backlog under new settings. If a bounded reconciliation would leave backlog and `PUT /v1/admin/clock` changes a time-affecting setting, the request fails with `clock_backlog_conflict` and rolls back the evaluation reconciliation, preserving the previous ledger, projection, clock, and scenario states.
 
 ## World Revision
 
@@ -53,4 +59,4 @@ Snapshot restore restores business state, creates a new world revision, rebuilds
 
 ## Atomicity
 
-World replacements commit scenario instance states, organization config when applicable, world revision, source-change ledger, current source-object projection, and dataset metadata together. SQLite uses one transaction; rollback tests inject failures during replacement and assert the previous world remains intact.
+World replacements commit scenario instance states, organization config when applicable, world revision, source-change ledger, current source-object projection, dataset metadata, simulation clock, and continuous orchestration state together. SQLite and Postgres use one transaction; rollback tests inject failures during replacement and assert the previous world remains intact.

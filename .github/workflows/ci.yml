@@ -8,6 +8,21 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: source_simulator_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d source_simulator_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      SIMULATOR_POSTGRES_TEST_URL: postgres://postgres:postgres@localhost:5432/source_simulator_test
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -18,3 +33,91 @@ jobs:
           node-version: 22
       - run: pnpm install --frozen-lockfile
       - run: pnpm run verify
+      - run: git diff --check
+      - name: Vercel config validation
+        run: pnpm run vercel:validate
+      - name: Vercel CLI build validation
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          SIMULATOR_RUNTIME_ENV: production
+          DATABASE_URL: ${{ env.SIMULATOR_POSTGRES_TEST_URL }}
+          SIMULATOR_ADMIN_API_KEY: ci-admin-key
+          SIMULATOR_CONNECTION_CREDENTIALS: '{"ci-product-manager":"conn-product-manager"}'
+          SIMULATOR_PUBLIC_BASE_URL: http://127.0.0.1:3000
+          SIMULATOR_CLOCK_MODE: realtime
+          SIMULATOR_CLOCK_SPEED: "30"
+          SIMULATOR_CONTINUOUS_ACTIVITY: "true"
+          SIMULATOR_MAX_CATCH_UP_SECONDS: "3600"
+          SIMULATOR_RATE_LIMITS: '{"windowMs":60000,"adminLimit":600,"connectionLimit":600,"cronLimit":120}'
+          CRON_SECRET: ci-cron-secret
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "VERCEL_TOKEN not configured; repository-owned Vercel config validation already passed."
+            exit 0
+          fi
+          pnpm run vercel:build -- --token "$VERCEL_TOKEN"
+      - name: Route smoke test
+        env:
+          PORT: 3000
+          SIMULATOR_RUNTIME_ENV: production
+          DATABASE_URL: ${{ env.SIMULATOR_POSTGRES_TEST_URL }}
+          SIMULATOR_ADMIN_API_KEY: ci-admin-key
+          SIMULATOR_CONNECTION_CREDENTIALS: '{"ci-product-manager":"conn-product-manager"}'
+          SIMULATOR_PUBLIC_BASE_URL: http://127.0.0.1:3000
+          SIMULATOR_CLOCK_MODE: realtime
+          SIMULATOR_CLOCK_SPEED: "30"
+          SIMULATOR_CONTINUOUS_ACTIVITY: "true"
+          SIMULATOR_MAX_CATCH_UP_SECONDS: "3600"
+          SIMULATOR_RATE_LIMITS: '{"windowMs":60000,"adminLimit":600,"connectionLimit":600,"cronLimit":120}'
+          CRON_SECRET: ci-cron-secret
+        run: |
+          node dist/server.js &
+          server_pid=$!
+          trap 'kill "$server_pid" || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/readyz >/tmp/source-sim-ready.json; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:3000/ >/dev/null
+          curl -fsS http://127.0.0.1:3000/console >/dev/null
+          curl -fsS http://127.0.0.1:3000/healthz >/dev/null
+          curl -fsS http://127.0.0.1:3000/readyz >/dev/null
+          curl -fsS http://127.0.0.1:3000/v1/catalog >/dev/null
+          curl -fsS -H "Authorization: Bearer ci-cron-secret" http://127.0.0.1:3000/api/cron/tick >/dev/null
+          curl -fsS -H "x-connection-secret: ci-product-manager" "http://127.0.0.1:3000/v1/connections/conn-product-manager/records?limit=1" >/dev/null
+          node - <<'NODE'
+          const base = "http://127.0.0.1:3000";
+          const headers = { "x-connection-secret": "ci-product-manager" };
+          const feed = await fetch(`${base}/v1/connections/conn-product-manager/records?limit=1`, { headers });
+          if (!feed.ok) throw new Error(`feed smoke failed: ${feed.status}`);
+          const body = await feed.json();
+          const sourceUrl = body.records?.[0]?.sourceUrl;
+          if (!sourceUrl) throw new Error("feed smoke did not return a sourceUrl");
+          const deepLink = new URL(sourceUrl);
+          const resolved = await fetch(`${base}${deepLink.pathname}`, { headers });
+          if (!resolved.ok) throw new Error(`deep link smoke failed: ${resolved.status}`);
+          NODE
+      - run: docker build -t workforce-one-source-simulator:ci .
+      - name: Container smoke test
+        run: |
+          docker run --rm -d --network host \
+            --name source-simulator-smoke \
+            -e PORT=3000 \
+            -e SIMULATOR_RUNTIME_ENV=production \
+            -e DATABASE_URL="$SIMULATOR_POSTGRES_TEST_URL" \
+            -e SIMULATOR_ADMIN_API_KEY=ci-admin-key \
+            -e SIMULATOR_CONNECTION_CREDENTIALS='{"ci-product-manager":"conn-product-manager"}' \
+            workforce-one-source-simulator:ci
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/readyz >/tmp/source-sim-ready.json; then
+              cat /tmp/source-sim-ready.json
+              docker stop source-simulator-smoke
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs source-simulator-smoke
+          docker stop source-simulator-smoke || true
+          exit 1

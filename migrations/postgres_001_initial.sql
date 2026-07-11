@@ -1,5 +1,5 @@
--- Durable local SQLite schema for Milestone 1.
--- This must stay aligned with SQLiteSimulatorStorage.
+-- Production Postgres schema for Milestone 3.
+-- This must stay aligned with PostgresSimulatorStorage.
 
 CREATE TABLE IF NOT EXISTS scenario_states (
   scenario_id TEXT PRIMARY KEY,
@@ -31,16 +31,6 @@ CREATE TABLE IF NOT EXISTS world_state (
 CREATE TABLE IF NOT EXISTS dataset_metadata (
   id TEXT PRIMARY KEY CHECK (id = 'singleton'),
   metadata_json TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS simulation_clock_state (
-  id TEXT PRIMARY KEY CHECK (id = 'singleton'),
-  state_json TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS continuous_orchestration_state (
-  id TEXT PRIMARY KEY CHECK (id = 'singleton'),
-  state_json TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS source_change_ledger (
