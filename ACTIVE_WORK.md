@@ -50,15 +50,18 @@ The M1 engine emits provider-shaped payloads for Slack, Gmail, Calendar, Notion,
 
 ## Verification
 
-Latest pre-hardening baseline:
+Latest hardening verification at the time this file was refreshed:
 
-- GitHub Actions workflow: `ci`, run #6.
-- Head SHA: `571a0691f647afd3950699a6ed5255802e5f7fa3`.
+- GitHub Actions workflow: `ci`, run `29143621866`.
+- Verified head before documentation refresh: `db04571e7a0d749fb56fccd42804cd8b1077b8df`.
 - Result: success.
 - `pnpm run verify` completed successfully.
-- Vitest passed 8 tests in `src/__tests__/simulator.test.ts`.
+- TypeScript typecheck passed.
+- Vitest passed 26 tests in `src/__tests__/simulator.test.ts`.
+- ESLint passed.
+- Build passed.
 
-This hardening update expands the suite and triggers a new CI run. Future sessions must re-check the latest PR head status before calling the PR merge-ready.
+Future sessions must re-check the latest PR head status before calling the PR merge-ready.
 
 ## Known Limitations
 
@@ -71,4 +74,4 @@ This hardening update expands the suite and triggers a new CI run. Future sessio
 
 ## Next Starting Point
 
-Finish Milestone 1 hardening only: verify the new CI run, refresh PR #1 body with exact counts/results, and decide merge readiness honestly. Milestone 2 should start only after Milestone 1 is merged and should preserve all existing contract and organization tests.
+Finish Milestone 1 hardening only: keep PR #1 on the existing branch, refresh the PR body with the latest head SHA/counts/results after final CI, and decide merge readiness honestly. Milestone 2 should start only after Milestone 1 is merged and should preserve all existing contract and organization tests.
