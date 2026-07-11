@@ -15,7 +15,12 @@
       "actorRef": "person-cs-manager",
       "acl": { "visibility": "group", "groups": ["cs-leadership"], "users": [] },
       "rawPayload": { "account": "Northstar Medical", "stage": "Renewal Risk", "closeDate": "2026-08-15" },
-      "correlation": { "scenarioId": "renewal-risk", "eventId": "risk-escalated", "seedFingerprint": "example" }
+      "correlation": {
+        "scenarioId": "renewal-risk",
+        "eventId": "vp-risk",
+        "templateId": "renewal-vp-brief",
+        "seedFingerprint": "example"
+      }
     }
   ],
   "nextCursor": null,
