@@ -223,7 +223,7 @@ export function generateOrganization(input: OrganizationConfig = defaultOrganiza
 }
 
 export function createConnections(organization: GeneratedOrganization): SourceConnection[] {
-  const perPerson = organization.people.map((person) => connectionForPerson(person, `conn-${person.id}`));
+  const perPerson = organization.people.map((person) => connectionForPerson(person, personConnectionId(person)));
   const aliases = roleTemplates
     .map((template) => {
       const person = firstPersonForRole(organization, template.id);
@@ -231,6 +231,10 @@ export function createConnections(organization: GeneratedOrganization): SourceCo
     })
     .filter((connection): connection is SourceConnection => connection !== null);
   return [...aliases, ...perPerson];
+}
+
+export function personConnectionId(person: Person): string {
+  return `conn-person-${slug(person.stableKey)}`;
 }
 
 export function firstPersonForRole(organization: GeneratedOrganization, roleTemplateId: string): Person | undefined {
