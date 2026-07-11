@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 const config = JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url), "utf8"));
 const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const srcApp = readFileSync(new URL("../src/app.ts", import.meta.url), "utf8");
-const expectedSrcApp = 'import { createApp } from "./simulator-app.js";\n\nconst app = await createApp();\n\nexport default app;';
+const expectedSrcApp = 'import type { Hono } from "hono";\nimport { createApp } from "./simulator-app.js";\n\nconst app: Hono = await createApp();\n\nexport default app;';
 
 function assert(condition, message) {
   if (!condition) {

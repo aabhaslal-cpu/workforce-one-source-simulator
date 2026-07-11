@@ -1577,7 +1577,9 @@ describe("Milestone 3 operations", () => {
     expect(config.rewrites).toBeUndefined();
     expect(existsSync(new URL("../../api/index.ts", import.meta.url))).toBe(false);
     expect(existsSync(new URL("../server.ts", import.meta.url))).toBe(false);
-    expect(vercelEntrypoint.trim()).toBe('import { createApp } from "./simulator-app.js";\n\nconst app = await createApp();\n\nexport default app;');
+    expect(vercelEntrypoint.trim()).toBe(
+      'import type { Hono } from "hono";\nimport { createApp } from "./simulator-app.js";\n\nconst app: Hono = await createApp();\n\nexport default app;',
+    );
     expect(packageJson.engines.node).toBe("22.x");
     expect(packageJson.packageManager).toBe("pnpm@9.15.9");
 
