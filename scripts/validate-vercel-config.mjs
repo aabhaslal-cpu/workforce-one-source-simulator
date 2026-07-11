@@ -10,7 +10,7 @@ function assert(condition, message) {
 }
 
 assert(config.installCommand === "pnpm install --frozen-lockfile", "installCommand must use frozen lockfile");
-assert(config.buildCommand === "pnpm run build", "buildCommand must run the TypeScript build");
+assert(!("buildCommand" in config), "buildCommand must not be configured for API-only deployment");
 assert(!("runtime" in (config.functions?.["api/index.ts"] ?? {})), "api/index.ts must not set a runtime");
 assert(config.functions?.["api/index.ts"]?.maxDuration === 30, "api/index.ts maxDuration must be 30");
 assert(
