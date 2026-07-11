@@ -10,18 +10,21 @@ import {
   type Person,
   type ScenarioDefinition,
   type ScenarioEventTemplate,
+  type ScenarioRecordTemplate,
   type ScenarioState,
   type Snapshot,
+  type SourceChangeType,
   type SourceConnection,
   type SourceRecord,
   type Team,
 } from "./domain.js";
-import { MemorySimulatorStorage, type SimulatorStorage } from "./storage.js";
+import { MemorySimulatorStorage, type SimulatorStorage, type StorageKind } from "./storage.js";
 import {
   createConnections,
   defaultOrganizationConfig,
   firstPersonForRole,
   generateOrganization,
+  personConnectionId,
   previewOrganizationCounts,
   roleTemplates,
   selectPersonForRole,
@@ -37,21 +40,30 @@ export interface SimulatorOptions {
 }
 
 interface CursorPayload {
-  v: 1;
+  v: 2;
   connectionId: string;
-  offset: number;
+  consumedChangeIds: string[];
+  lastSequence: number;
+}
+
+interface SourceChange {
+  changeId: string;
+  sequence: number;
+  record: SourceRecord;
 }
 
 const CursorPayloadSchema = z
   .object({
-    v: z.literal(1),
+    v: z.literal(2),
     connectionId: z.string().min(1).max(200),
-    offset: z.number().int().min(0).max(100_000),
+    consumedChangeIds: z.array(z.string().min(1).max(220)).max(5_000),
+    lastSequence: z.number().int().min(0).max(1_000_000),
   })
   .strict();
 
 const DEFAULT_START_TIME = "2026-07-10T16:00:00.000Z";
 const MAX_PAGE_SIZE = 100;
+const CHANGE_SEQUENCE_BY_KEY = buildChangeSequenceMap();
 
 export class SourceSimulator {
   private readonly storage: SimulatorStorage;
@@ -72,8 +84,8 @@ export class SourceSimulator {
     this.organizationConfig = cloneOrganizationConfig(
       options.organizationConfig ?? storedOrganizationConfig ?? { ...defaultOrganizationConfig, seed: options.seed ?? defaultOrganizationConfig.seed },
     );
+    this.organization = buildCompatibleOrganization(this.organizationConfig);
     this.storage.saveOrganizationConfig(this.organizationConfig);
-    this.organization = generateOrganization(this.organizationConfig);
     this.connections = createConnections(this.organization);
 
     for (const scenario of scenarios) {
@@ -81,6 +93,10 @@ export class SourceSimulator {
         this.storage.saveScenarioState(createInitialState(scenario.id, this.defaultSeed, this.defaultDatasetSize, options.now ?? DEFAULT_START_TIME));
       }
     }
+  }
+
+  storageKind(): StorageKind {
+    return this.storage.kind;
   }
 
   publicCatalog() {
@@ -154,6 +170,10 @@ export class SourceSimulator {
     return this.connections.map((connection) => connection.id);
   }
 
+  hasConnection(connectionId: string): boolean {
+    return this.connections.some((connection) => connection.id === connectionId);
+  }
+
   connectionsForAdmin(): SourceConnection[] {
     return this.connections.map((connection) => ({ ...connection, allowedSources: [...connection.allowedSources], allowedGroups: [...connection.allowedGroups] }));
   }
@@ -168,25 +188,27 @@ export class SourceSimulator {
   }
 
   regenerateOrganization(input: { seed?: string; config?: OrganizationConfig } = {}) {
-    this.organizationConfig = cloneOrganizationConfig(input.config ?? { ...this.organizationConfig, seed: input.seed ?? this.organizationConfig.seed });
-    if (input.seed) this.organizationConfig = { ...this.organizationConfig, seed: input.seed };
+    const nextConfig = cloneOrganizationConfig(input.config ?? { ...this.organizationConfig, seed: input.seed ?? this.organizationConfig.seed });
+    if (input.seed) nextConfig.seed = input.seed;
+    const nextOrganization = buildCompatibleOrganization(nextConfig);
+    this.organizationConfig = nextConfig;
     this.storage.saveOrganizationConfig(this.organizationConfig);
-    this.organization = generateOrganization(this.organizationConfig);
+    this.organization = nextOrganization;
     this.connections = createConnections(this.organization);
     return { organization: this.organizationSummary(), previewCounts: previewOrganizationCounts(this.organizationConfig) };
   }
 
   resetOrganization() {
     this.organizationConfig = cloneOrganizationConfig(defaultOrganizationConfig);
+    this.organization = buildCompatibleOrganization(this.organizationConfig);
     this.storage.saveOrganizationConfig(this.organizationConfig);
-    this.organization = generateOrganization(this.organizationConfig);
     this.connections = createConnections(this.organization);
     return this.organizationSummary();
   }
 
   recordsForPerson(personId: string) {
     const person = this.requirePerson(personId);
-    const connection = this.connections.find((candidate) => candidate.id === `conn-${person.id}`) ?? connectionForPerson(person);
+    const connection = this.connections.find((candidate) => candidate.id === personConnectionId(person)) ?? connectionForPerson(person);
     const records = this.allRecords().filter((record) => canConnectionSee(record, connection));
     return { person, connection, records };
   }
@@ -300,25 +322,27 @@ export class SourceSimulator {
 
   feed(connectionId: string, cursor: string | undefined, limitInput: number | undefined): SourceFeedBatchV1 {
     const connection = this.requireConnection(connectionId);
-    const cursorPayload = cursor ? decodeCursor(cursor) : { v: 1 as const, connectionId, offset: 0 };
+    const cursorPayload = cursor ? decodeCursor(cursor) : { v: 2 as const, connectionId, consumedChangeIds: [], lastSequence: 0 };
     if (cursorPayload.connectionId !== connectionId) {
       throw badRequest("Cursor does not belong to this connection");
     }
     const limit = Math.min(Math.max(limitInput ?? 50, 1), MAX_PAGE_SIZE);
-    const visible = this.allRecords()
-      .filter((record) => canConnectionSee(record, connection))
-      .sort(compareRecords);
-    const page = visible.slice(cursorPayload.offset, cursorPayload.offset + limit);
-    const nextOffset = cursorPayload.offset + page.length;
-    const hasMore = nextOffset < visible.length;
+    const consumed = new Set(cursorPayload.consumedChangeIds);
+    const visibleChanges = this.sourceChanges()
+      .filter((change) => canConnectionSee(change.record, connection))
+      .sort(compareChanges);
+    const pending = visibleChanges.filter((change) => !consumed.has(change.changeId));
+    const page = pending.slice(0, limit);
+    const nextConsumedChangeIds = appendUnique(cursorPayload.consumedChangeIds, page.map((change) => change.changeId));
+    const lastSequence = page.at(-1)?.sequence ?? cursorPayload.lastSequence;
     const batch: SourceFeedBatchV1 = {
       schemaVersion: "source-feed.v1",
       connectionId,
-      batchId: stableId("batch", connectionId, String(cursorPayload.offset), String(limit), this.stateFingerprint()),
+      batchId: stableId("batch", connectionId, cursor ?? "initial", String(limit), this.stateFingerprint(), page.map((change) => change.changeId).join(",")),
       generatedAt: maxCurrentTime(this.states()),
-      records: page,
-      nextCursor: hasMore ? encodeCursor({ v: 1, connectionId, offset: nextOffset }) : null,
-      hasMore,
+      records: page.map((change) => change.record),
+      nextCursor: encodeCursor({ v: 2, connectionId, consumedChangeIds: nextConsumedChangeIds, lastSequence }),
+      hasMore: pending.length > page.length,
     };
     return SourceFeedBatchV1Schema.parse(batch);
   }
@@ -340,8 +364,8 @@ export class SourceSimulator {
     if (!snapshot) throw notFound(`Unknown snapshot: ${snapshotId}`);
     this.storage.replaceScenarioStates(snapshot.states);
     this.organizationConfig = cloneOrganizationConfig(snapshot.organizationConfig);
+    this.organization = buildCompatibleOrganization(snapshot.organizationConfig);
     this.storage.saveOrganizationConfig(this.organizationConfig);
-    this.organization = generateOrganization(snapshot.organizationConfig);
     this.connections = createConnections(this.organization);
     return snapshot;
   }
@@ -350,12 +374,40 @@ export class SourceSimulator {
     return this.storage.listSnapshots();
   }
 
+  private sourceChanges(): SourceChange[] {
+    return scenarios.flatMap((scenario) => this.changesForScenario(scenario)).sort(compareChanges);
+  }
+
+  private changesForScenario(scenario: ScenarioDefinition): SourceChange[] {
+    const state = this.requireState(scenario.id);
+    const elapsed = elapsedHours(state.startedAt, state.currentTime);
+    return scenario.events
+      .filter((event) => event.atHour <= elapsed || state.triggeredEventIds.includes(event.id))
+      .flatMap((event) =>
+        event.records.flatMap((template) => {
+          const changes = [materializeRecord(this.baseUrl, state, scenario, event, template, this.organization, "created")];
+          const mutationAt = template.updatedAfterHours === undefined ? undefined : addHours(addHours(state.startedAt, event.atHour), template.updatedAfterHours);
+          if (mutationAt && Date.parse(state.currentTime) >= Date.parse(mutationAt)) {
+            changes.push(materializeRecord(this.baseUrl, state, scenario, event, template, this.organization, "updated"));
+          }
+          return changes.map((record) => ({ changeId: record.changeId, sequence: record.changeSequence, record }));
+        }),
+      );
+  }
+
   private recordsForScenario(scenario: ScenarioDefinition): SourceRecord[] {
     const state = this.requireState(scenario.id);
     const elapsed = elapsedHours(state.startedAt, state.currentTime);
     return scenario.events
       .filter((event) => event.atHour <= elapsed || state.triggeredEventIds.includes(event.id))
-      .flatMap((event) => event.records.map((template) => materializeRecord(this.baseUrl, state, scenario, event, template, this.organization)));
+      .flatMap((event) =>
+        event.records.map((template) => {
+          const occurredAt = addHours(state.startedAt, event.atHour);
+          const mutationAt = template.updatedAfterHours === undefined ? undefined : addHours(occurredAt, template.updatedAfterHours);
+          const currentChangeType: SourceChangeType = mutationAt && Date.parse(state.currentTime) >= Date.parse(mutationAt) ? "updated" : "created";
+          return materializeRecord(this.baseUrl, state, scenario, event, template, this.organization, currentChangeType);
+        }),
+      );
   }
 
   private recordReachedEvents(scenario: ScenarioDefinition, state: ScenarioState): void {
@@ -403,6 +455,40 @@ export class SourceSimulator {
   }
 }
 
+export function validateOrganizationConfigCompatibility(config: OrganizationConfig): string[] {
+  return validateGeneratedOrganizationCompatibility(generateOrganization(config));
+}
+
+function buildCompatibleOrganization(config: OrganizationConfig): GeneratedOrganization {
+  const organization = generateOrganization(config);
+  const errors = validateGeneratedOrganizationCompatibility(organization);
+  if (errors.length > 0) {
+    throw badRequest(`Organization config is incompatible with enabled scenarios: ${errors.join("; ")}`);
+  }
+  return organization;
+}
+
+function validateGeneratedOrganizationCompatibility(organization: GeneratedOrganization): string[] {
+  const presentRoleTemplates = new Set(organization.people.map((person) => person.roleTemplateId));
+  return [...requiredRoleTemplateIds()]
+    .filter((roleTemplateId) => !presentRoleTemplates.has(roleTemplateId))
+    .map((roleTemplateId) => `missing required role ${roleTemplateId}`);
+}
+
+function requiredRoleTemplateIds(): Set<string> {
+  const roleTemplateIds = new Set<string>();
+  for (const scenario of scenarios) {
+    for (const roleTemplateId of scenario.participantRoleTemplateIds) roleTemplateIds.add(roleTemplateId);
+    for (const event of scenario.events) {
+      for (const record of event.records) {
+        roleTemplateIds.add(record.actorRoleTemplateId);
+        if (record.assignmentRoleTemplateId) roleTemplateIds.add(record.assignmentRoleTemplateId);
+      }
+    }
+  }
+  return roleTemplateIds;
+}
+
 function createInitialState(scenarioId: string, seed: string, datasetSize: DatasetSize, startTime: string): ScenarioState {
   return {
     scenarioId,
@@ -421,13 +507,15 @@ function materializeRecord(
   state: ScenarioState,
   scenario: ScenarioDefinition,
   event: ScenarioEventTemplate,
-  template: ScenarioEventTemplate["records"][number],
+  template: ScenarioRecordTemplate,
   organization: GeneratedOrganization,
+  changeType: SourceChangeType,
 ): SourceRecord {
   const occurredAt = addHours(state.startedAt, event.atHour);
   const sourceId = stableId(template.sourceSystem, state.seed, organization.seed, scenario.id, event.id, template.id);
   const mutationAt = template.updatedAfterHours === undefined ? undefined : addHours(occurredAt, template.updatedAfterHours);
-  const updatedAt = mutationAt && Date.parse(state.currentTime) >= Date.parse(mutationAt) ? mutationAt : undefined;
+  const isUpdatedChange = changeType === "updated";
+  const changeOccurredAt = isUpdatedChange && mutationAt ? mutationAt : occurredAt;
   const actor = selectPersonForRole(organization, template.actorRoleTemplateId, `${scenario.id}:${event.id}:${template.id}:actor`);
   const assignee = template.assignmentRoleTemplateId
     ? selectPersonForRole(organization, template.assignmentRoleTemplateId, `${scenario.id}:${event.id}:${template.id}:assignee`)
@@ -440,10 +528,11 @@ function materializeRecord(
     actorEmail: actor.email,
     assigneePersonId: assignee?.id ?? null,
     assigneeEmail: assignee?.email ?? null,
-    simulatorVersion: updatedAt ? "updated" : "initial",
+    simulatorVersion: isUpdatedChange ? "updated" : "initial",
   };
-  if (updatedAt) rawPayload.simulatorUpdatedAt = updatedAt;
+  if (isUpdatedChange && mutationAt) rawPayload.simulatorUpdatedAt = mutationAt;
 
+  const changeSequence = sequenceForChange(scenario, event, template, changeType);
   const record: SourceRecord = {
     schemaVersion: "source-record.v1",
     sourceSystem: template.sourceSystem,
@@ -455,6 +544,10 @@ function materializeRecord(
     actorRef: actor.id,
     acl: template.acl,
     rawPayload,
+    changeId: stableId("change", sourceId, changeType),
+    changeType,
+    changeSequence,
+    changeOccurredAt,
     correlation: {
       scenarioId: scenario.id,
       eventId: event.id,
@@ -462,7 +555,7 @@ function materializeRecord(
       seedFingerprint: stableId("seed", state.seed, organization.seed),
     },
   };
-  if (updatedAt) record.updatedAt = updatedAt;
+  if (isUpdatedChange && mutationAt) record.updatedAt = mutationAt;
   return record;
 }
 
@@ -475,7 +568,7 @@ function canConnectionSee(record: SourceRecord, connection: SourceConnection): b
 
 function connectionForPerson(person: Person): SourceConnection {
   return {
-    id: `conn-${person.id}`,
+    id: personConnectionId(person),
     tenantId: tenant.id,
     personId: person.id,
     roleTemplateId: person.roleTemplateId,
@@ -497,12 +590,20 @@ function decodeCursor(cursor: string): CursorPayload {
   }
 }
 
-function compareRecords(left: SourceRecord, right: SourceRecord): number {
-  return recordVisibleAt(left).localeCompare(recordVisibleAt(right)) || left.sourceSystem.localeCompare(right.sourceSystem) || left.sourceId.localeCompare(right.sourceId);
+function appendUnique(existing: string[], additions: string[]): string[] {
+  const result = [...existing];
+  const seen = new Set(result);
+  for (const addition of additions) {
+    if (!seen.has(addition)) {
+      result.push(addition);
+      seen.add(addition);
+    }
+  }
+  return result;
 }
 
-function recordVisibleAt(record: SourceRecord): string {
-  return record.updatedAt ?? record.occurredAt;
+function compareChanges(left: SourceChange, right: SourceChange): number {
+  return left.sequence - right.sequence || left.changeId.localeCompare(right.changeId);
 }
 
 function elapsedHours(start: string, end: string): number {
@@ -527,6 +628,51 @@ function logEntry(scenarioId: string, event: ScenarioEventTemplate, occurredAt: 
     occurredAt,
     recordTemplateIds: event.records.map((record) => record.id),
   };
+}
+
+function sequenceForChange(
+  scenario: ScenarioDefinition,
+  event: ScenarioEventTemplate,
+  template: ScenarioRecordTemplate,
+  changeType: SourceChangeType,
+): number {
+  const sequence = CHANGE_SEQUENCE_BY_KEY.get(changeKey(scenario.id, event.id, template.id, changeType));
+  if (!sequence) throw new Error(`Missing deterministic change sequence for ${scenario.id}/${event.id}/${template.id}/${changeType}`);
+  return sequence;
+}
+
+function buildChangeSequenceMap(): Map<string, number> {
+  const changes: Array<{ key: string; orderTime: number; scenarioId: string; eventId: string; templateId: string; changeType: SourceChangeType }> = [];
+  for (const scenario of scenarios) {
+    for (const event of scenario.events) {
+      for (const template of event.records) {
+        changes.push({ key: changeKey(scenario.id, event.id, template.id, "created"), orderTime: event.atHour, scenarioId: scenario.id, eventId: event.id, templateId: template.id, changeType: "created" });
+        if (template.updatedAfterHours !== undefined) {
+          changes.push({
+            key: changeKey(scenario.id, event.id, template.id, "updated"),
+            orderTime: event.atHour + template.updatedAfterHours,
+            scenarioId: scenario.id,
+            eventId: event.id,
+            templateId: template.id,
+            changeType: "updated",
+          });
+        }
+      }
+    }
+  }
+  changes.sort(
+    (left, right) =>
+      left.orderTime - right.orderTime ||
+      left.scenarioId.localeCompare(right.scenarioId) ||
+      left.eventId.localeCompare(right.eventId) ||
+      left.templateId.localeCompare(right.templateId) ||
+      left.changeType.localeCompare(right.changeType),
+  );
+  return new Map(changes.map((change, index) => [change.key, index + 1]));
+}
+
+function changeKey(scenarioId: string, eventId: string, templateId: string, changeType: SourceChangeType): string {
+  return `${scenarioId}:${eventId}:${templateId}:${changeType}`;
 }
 
 function stableId(prefix: string, ...parts: string[]): string {
