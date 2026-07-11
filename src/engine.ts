@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { z } from "zod";
 import { SourceFeedBatchV1Schema, type SourceFeedBatchV1 } from "./contracts.js";
 import { scenarios, tenant } from "./data.js";
 import {
@@ -41,7 +42,16 @@ interface CursorPayload {
   offset: number;
 }
 
+const CursorPayloadSchema = z
+  .object({
+    v: z.literal(1),
+    connectionId: z.string().min(1).max(200),
+    offset: z.number().int().min(0).max(100_000),
+  })
+  .strict();
+
 const DEFAULT_START_TIME = "2026-07-10T16:00:00.000Z";
+const MAX_PAGE_SIZE = 100;
 
 export class SourceSimulator {
   private readonly storage: SimulatorStorage;
@@ -57,7 +67,12 @@ export class SourceSimulator {
     this.defaultSeed = options.seed ?? "wfo-m1-seed";
     this.defaultDatasetSize = options.datasetSize ?? "small";
     this.baseUrl = options.baseUrl ?? "http://localhost:3000";
-    this.organizationConfig = options.organizationConfig ?? { ...defaultOrganizationConfig, seed: options.seed ?? defaultOrganizationConfig.seed };
+
+    const storedOrganizationConfig = this.storage.getOrganizationConfig();
+    this.organizationConfig = cloneOrganizationConfig(
+      options.organizationConfig ?? storedOrganizationConfig ?? { ...defaultOrganizationConfig, seed: options.seed ?? defaultOrganizationConfig.seed },
+    );
+    this.storage.saveOrganizationConfig(this.organizationConfig);
     this.organization = generateOrganization(this.organizationConfig);
     this.connections = createConnections(this.organization);
 
@@ -66,6 +81,26 @@ export class SourceSimulator {
         this.storage.saveScenarioState(createInitialState(scenario.id, this.defaultSeed, this.defaultDatasetSize, options.now ?? DEFAULT_START_TIME));
       }
     }
+  }
+
+  publicCatalog() {
+    return {
+      schemaVersion: "source-simulator-catalog.v1",
+      contractVersion: "source-feed.v1",
+      tenant: { slug: tenant.slug, name: tenant.name },
+      sources: [...new Set(scenarios.flatMap((scenario) => scenario.sourceSystems))],
+      scenarios: scenarios.map(({ events, participantRoleTemplateIds, ...scenario }) => ({
+        ...scenario,
+        eventCount: events.length,
+        participantRoleTemplateCount: participantRoleTemplateIds.length,
+      })),
+      roleTemplateCount: roleTemplates.length,
+      organization: {
+        departments: Object.keys(this.organization.config.departments),
+        totalPeople: this.organization.counts.totalPeople,
+        validationOk: this.organization.validation.ok,
+      },
+    };
   }
 
   catalog() {
@@ -115,25 +150,35 @@ export class SourceSimulator {
     return this.requireTeam(teamId);
   }
 
+  connectionIds(): string[] {
+    return this.connections.map((connection) => connection.id);
+  }
+
+  connectionsForAdmin(): SourceConnection[] {
+    return this.connections.map((connection) => ({ ...connection, allowedSources: [...connection.allowedSources], allowedGroups: [...connection.allowedGroups] }));
+  }
+
   getOrganizationConfig(): OrganizationConfig {
-    return this.organization.config;
+    return cloneOrganizationConfig(this.organization.config);
   }
 
   putOrganizationConfig(config: OrganizationConfig) {
-    this.organizationConfig = { ...config, seed: config.seed || this.organizationConfig.seed };
+    this.organizationConfig = cloneOrganizationConfig({ ...config, seed: config.seed || this.organizationConfig.seed });
     return this.regenerateOrganization({ config: this.organizationConfig });
   }
 
   regenerateOrganization(input: { seed?: string; config?: OrganizationConfig } = {}) {
-    this.organizationConfig = input.config ?? { ...this.organizationConfig, seed: input.seed ?? this.organizationConfig.seed };
+    this.organizationConfig = cloneOrganizationConfig(input.config ?? { ...this.organizationConfig, seed: input.seed ?? this.organizationConfig.seed });
     if (input.seed) this.organizationConfig = { ...this.organizationConfig, seed: input.seed };
+    this.storage.saveOrganizationConfig(this.organizationConfig);
     this.organization = generateOrganization(this.organizationConfig);
     this.connections = createConnections(this.organization);
     return { organization: this.organizationSummary(), previewCounts: previewOrganizationCounts(this.organizationConfig) };
   }
 
   resetOrganization() {
-    this.organizationConfig = defaultOrganizationConfig;
+    this.organizationConfig = cloneOrganizationConfig(defaultOrganizationConfig);
+    this.storage.saveOrganizationConfig(this.organizationConfig);
     this.organization = generateOrganization(this.organizationConfig);
     this.connections = createConnections(this.organization);
     return this.organizationSummary();
@@ -245,13 +290,21 @@ export class SourceSimulator {
     return scenarios.flatMap((scenario) => this.recordsForScenario(scenario));
   }
 
+  findRecordForConnection(connectionId: string, sourceSystem: string, sourceId: string): SourceRecord {
+    const connection = this.requireConnection(connectionId);
+    const record = this.allRecords().find((candidate) => candidate.sourceSystem === sourceSystem && candidate.sourceId === sourceId);
+    if (!record) throw notFound("Unknown source object");
+    if (!canConnectionSee(record, connection)) throw forbidden("Source object is not visible to this connection");
+    return record;
+  }
+
   feed(connectionId: string, cursor: string | undefined, limitInput: number | undefined): SourceFeedBatchV1 {
     const connection = this.requireConnection(connectionId);
     const cursorPayload = cursor ? decodeCursor(cursor) : { v: 1 as const, connectionId, offset: 0 };
     if (cursorPayload.connectionId !== connectionId) {
       throw badRequest("Cursor does not belong to this connection");
     }
-    const limit = Math.min(Math.max(limitInput ?? 50, 1), 250);
+    const limit = Math.min(Math.max(limitInput ?? 50, 1), MAX_PAGE_SIZE);
     const visible = this.allRecords()
       .filter((record) => canConnectionSee(record, connection))
       .sort(compareRecords);
@@ -286,7 +339,8 @@ export class SourceSimulator {
     const snapshot = this.storage.getSnapshot(snapshotId);
     if (!snapshot) throw notFound(`Unknown snapshot: ${snapshotId}`);
     this.storage.replaceScenarioStates(snapshot.states);
-    this.organizationConfig = snapshot.organizationConfig;
+    this.organizationConfig = cloneOrganizationConfig(snapshot.organizationConfig);
+    this.storage.saveOrganizationConfig(this.organizationConfig);
     this.organization = generateOrganization(snapshot.organizationConfig);
     this.connections = createConnections(this.organization);
     return snapshot;
@@ -372,11 +426,24 @@ function materializeRecord(
 ): SourceRecord {
   const occurredAt = addHours(state.startedAt, event.atHour);
   const sourceId = stableId(template.sourceSystem, state.seed, organization.seed, scenario.id, event.id, template.id);
-  const updatedAt = template.updatedAfterHours === undefined ? undefined : addHours(occurredAt, template.updatedAfterHours);
+  const mutationAt = template.updatedAfterHours === undefined ? undefined : addHours(occurredAt, template.updatedAfterHours);
+  const updatedAt = mutationAt && Date.parse(state.currentTime) >= Date.parse(mutationAt) ? mutationAt : undefined;
   const actor = selectPersonForRole(organization, template.actorRoleTemplateId, `${scenario.id}:${event.id}:${template.id}:actor`);
   const assignee = template.assignmentRoleTemplateId
     ? selectPersonForRole(organization, template.assignmentRoleTemplateId, `${scenario.id}:${event.id}:${template.id}:assignee`)
     : null;
+  const rawPayload: Record<string, unknown> = {
+    ...template.rawPayload,
+    simulatorSourceId: sourceId,
+    scenarioTime: occurredAt,
+    actorPersonId: actor.id,
+    actorEmail: actor.email,
+    assigneePersonId: assignee?.id ?? null,
+    assigneeEmail: assignee?.email ?? null,
+    simulatorVersion: updatedAt ? "updated" : "initial",
+  };
+  if (updatedAt) rawPayload.simulatorUpdatedAt = updatedAt;
+
   const record: SourceRecord = {
     schemaVersion: "source-record.v1",
     sourceSystem: template.sourceSystem,
@@ -387,15 +454,7 @@ function materializeRecord(
     sourceUrl: `${baseUrl}/sim/${template.sourceSystem}/${sourceId}`,
     actorRef: actor.id,
     acl: template.acl,
-    rawPayload: {
-      ...template.rawPayload,
-      simulatorSourceId: sourceId,
-      scenarioTime: occurredAt,
-      actorPersonId: actor.id,
-      actorEmail: actor.email,
-      assigneePersonId: assignee?.id ?? null,
-      assigneeEmail: assignee?.email ?? null,
-    },
+    rawPayload,
     correlation: {
       scenarioId: scenario.id,
       eventId: event.id,
@@ -432,18 +491,18 @@ function encodeCursor(payload: CursorPayload): string {
 
 function decodeCursor(cursor: string): CursorPayload {
   try {
-    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as CursorPayload;
-    if (parsed.v !== 1 || typeof parsed.connectionId !== "string" || typeof parsed.offset !== "number") {
-      throw new Error("Invalid cursor shape");
-    }
-    return parsed;
+    return CursorPayloadSchema.parse(JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")));
   } catch {
     throw badRequest("Invalid cursor");
   }
 }
 
 function compareRecords(left: SourceRecord, right: SourceRecord): number {
-  return left.occurredAt.localeCompare(right.occurredAt) || left.sourceSystem.localeCompare(right.sourceSystem) || left.sourceId.localeCompare(right.sourceId);
+  return recordVisibleAt(left).localeCompare(recordVisibleAt(right)) || left.sourceSystem.localeCompare(right.sourceSystem) || left.sourceId.localeCompare(right.sourceId);
+}
+
+function recordVisibleAt(record: SourceRecord): string {
+  return record.updatedAt ?? record.occurredAt;
 }
 
 function elapsedHours(start: string, end: string): number {
@@ -480,6 +539,10 @@ function clampNumber(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
+function cloneOrganizationConfig(config: OrganizationConfig): OrganizationConfig {
+  return JSON.parse(JSON.stringify(config)) as OrganizationConfig;
+}
+
 export class HttpError extends Error {
   constructor(
     public readonly status: number,
@@ -491,6 +554,10 @@ export class HttpError extends Error {
 
 export function badRequest(message: string): HttpError {
   return new HttpError(400, message);
+}
+
+export function forbidden(message: string): HttpError {
+  return new HttpError(403, message);
 }
 
 export function notFound(message: string): HttpError {
