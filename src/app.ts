@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { SourceSimulator, HttpError } from "./engine.js";
+import { SourceSimulator, HttpError, type SimulatorOptions } from "./engine.js";
 import { scenarios } from "./data.js";
 import { roleTemplates } from "./organization.js";
 import { sourceSystems, type DatasetSize } from "./domain.js";
@@ -11,11 +11,13 @@ export interface AppOptions {
 }
 
 export function createApp(options: AppOptions = {}) {
-  const simulator = options.simulator ?? new SourceSimulator({
-    seed: process.env.SIMULATOR_DEFAULT_SEED,
-    datasetSize: parseDatasetSize(process.env.SIMULATOR_DEFAULT_DATASET_SIZE),
-    baseUrl: process.env.SIMULATOR_PUBLIC_BASE_URL,
-  });
+  const simulatorOptions: SimulatorOptions = {};
+  if (process.env.SIMULATOR_DEFAULT_SEED) simulatorOptions.seed = process.env.SIMULATOR_DEFAULT_SEED;
+  const configuredDatasetSize = parseDatasetSize(process.env.SIMULATOR_DEFAULT_DATASET_SIZE);
+  if (configuredDatasetSize) simulatorOptions.datasetSize = configuredDatasetSize;
+  if (process.env.SIMULATOR_PUBLIC_BASE_URL) simulatorOptions.baseUrl = process.env.SIMULATOR_PUBLIC_BASE_URL;
+
+  const simulator = options.simulator ?? new SourceSimulator(simulatorOptions);
   const adminKey = options.adminKey ?? process.env.SIMULATOR_ADMIN_API_KEY ?? "dev-admin-key";
   const connectionSecret = options.connectionSecret ?? process.env.SIMULATOR_CONNECTION_SECRET ?? "dev-connection-secret";
   const app = new Hono();
@@ -94,9 +96,9 @@ async function optionalJson(request: Request): Promise<Record<string, any>> {
   }
 }
 
-function hasSecret(headers: Headers, expected: string, headerName: string): boolean {
-  const headerSecret = headers.get(headerName);
-  const auth = headers.get("authorization");
+function hasSecret(headers: Record<string, string | undefined>, expected: string, headerName: string): boolean {
+  const headerSecret = headers[headerName] ?? headers[headerName.toLowerCase()];
+  const auth = headers.authorization ?? headers.Authorization;
   const bearerSecret = auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length) : undefined;
   return headerSecret === expected || bearerSecret === expected;
 }
