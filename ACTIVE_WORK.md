@@ -8,6 +8,8 @@ Milestone 1: Core Simulator Platform, Contract, and Organization Graph.
 
 Implemented as an initial foundation and ready for draft PR review.
 
+Draft PR: https://github.com/aabhaslal-cpu/workforce-one-source-simulator/pull/1
+
 ## What Is Built
 
 - TypeScript service scaffold with strict compiler settings.
@@ -37,6 +39,21 @@ Implemented as an initial foundation and ready for draft PR review.
 ## Implemented Source Families in Milestone 1
 
 The M1 engine emits provider-shaped payloads for Slack, Gmail, Calendar, Notion, Jira, Productboard, Amplitude, GitHub, PagerDuty, Salesforce, Gainsight, and Zendesk. Records are authored by actual generated people and include actor/assignee identifiers in raw payloads where applicable. Milestone 2 turns these into fuller adapter modules and completes all 10 scenario packs.
+
+## Verification
+
+Latest confirmed cloud verification before this documentation update:
+
+- GitHub Actions workflow: `ci`, run #5.
+- Head SHA: `08579a0b440703ebbc13b69983f3bf4e7601aced`.
+- Result: success.
+- `pnpm run verify` completed successfully.
+- TypeScript typecheck passed.
+- Vitest passed 8 tests in `src/__tests__/simulator.test.ts`.
+- ESLint passed.
+- Build passed.
+
+This file update triggers a follow-up documentation-only CI run. Future sessions should re-check the latest PR head status before merge.
 
 ## Known Limitations
 
