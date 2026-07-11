@@ -21,6 +21,7 @@ export type RoleLevel = (typeof roleLevels)[number];
 export type DatasetSize = (typeof datasetSizes)[number];
 export type SourceSystem = (typeof sourceSystems)[number];
 export type AclVisibility = "public" | "group" | "restricted" | "private";
+export type SourceChangeType = "created" | "updated" | "deleted";
 
 export interface Acl {
   visibility: AclVisibility;
@@ -147,6 +148,10 @@ export interface SourceRecord {
   actorRef?: string;
   acl: Acl;
   rawPayload: Record<string, unknown>;
+  changeId: string;
+  changeType: SourceChangeType;
+  changeSequence: number;
+  changeOccurredAt: string;
   correlation: {
     scenarioId: string;
     eventId: string;
