@@ -29,19 +29,6 @@ export const amplitudeAdapter = makeVendorAdapter(
           ],
           xValues: [input.occurredAt.slice(0, 10), input.changeOccurredAt.slice(0, 10)],
         },
-        query: {
-          e: { event_type: metric },
-          start: input.occurredAt.slice(0, 10),
-          end: input.changeOccurredAt.slice(0, 10),
-          m: "uniques",
-        },
-        metadata: {
-          chartId: String(
-            input.template.rawPayload.chartId ?? `chart-${numericId(input.sourceId)}`,
-          ),
-          metric,
-          computedAt: input.changeOccurredAt,
-        },
       },
     };
   },

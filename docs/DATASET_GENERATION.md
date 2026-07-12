@@ -4,11 +4,11 @@ Dataset generation is deterministic from seed, dataset size, organization config
 
 ## Sizes
 
-| Size | Instances | Source Changes |
-| --- | ---: | ---: |
-| Small | 10 | 131 |
-| Medium | 80 | 1,048 |
-| Large | 400 | 5,240 |
+| Size   | Instances | Source Changes |
+| ------ | --------: | -------------: |
+| Small  |        10 |            136 |
+| Medium |        80 |          1,088 |
+| Large  |       400 |          5,440 |
 
 The ranges match Milestone 2 targets:
 

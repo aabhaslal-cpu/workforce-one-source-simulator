@@ -42,8 +42,8 @@ export const notionAdapter = makeVendorAdapter(
           },
           Summary: {
             id: "summary",
-            type: "title",
-            title: [
+            type: "rich_text",
+            rich_text: [
               {
                 type: "text",
                 text: { content: templateText(input) },

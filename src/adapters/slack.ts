@@ -51,7 +51,7 @@ export const slackAdapter = makeVendorAdapter(
           subtype: "message_deleted",
           text: "",
           hidden: true,
-          deleted_ts: unixTs(input.changeOccurredAt),
+          deleted_ts: baseMessage.ts,
         },
       };
     }

@@ -6,7 +6,7 @@ The simulator behaves like an external source platform. It emits fictional, perm
 
 ## Current State
 
-Milestone 3 is implemented on `milestone-3/production-hardening` as the final production-hardening draft PR.
+Milestone 3 is implemented as the final production-hardening milestone.
 
 Built:
 
@@ -17,7 +17,7 @@ Built:
 - Connection-bound authentication where each credential resolves server-side to exactly one connection ID.
 - Admin-gated people, organization, team, source, dataset, relationship, and visibility inspection.
 - Safe public catalog metadata only.
-- Modular source adapters for Slack, Gmail, Calendar, Notion, Jira, Productboard, Amplitude-style analytics, GitHub, PagerDuty-style incidents, Salesforce, Gainsight-style customer success, and Zendesk-style support.
+- Modular source adapters for Slack, Gmail, Calendar, Notion, Jira, Productboard, Amplitude-style analytics, GitHub, PagerDuty-style incidents, Salesforce, Gainsight-style customer success, and Zendesk-style support, with provider-family Zod validation and manifest parity tests.
 - Ten scenario packs covering launch readiness, adoption lag, roadmap tradeoff, incident response, delivery slip, technical debt/staffing risk, renewal risk, implementation blocker, expansion opportunity, and major cross-functional release.
 - Persisted scenario instance state. Packs are reusable templates; instances hold their own seed, dataset size, clock, pause state, event occurrence times, event log, completion state, participants, and account/project/product/service/workstream context.
 - Persisted company clock with manual mode, realtime mode, bounded catch-up, speed multiplier, pause/resume, restart persistence, feed-triggered reconciliation, and a protected cron-compatible reconciliation endpoint.
@@ -41,9 +41,9 @@ Built:
 
 Dataset counts with the current implementation:
 
-- Small: 131 source changes, 10 scenario instances.
-- Medium: 1,048 source changes, 80 scenario instances.
-- Large: 5,240 source changes, 400 scenario instances.
+- Small: 136 source changes, 10 scenario instances.
+- Medium: 1,088 source changes, 80 scenario instances.
+- Large: 5,440 source changes, 400 scenario instances.
 
 ## Quick Start
 
@@ -89,7 +89,7 @@ pnpm install --frozen-lockfile
 pnpm run verify
 ```
 
-The Milestone 3 suite has 79 Vitest tests. Local runs without `SIMULATOR_POSTGRES_TEST_URL` execute 73 tests and skip the 6 Postgres integration tests. GitHub Actions provides Postgres and runs the full suite plus Vercel config validation, route smoke tests, Docker build, and a container readiness smoke test. A real `vercel build` runs in CI only when `VERCEL_TOKEN` is configured; without that token, the optional Vercel build step is intentionally skipped and the owner-run preview verification command in `docs/DEPLOYMENT.md` remains required before calling Vercel deployability fully proven.
+The Milestone 3 suite has 83 Vitest tests. Local runs without `SIMULATOR_POSTGRES_TEST_URL` execute 77 tests and skip the 6 Postgres integration tests. GitHub Actions provides Postgres and runs the full suite plus Vercel config validation, route smoke tests, Docker build, and a container readiness smoke test. A real `vercel build` runs in CI only when `VERCEL_TOKEN` is configured; without that token, the optional Vercel build step is intentionally skipped and the owner-run preview verification command in `docs/DEPLOYMENT.md` remains required before calling Vercel deployability fully proven.
 
 ## Deployment Honesty
 

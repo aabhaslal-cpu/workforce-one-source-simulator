@@ -10,9 +10,91 @@ const apiVersion = "v60.0";
 
 export const salesforceAdapter = makeVendorAdapter(
   "salesforce",
-  ["account", "contact", "opportunity", "opportunity_update", "activity"],
+  ["account", "contact", "opportunity", "opportunity_update", "task", "event", "activity"],
   (input) => {
-    if (input.template.objectType === "activity") {
+    if (input.template.objectType === "account") {
+      const accountId = salesforceId(
+        "001",
+        String(input.template.rawPayload.account ?? input.instance.account ?? input.sourceId),
+      );
+      return {
+        objectType: "Account",
+        rawPayload: {
+          attributes: {
+            type: "Account",
+            url: `/services/data/${apiVersion}/sobjects/Account/${accountId}`,
+          },
+          Id: accountId,
+          Name: String(
+            input.template.rawPayload.account ?? input.instance.account ?? input.template.title,
+          ),
+          OwnerId: salesforceId("005", input.actor.stableKey),
+          Type: String(input.template.rawPayload.accountType ?? "Customer"),
+          Industry: String(input.template.rawPayload.industry ?? "Technology"),
+          BillingCountry: String(input.template.rawPayload.billingCountry ?? "United States"),
+          LastModifiedDate: input.changeOccurredAt,
+        },
+      };
+    }
+    if (input.template.objectType === "contact") {
+      const contactId = salesforceId("003", input.sourceId);
+      const accountId = salesforceId(
+        "001",
+        String(input.template.rawPayload.account ?? input.instance.account ?? input.sourceId),
+      );
+      return {
+        objectType: "Contact",
+        rawPayload: {
+          attributes: {
+            type: "Contact",
+            url: `/services/data/${apiVersion}/sobjects/Contact/${contactId}`,
+          },
+          Id: contactId,
+          AccountId: accountId,
+          OwnerId: salesforceId("005", input.actor.stableKey),
+          FirstName: String(input.template.rawPayload.firstName ?? "Fictional"),
+          LastName: String(input.template.rawPayload.lastName ?? "Sponsor"),
+          Email: String(
+            input.template.rawPayload.email ??
+              `sponsor-${salesforceId("ctc", input.sourceId).toLowerCase()}@example.test`,
+          ),
+          Title: String(input.template.rawPayload.contactTitle ?? "Executive Sponsor"),
+          LastModifiedDate: input.changeOccurredAt,
+        },
+      };
+    }
+    if (input.template.objectType === "event") {
+      const eventId = salesforceId("00U", input.sourceId);
+      const accountId = salesforceId(
+        "001",
+        String(input.template.rawPayload.account ?? input.instance.account ?? input.sourceId),
+      );
+      const contactId = salesforceId(
+        "003",
+        String(input.template.rawPayload.contact ?? input.sourceId),
+      );
+      const start = input.changeOccurredAt;
+      return {
+        objectType: "Event",
+        rawPayload: {
+          attributes: {
+            type: "Event",
+            url: `/services/data/${apiVersion}/sobjects/Event/${eventId}`,
+          },
+          Id: eventId,
+          Subject: input.template.title,
+          OwnerId: salesforceId("005", input.actor.stableKey),
+          WhoId: contactId,
+          WhatId: accountId,
+          AccountId: accountId,
+          StartDateTime: start,
+          EndDateTime: new Date(Date.parse(start) + 60 * 60 * 1000).toISOString(),
+          Description: templateText(input),
+          LastModifiedDate: input.changeOccurredAt,
+        },
+      };
+    }
+    if (input.template.objectType === "activity" || input.template.objectType === "task") {
       const taskId = salesforceId("00T", input.sourceId);
       const whatId = salesforceId(
         "001",

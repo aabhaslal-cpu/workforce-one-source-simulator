@@ -223,6 +223,21 @@ const notionStatusPropertySchema = z
     status: z.object({ name: z.string(), color: z.string() }).strict(),
   })
   .strict();
+const notionRichTextPropertySchema = z
+  .object({
+    id: z.string(),
+    type: z.literal("rich_text"),
+    rich_text: z.array(
+      z
+        .object({
+          type: z.literal("text"),
+          text: z.object({ content: z.string() }).strict(),
+          plain_text: z.string(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
 const notionPageSchema = z
   .object({
     object: z.literal("page"),
@@ -239,7 +254,12 @@ const notionPageSchema = z
       z.object({ type: z.literal("page_id"), page_id: z.string().uuid() }).strict(),
     ]),
     properties: z.record(
-      z.union([notionTextPropertySchema, notionStatusPropertySchema, z.record(z.unknown())]),
+      z.union([
+        notionTextPropertySchema,
+        notionStatusPropertySchema,
+        notionRichTextPropertySchema,
+        z.record(z.unknown()),
+      ]),
     ),
   })
   .strict();
@@ -306,19 +326,78 @@ const jiraIssueSchema = z
   })
   .strict();
 
-const productboardResourceSchema = z
+const productboardRelationshipResourceSchema = z
+  .object({
+    data: z.union([
+      z.object({ type: z.string(), id: z.string() }).strict(),
+      z.array(z.object({ type: z.string(), id: z.string() }).strict()),
+    ]),
+  })
+  .strict();
+const productboardBaseSchema = z
   .object({
     data: z
       .object({
-        type: z.enum(["feature", "note", "component"]),
+        type: z.enum(["feature", "note"]),
         id: z.string().min(1),
         attributes: z.record(z.unknown()),
-        relationships: z.record(z.unknown()).optional(),
+        relationships: z
+          .object({
+            owner: productboardRelationshipResourceSchema,
+            product: productboardRelationshipResourceSchema,
+            companies: productboardRelationshipResourceSchema.optional(),
+          })
+          .strict()
+          .optional(),
         links: z.object({ self: urlString }).optional(),
       })
       .strict(),
   })
-  .strict();
+  .strict()
+  .superRefine((payload, ctx) => {
+    const data = payload.data;
+    if (data.type === "feature") {
+      const parsed = z
+        .object({
+          name: z.string(),
+          description: z.string(),
+          status: z.object({ name: z.string() }).strict(),
+          created_at: isoDateTime,
+          updated_at: isoDateTime,
+        })
+        .strict()
+        .safeParse(data.attributes);
+      if (!parsed.success) {
+        for (const issue of parsed.error.issues) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["data", "attributes", ...issue.path],
+            message: issue.message,
+          });
+        }
+      }
+    } else {
+      const parsed = z
+        .object({
+          title: z.string(),
+          content: z.string(),
+          note_type: z.literal("textNote"),
+          created_at: isoDateTime,
+          updated_at: isoDateTime,
+        })
+        .strict()
+        .safeParse(data.attributes);
+      if (!parsed.success) {
+        for (const issue of parsed.error.issues) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["data", "attributes", ...issue.path],
+            message: issue.message,
+          });
+        }
+      }
+    }
+  });
 
 const amplitudeChartResponseSchema = z
   .object({
@@ -328,10 +407,6 @@ const amplitudeChartResponseSchema = z
         seriesMeta: z.array(z.record(z.unknown())),
         xValues: z.array(z.string()),
       })
-      .strict(),
-    query: z.record(z.unknown()),
-    metadata: z
-      .object({ chartId: z.string(), metric: z.string(), computedAt: isoDateTime })
       .strict(),
   })
   .strict();
@@ -400,6 +475,95 @@ const githubIssueSchema = z
     closed_at: isoDateTime.nullable(),
   })
   .strict();
+const githubCommitSchema = z
+  .object({
+    sha: z.string().regex(/^[a-f0-9]{40}$/),
+    node_id: z.string(),
+    url: urlString,
+    html_url: urlString,
+    comments_url: urlString,
+    commit: z
+      .object({
+        author: z
+          .object({ name: z.string(), email: z.string().email(), date: isoDateTime })
+          .strict(),
+        committer: z
+          .object({ name: z.string(), email: z.string().email(), date: isoDateTime })
+          .strict(),
+        message: z.string(),
+        tree: z.object({ sha: z.string().regex(/^[a-f0-9]{40}$/), url: urlString }).strict(),
+        url: urlString,
+        comment_count: z.number().int().nonnegative(),
+        verification: z
+          .object({
+            verified: z.boolean(),
+            reason: z.string(),
+            signature: z.string().nullable(),
+            payload: z.string().nullable(),
+          })
+          .strict(),
+      })
+      .strict(),
+    author: githubUserSchema.nullable(),
+    committer: githubUserSchema.nullable(),
+    parents: z.array(
+      z
+        .object({
+          sha: z.string().regex(/^[a-f0-9]{40}$/),
+          url: urlString,
+          html_url: urlString,
+        })
+        .strict(),
+    ),
+    stats: z
+      .object({
+        total: z.number().int().nonnegative(),
+        additions: z.number().int().nonnegative(),
+        deletions: z.number().int().nonnegative(),
+      })
+      .strict()
+      .optional(),
+    files: z
+      .array(
+        z
+          .object({
+            sha: z.string().regex(/^[a-f0-9]{40}$/),
+            filename: z.string(),
+            status: z.enum(["added", "removed", "modified", "renamed"]),
+            additions: z.number().int().nonnegative(),
+            deletions: z.number().int().nonnegative(),
+            changes: z.number().int().nonnegative(),
+            blob_url: urlString,
+            raw_url: urlString,
+            contents_url: urlString,
+          })
+          .strict(),
+      )
+      .optional(),
+  })
+  .strict();
+const githubReleaseSchema = z
+  .object({
+    id: z.number().int(),
+    node_id: z.string(),
+    tag_name: z.string(),
+    target_commitish: z.string(),
+    name: z.string().nullable(),
+    body: z.string().nullable(),
+    draft: z.boolean(),
+    prerelease: z.boolean(),
+    created_at: isoDateTime,
+    published_at: isoDateTime.nullable(),
+    author: githubUserSchema,
+    html_url: urlString,
+    url: urlString,
+    assets_url: urlString,
+    upload_url: z.string().url().or(z.string().includes("{?name,label}")),
+    tarball_url: urlString.nullable(),
+    zipball_url: urlString.nullable(),
+    assets: z.array(z.record(z.unknown())),
+  })
+  .strict();
 
 const pagerDutyReferenceSchema = z
   .object({
@@ -440,6 +604,31 @@ const salesforceAttributesSchema = z
     url: z.string().regex(/^\/services\/data\/v\d+\.\d+\/sobjects\/[A-Za-z]+\/[A-Za-z0-9]{15,18}$/),
   })
   .strict();
+const salesforceAccountSchema = z
+  .object({
+    attributes: salesforceAttributesSchema.extend({ type: z.literal("Account") }),
+    Id: z.string().regex(/^[A-Za-z0-9]{18}$/),
+    Name: z.string(),
+    OwnerId: z.string().regex(/^[A-Za-z0-9]{18}$/),
+    Type: z.string().nullable().optional(),
+    Industry: z.string().nullable().optional(),
+    BillingCountry: z.string().nullable().optional(),
+    LastModifiedDate: isoDateTime,
+  })
+  .strict();
+const salesforceContactSchema = z
+  .object({
+    attributes: salesforceAttributesSchema.extend({ type: z.literal("Contact") }),
+    Id: z.string().regex(/^[A-Za-z0-9]{18}$/),
+    AccountId: z.string().regex(/^[A-Za-z0-9]{18}$/),
+    OwnerId: z.string().regex(/^[A-Za-z0-9]{18}$/),
+    FirstName: z.string().nullable().optional(),
+    LastName: z.string(),
+    Email: z.string().email().nullable().optional(),
+    Title: z.string().nullable().optional(),
+    LastModifiedDate: isoDateTime,
+  })
+  .strict();
 const salesforceOpportunitySchema = z
   .object({
     attributes: salesforceAttributesSchema.extend({ type: z.literal("Opportunity") }),
@@ -469,6 +658,21 @@ const salesforceTaskSchema = z
     LastModifiedDate: isoDateTime,
   })
   .strict();
+const salesforceEventSchema = z
+  .object({
+    attributes: salesforceAttributesSchema.extend({ type: z.literal("Event") }),
+    Id: z.string().regex(/^[A-Za-z0-9]{18}$/),
+    Subject: z.string(),
+    OwnerId: z.string().regex(/^[A-Za-z0-9]{18}$/),
+    WhoId: z.string().regex(/^[A-Za-z0-9]{18}$/),
+    WhatId: z.string().regex(/^[A-Za-z0-9]{18}$/),
+    AccountId: z.string().regex(/^[A-Za-z0-9]{18}$/),
+    StartDateTime: isoDateTime,
+    EndDateTime: isoDateTime,
+    Description: z.string().nullable(),
+    LastModifiedDate: isoDateTime,
+  })
+  .strict();
 
 const gainsightBaseSchema = z
   .object({
@@ -480,6 +684,9 @@ const gainsightBaseSchema = z
     Status: z.string().optional(),
     Score: z.number().optional(),
     Trend: z.string().optional(),
+    Type: z.string().optional(),
+    ActivityDate: dateOnly.optional(),
+    Body: z.string().optional(),
     DueDate: dateOnly.optional(),
     LastModifiedDate: isoDateTime,
     CustomFields: z.record(z.unknown()).optional(),
@@ -491,6 +698,15 @@ const gainsightBaseSchema = z
     }
     if (payload.objectName === "ScorecardMeasure" && typeof payload.Score !== "number") {
       ctx.addIssue({ code: "custom", message: "Gainsight ScorecardMeasure requires Score" });
+    }
+    if (
+      payload.objectName === "TimelineActivity" &&
+      (!payload.Type || !payload.ActivityDate || !payload.Body)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Gainsight TimelineActivity requires Type, ActivityDate, and Body",
+      });
     }
   });
 
@@ -542,10 +758,9 @@ export const vendorPayloadSchemas: Record<SourceSystem, Record<string, z.ZodType
     bug: jiraIssueSchema,
   },
   productboard: {
-    feature: productboardResourceSchema,
-    note: productboardResourceSchema,
-    insight: productboardResourceSchema,
-    component: productboardResourceSchema,
+    feature: productboardBaseSchema,
+    note: productboardBaseSchema,
+    insight: productboardBaseSchema,
   },
   amplitude: {
     chart_response: amplitudeChartResponseSchema,
@@ -556,16 +771,23 @@ export const vendorPayloadSchemas: Record<SourceSystem, Record<string, z.ZodType
   github: {
     pull_request: githubPullRequestSchema,
     issue: githubIssueSchema,
-    commit: githubIssueSchema,
-    release: githubIssueSchema,
+    commit: githubCommitSchema,
+    release: githubReleaseSchema,
   },
   pagerduty: { incident: pagerDutyIncidentSchema },
   salesforce: {
+    Account: salesforceAccountSchema,
+    account: salesforceAccountSchema,
+    Contact: salesforceContactSchema,
+    contact: salesforceContactSchema,
     Opportunity: salesforceOpportunitySchema,
     opportunity: salesforceOpportunitySchema,
     opportunity_update: salesforceOpportunitySchema,
     Task: salesforceTaskSchema,
+    task: salesforceTaskSchema,
     activity: salesforceTaskSchema,
+    Event: salesforceEventSchema,
+    event: salesforceEventSchema,
   },
   gainsight: {
     CallToAction: gainsightBaseSchema,
@@ -580,6 +802,21 @@ export const vendorPayloadSchemas: Record<SourceSystem, Record<string, z.ZodType
   zendesk: { ticket: zendeskTicketSchema },
 };
 
+export const canonicalVendorPayloadFamilies: Record<SourceSystem, string[]> = {
+  slack: ["message"],
+  gmail: ["message", "thread"],
+  calendar: ["event"],
+  notion: ["page"],
+  jira: ["issue"],
+  productboard: ["feature", "note"],
+  amplitude: ["chart_response"],
+  github: ["commit", "issue", "pull_request", "release"],
+  pagerduty: ["incident"],
+  salesforce: ["Account", "Contact", "Event", "Opportunity", "Task"],
+  gainsight: ["CallToAction", "ScorecardMeasure", "SuccessPlan", "TimelineActivity"],
+  zendesk: ["ticket"],
+};
+
 export function canonicalPayloadFamily(sourceSystem: SourceSystem, objectType: string): string {
   if (sourceSystem === "slack") return "message";
   if (sourceSystem === "gmail") return objectType === "thread" ? "thread" : "message";
@@ -589,13 +826,19 @@ export function canonicalPayloadFamily(sourceSystem: SourceSystem, objectType: s
   if (sourceSystem === "productboard") return objectType === "insight" ? "note" : objectType;
   if (sourceSystem === "amplitude") return "chart_response";
   if (sourceSystem === "salesforce") {
-    if (objectType === "Task" || objectType === "Opportunity") return objectType;
-    return objectType === "activity" ? "Task" : "Opportunity";
+    if (["Account", "Contact", "Event", "Opportunity", "Task"].includes(objectType))
+      return objectType;
+    if (objectType === "account") return "Account";
+    if (objectType === "contact") return "Contact";
+    if (objectType === "event") return "Event";
+    if (objectType === "task" || objectType === "activity") return "Task";
+    return "Opportunity";
   }
   if (sourceSystem === "gainsight") {
     if (objectType === "cta") return "CallToAction";
     if (objectType === "success_plan") return "SuccessPlan";
-    if (objectType === "health_score" || objectType === "milestone") return "ScorecardMeasure";
+    if (objectType === "health_score") return "ScorecardMeasure";
+    if (objectType === "milestone") return "TimelineActivity";
   }
   return objectType;
 }
@@ -628,7 +871,28 @@ export function validateVendorPayload(
       ),
     );
   }
+  errors.push(...familyDiscriminatorErrors(sourceSystem, family, payload));
   return { ok: errors.length === 0, errors };
+}
+
+function familyDiscriminatorErrors(
+  sourceSystem: SourceSystem,
+  family: string,
+  payload: unknown,
+): string[] {
+  const candidate = payload as Record<string, unknown>;
+  if (sourceSystem === "productboard") {
+    const data = candidate.data as Record<string, unknown> | undefined;
+    if (data?.type !== family) return [`productboard payload data.type must be ${family}`];
+  }
+  if (sourceSystem === "salesforce") {
+    const attributes = candidate.attributes as Record<string, unknown> | undefined;
+    if (attributes?.type !== family) return [`salesforce attributes.type must be ${family}`];
+  }
+  if (sourceSystem === "gainsight" && candidate.objectName !== family) {
+    return [`gainsight objectName must be ${family}`];
+  }
+  return [];
 }
 
 function inferPayloadFamily(sourceSystem: SourceSystem, payload: unknown): string {
@@ -654,6 +918,8 @@ function inferPayloadFamily(sourceSystem: SourceSystem, payload: unknown): strin
   }
   if (sourceSystem === "amplitude" && typeof candidate.data === "object") return "chart_response";
   if (sourceSystem === "github" && typeof candidate.head === "object") return "pull_request";
+  if (sourceSystem === "github" && typeof candidate.commit === "object") return "commit";
+  if (sourceSystem === "github" && "tag_name" in candidate) return "release";
   if (sourceSystem === "github") return "issue";
   if (sourceSystem === "calendar") return "event";
   if (sourceSystem === "notion") return "page";

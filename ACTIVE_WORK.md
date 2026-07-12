@@ -6,7 +6,7 @@ Milestone 3: Production Hardening and Workforce One Integration Readiness.
 
 ## Branch And Baseline
 
-- Working branch: `milestone-3/production-hardening`.
+- Working branch: `main`.
 - Baseline Milestone 2 head: `f73746113007b87530811f60f51297bff968ccf7`.
 - Pre-implementation reviews were completed first and documented in `docs/MILESTONE_3_REVIEWS.md`.
 - Milestone 3 must remain the final milestone and must not add new business scenario scope.
@@ -32,11 +32,11 @@ Milestone 3: Production Hardening and Workforce One Integration Readiness.
 
 ## Dataset Counts
 
-Baseline deterministic datasets remain:
+Baseline deterministic datasets:
 
-- Small: 131 source changes, 10 scenario instances.
-- Medium: 1,048 source changes, 80 scenario instances.
-- Large: 5,240 source changes, 400 scenario instances.
+- Small: 136 source changes, 10 scenario instances.
+- Medium: 1,088 source changes, 80 scenario instances.
+- Large: 5,440 source changes, 400 scenario instances.
 
 The benchmark harness creates one extra manual-trigger instance during each run, so benchmark count rows show 11, 81, and 401 instances.
 
@@ -46,10 +46,10 @@ The benchmark harness creates one extra manual-trigger instance during each run,
 - `pnpm run verify`: passed.
 - `pnpm run vercel:validate`: passed.
 - `git diff --check`: passed.
-- Vitest count: 79 tests total with 73 local passes and 6 Postgres tests skipped without `SIMULATOR_POSTGRES_TEST_URL`.
+- Vitest count: 83 tests total with 77 local passes and 6 Postgres tests skipped without `SIMULATOR_POSTGRES_TEST_URL`.
 - Real local `pnpm run vercel:build`: attempted and failed because Vercel CLI reported an invalid cached/account token; no `.vercel/output` was produced locally.
 
-GitHub Actions provides Postgres and should run all 79 tests, Vercel config validation, route smoke tests, Docker build, and container readiness smoke. A real Vercel CLI build runs only when `VERCEL_TOKEN` is configured; when it exits early because `VERCEL_TOKEN` is absent, that step is not deployment proof.
+GitHub Actions provides Postgres and should run all 83 tests, Vercel config validation, route smoke tests, Docker build, and container readiness smoke. A real Vercel CLI build runs only when `VERCEL_TOKEN` is configured; when it exits early because `VERCEL_TOKEN` is absent, that step is not deployment proof.
 
 ## Known Limitations
 

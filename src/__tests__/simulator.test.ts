@@ -9,14 +9,27 @@ import { SourceFeedBatchV1Schema } from "../contracts.js";
 import { SourceSimulator } from "../engine.js";
 import { createApp } from "../simulator-app.js";
 import { sourceAdapters } from "../adapters/registry.js";
-import { assertNoSimulatorMetadata, validateVendorPayload } from "../adapters/vendor-schemas.js";
+import {
+  assertNoSimulatorMetadata,
+  canonicalPayloadFamily,
+  canonicalVendorPayloadFamilies,
+  validateVendorPayload,
+  vendorPayloadSchemas,
+} from "../adapters/vendor-schemas.js";
 import { defaultOrganizationConfig, personConnectionId } from "../organization.js";
 import {
   MemorySimulatorStorage,
   PostgresSimulatorStorage,
   SQLiteSimulatorStorage,
 } from "../storage.js";
-import { sourceSystems } from "../domain.js";
+import {
+  sourceSystems,
+  type Person,
+  type SourceChangeLedgerEntry,
+  type SourceRecord,
+  type SourceSystem,
+} from "../domain.js";
+import type { SourceEmissionInput } from "../adapters/types.js";
 import { assertBenchmarkDatabaseIsIsolated } from "../performance.js";
 import { SOURCE_PAYLOAD_CONTRACT_VERSION, sourceContractManifests } from "../source-contracts.js";
 
@@ -85,6 +98,126 @@ function developmentConnectionHeaders(connectionId: string) {
 
 function decodeCursor(cursor: string) {
   return JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Record<string, unknown>;
+}
+
+function recordsBySourceAndFamily(changes: SourceChangeLedgerEntry[]): Map<string, SourceRecord> {
+  const records = new Map<string, SourceRecord>();
+  for (const change of changes) {
+    records.set(`${change.sourceSystem}:${change.record.objectType}`, change.record);
+  }
+  return records;
+}
+
+function testPerson(overrides: Partial<Person> = {}): Person {
+  return {
+    id: "person-test-ic",
+    stableKey: "person-test-ic",
+    name: "Fictional Tester",
+    email: "fictional.tester@example.test",
+    department: "engineering",
+    roleTemplateId: "role-engineering-ic",
+    roleTitle: "Engineer",
+    roleLevel: "ic",
+    teamId: "team-test",
+    managerId: null,
+    directReportIds: [],
+    sourceIdentities: {},
+    groupMemberships: [],
+    assignedProjects: [],
+    assignedProducts: [],
+    assignedAccounts: [],
+    assignedWorkstreams: [],
+    permissionScopes: [],
+    ...overrides,
+  };
+}
+
+function emissionInput(
+  sourceSystem: SourceSystem,
+  objectType: string,
+  overrides: Partial<SourceEmissionInput> = {},
+): SourceEmissionInput {
+  const actor = testPerson();
+  return {
+    baseUrl: "http://sim.test",
+    sourceId: `${sourceSystem}-test-source`,
+    occurredAt: "2026-07-10T00:00:00.000Z",
+    changeOccurredAt: "2026-07-10T04:00:00.000Z",
+    changeType: "deleted",
+    scenario: {
+      id: "test-scenario",
+      title: "Test scenario",
+      department: "engineering",
+      description: "Test",
+      participantRoleTemplateIds: ["role-engineering-ic"],
+      sourceSystems: [sourceSystem],
+      events: [],
+    },
+    event: { id: "test-event", label: "Test event", atHour: 0, records: [] },
+    template: {
+      id: "test-template",
+      sourceSystem,
+      objectType,
+      title: "Test source record",
+      actorRoleTemplateId: "role-engineering-ic",
+      acl: { visibility: "public", groups: [], users: [] },
+      rawPayload: {},
+    },
+    state: {
+      scenarioPackId: "test-scenario",
+      scenarioInstanceId: "test-scenario-1",
+      instanceIndex: 0,
+      label: "Test scenario 1",
+      seed: "test-seed",
+      datasetSize: "small",
+      startedAt: "2026-07-10T00:00:00.000Z",
+      currentTime: "2026-07-10T04:00:00.000Z",
+      paused: false,
+      triggeredEventIds: [],
+      eventOccurrenceTimes: {},
+      eventLog: [],
+      completionState: "active",
+      participantPersonIds: { "role-engineering-ic": actor.id },
+      account: "Example Account",
+      product: "Example Product",
+      project: "Example Project",
+      service: "Example Service",
+      workstream: "Example Workstream",
+      timeOffsetHours: 0,
+    },
+    instance: {
+      scenarioPackId: "test-scenario",
+      scenarioInstanceId: "test-scenario-1",
+      instanceIndex: 0,
+      label: "Test scenario 1",
+      seed: "test-seed",
+      account: "Example Account",
+      product: "Example Product",
+      project: "Example Project",
+      service: "Example Service",
+      workstream: "Example Workstream",
+      timeOffsetHours: 0,
+    },
+    organization: {
+      seed: "test-seed",
+      config: cloneDefaultOrganizationConfig(),
+      roleTemplates: [],
+      people: [actor],
+      teams: [],
+      reportingRelationships: [],
+      tree: [],
+      counts: {
+        totalPeople: 1,
+        byDepartment: { product: 0, engineering: 1, customer_success: 0 },
+        byRoleLevel: { ic: 1, manager: 0, director: 0, vp: 0 },
+      },
+      validation: { ok: true, errors: [] },
+    },
+    actor,
+    assignee: null,
+    managerChain: [],
+    ...overrides,
+  };
 }
 
 function cloneDefaultOrganizationConfig() {
@@ -857,6 +990,131 @@ describe("Milestone 2 scenario packs and adapters", () => {
         provider: "slack",
       }).ok,
     ).toBe(false);
+  });
+
+  it("keeps adapter, manifest, schema, and generated payload families in parity", async () => {
+    const simulator = await completedDatasetSimulator("family-parity-seed", "small");
+    const changes = await simulator.sourceChanges();
+
+    for (const sourceSystem of sourceSystems) {
+      const adapter = sourceAdapters.find((candidate) => candidate.sourceSystem === sourceSystem)!;
+      const manifest = sourceContractManifests.find(
+        (candidate) => candidate.sourceSystem === sourceSystem,
+      )!;
+      const expectedFamilies = [...canonicalVendorPayloadFamilies[sourceSystem]].sort();
+      const adapterFamilies = [
+        ...new Set(
+          adapter.supportedObjectTypes.map((objectType) =>
+            canonicalPayloadFamily(sourceSystem, objectType),
+          ),
+        ),
+      ].sort();
+      const manifestFamilies = manifest.families.map((family) => family.family).sort();
+      const schemaFamilies = Object.keys(vendorPayloadSchemas[sourceSystem])
+        .filter((family) => expectedFamilies.includes(canonicalPayloadFamily(sourceSystem, family)))
+        .map((family) => canonicalPayloadFamily(sourceSystem, family));
+      const generatedFamilies = [
+        ...new Set(
+          changes
+            .filter((change) => change.sourceSystem === sourceSystem)
+            .map((change) => change.record.objectType),
+        ),
+      ].sort();
+
+      expect(adapterFamilies, `${sourceSystem} adapter families`).toEqual(expectedFamilies);
+      expect(manifestFamilies, `${sourceSystem} manifest families`).toEqual(expectedFamilies);
+      expect([...new Set(schemaFamilies)].sort(), `${sourceSystem} schema families`).toEqual(
+        expectedFamilies,
+      );
+      expect(generatedFamilies, `${sourceSystem} generated families`).toEqual(expectedFamilies);
+    }
+  });
+
+  it("rejects cross-family payloads within multi-family providers", async () => {
+    const simulator = await completedDatasetSimulator("family-rejection-seed", "small");
+    const bySource = recordsBySourceAndFamily(await simulator.sourceChanges());
+
+    for (const [sourceSystem, expectedFamilies] of Object.entries(
+      canonicalVendorPayloadFamilies,
+    ) as Array<[SourceSystem, string[]]>) {
+      if (expectedFamilies.length < 2) continue;
+      for (const family of expectedFamilies) {
+        const record = bySource.get(`${sourceSystem}:${family}`);
+        expect(record, `${sourceSystem}:${family}`).toBeDefined();
+        for (const otherFamily of expectedFamilies.filter((candidate) => candidate !== family)) {
+          expect(
+            validateVendorPayload(sourceSystem, otherFamily, record!.rawPayload).ok,
+            `${sourceSystem}:${family} should not validate as ${otherFamily}`,
+          ).toBe(false);
+        }
+      }
+    }
+  });
+
+  it("preserves deliberate legacy-to-provider family mappings", async () => {
+    expect(canonicalPayloadFamily("gmail", "email")).toBe("message");
+    expect(canonicalPayloadFamily("calendar", "meeting")).toBe("event");
+    expect(canonicalPayloadFamily("notion", "decision_log")).toBe("page");
+    expect(canonicalPayloadFamily("jira", "bug")).toBe("issue");
+    expect(canonicalPayloadFamily("productboard", "insight")).toBe("note");
+    expect(canonicalPayloadFamily("amplitude", "metric_snapshot")).toBe("chart_response");
+    expect(canonicalPayloadFamily("salesforce", "opportunity_update")).toBe("Opportunity");
+    expect(canonicalPayloadFamily("salesforce", "activity")).toBe("Task");
+    expect(canonicalPayloadFamily("gainsight", "milestone")).toBe("TimelineActivity");
+  });
+
+  it("keeps provider lifecycle fields distinct from normalized simulator changes", async () => {
+    const simulator = await completedDatasetSimulator("provider-lifecycle-seed", "small");
+    const changes = await simulator.sourceChanges();
+    const jiraDeleted = changes.find(
+      (change) =>
+        change.sourceSystem === "jira" &&
+        change.changeType === "deleted" &&
+        change.record.title === "Deferred retry remediation item",
+    )!;
+    const jiraFields = jiraDeleted.record.rawPayload.fields as Record<string, unknown>;
+    const jiraStatus = jiraFields.status as Record<string, unknown>;
+    expect(jiraDeleted.changeType).toBe("deleted");
+    expect(jiraStatus.name).toBe("Deferred");
+    expect(jiraStatus.name).not.toBe("Done");
+
+    const amplitudeRecord = changes.find((change) => change.sourceSystem === "amplitude")!.record;
+    expect(Object.keys(amplitudeRecord.rawPayload).sort()).toEqual(["data"]);
+
+    const productboardFeature = recordsBySourceAndFamily(changes).get("productboard:feature")!;
+    const productboardPayload = productboardFeature.rawPayload as Record<string, unknown>;
+    const productboardData = productboardPayload.data as Record<string, unknown>;
+    const productboardAttributes = productboardData.attributes as Record<string, unknown>;
+    expect(
+      validateVendorPayload("productboard", "feature", {
+        ...productboardPayload,
+        data: {
+          ...productboardData,
+          attributes: { ...productboardAttributes, product_area: "Invented field" },
+        },
+      }).ok,
+    ).toBe(false);
+
+    const slackDelete = sourceAdapters
+      .find((adapter) => adapter.sourceSystem === "slack")!
+      .remove(emissionInput("slack", "message"));
+    const slackPayload = slackDelete.rawPayload;
+    expect(slackPayload.subtype).toBe("message_deleted");
+    expect(slackPayload.deleted_ts).toBe(slackPayload.ts);
+    expect(slackPayload.event_ts).not.toBe(slackPayload.deleted_ts);
+
+    const githubAdapter = sourceAdapters.find((adapter) => adapter.sourceSystem === "github")!;
+    const githubCreateInput = emissionInput("github", "pull_request", { changeType: "created" });
+    githubCreateInput.template.rawPayload = { updatedStatus: "merged" };
+    const githubCreate = githubAdapter.create(githubCreateInput);
+    expect(githubCreate.objectType).toBe("pull_request");
+    expect(githubCreate.rawPayload.state).toBe("open");
+    expect(githubCreate.rawPayload.merged).toBe(false);
+
+    const githubDelete = githubAdapter.remove(emissionInput("github", "issue"));
+    expect(githubDelete.objectType).toBe("issue");
+    expect(githubDelete.rawPayload.state).toBe("open");
+    expect(githubDelete.rawPayload.closed_at).toBeNull();
   });
 
   it("covers all ten scenario packs, departments, levels, and source systems", async () => {

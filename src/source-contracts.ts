@@ -1,6 +1,6 @@
 import type { SourceSystem } from "./domain.js";
 
-export const SOURCE_PAYLOAD_CONTRACT_VERSION = "source-payload-contract.v2";
+export const SOURCE_PAYLOAD_CONTRACT_VERSION = "source-payload-contract.v3";
 export const SOURCE_PAYLOAD_CONTRACT_RETRIEVED_AT = "2026-07-11";
 
 export type SourceContractFidelityStatus = "verified" | "partially_verified";
@@ -59,7 +59,6 @@ export const sourceContractManifests: SourceContractManifest[] = [
     docs: [
       "https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages",
       "https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.threads",
-      "https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.history",
     ],
     families: [
       {
@@ -79,7 +78,9 @@ export const sourceContractManifests: SourceContractManifest[] = [
         lifecycleSemantics: ["thread records use the same message subset inside messages"],
       },
     ],
-    limitations: ["MIME bodies are intentionally minimal and deterministic."],
+    limitations: [
+      "MIME bodies are intentionally minimal and deterministic. Gmail history records are not emitted as a rawPayload family; incremental behavior is represented by the simulator source-change ledger.",
+    ],
   },
   {
     sourceSystem: "calendar",
@@ -115,15 +116,10 @@ export const sourceContractManifests: SourceContractManifest[] = [
   {
     sourceSystem: "notion",
     contractVersion: SOURCE_PAYLOAD_CONTRACT_VERSION,
-    providerApi: "Notion API pages, blocks, databases, and comments",
+    providerApi: "Notion API pages",
     retrievedAt: SOURCE_PAYLOAD_CONTRACT_RETRIEVED_AT,
     fidelityStatus: "verified",
-    docs: [
-      "https://developers.notion.com/reference/page",
-      "https://developers.notion.com/reference/block",
-      "https://developers.notion.com/reference/database",
-      "https://developers.notion.com/reference/comment-object",
-    ],
+    docs: ["https://developers.notion.com/reference/page"],
     families: [
       {
         family: "page",
@@ -147,7 +143,7 @@ export const sourceContractManifests: SourceContractManifest[] = [
       },
     ],
     limitations: [
-      "Block children are summarized through page properties instead of full block pagination.",
+      "Scenario labels such as decision_log and database_item canonicalize to the Notion Page object. Blocks, databases, and comments are not emitted as rawPayload families.",
     ],
   },
   {
@@ -194,14 +190,14 @@ export const sourceContractManifests: SourceContractManifest[] = [
         requiredFields: ["data.type", "data.id", "data.attributes", "data.relationships"],
         lifecycleSemantics: [
           "feature status is workspace configured",
-          "archived is represented as an attribute",
+          "deleted changes preserve the current feature object while the top-level changeType marks deletion",
         ],
       },
       {
         family: "note",
         description: "Productboard v2 note envelope used for customer insight records.",
         requiredFields: ["data.type", "data.id", "data.attributes", "data.relationships"],
-        lifecycleSemantics: ["note type is represented in attributes.type"],
+        lifecycleSemantics: ["note type is represented in attributes.note_type"],
       },
     ],
     limitations: [
@@ -218,7 +214,7 @@ export const sourceContractManifests: SourceContractManifest[] = [
     families: [
       {
         family: "chart_response",
-        description: "Dashboard REST API response subset with series data and metadata.",
+        description: "Dashboard REST API response subset with series data.",
         requiredFields: ["data.series", "data.seriesMeta", "data.xValues"],
         lifecycleSemantics: [
           "updates correct the returned series values while preserving chart identity",
@@ -276,6 +272,32 @@ export const sourceContractManifests: SourceContractManifest[] = [
         ],
         lifecycleSemantics: ["updates change state/labels/comments"],
       },
+      {
+        family: "commit",
+        description: "REST commit object subset.",
+        requiredFields: ["sha", "node_id", "commit", "author", "committer", "parents"],
+        lifecycleSemantics: [
+          "commit updates are represented as a new current commit object for the same simulator source identity",
+          "commit deletions use the outer simulator changeType because the REST commit resource has no delete status",
+        ],
+      },
+      {
+        family: "release",
+        description: "REST release object subset.",
+        requiredFields: [
+          "id",
+          "node_id",
+          "tag_name",
+          "target_commitish",
+          "draft",
+          "prerelease",
+          "author",
+        ],
+        lifecycleSemantics: [
+          "published releases use published_at",
+          "deleted release changes are represented as draft in the fictional current view plus the outer simulator changeType",
+        ],
+      },
     ],
     limitations: [
       "Webhook envelopes and GraphQL-only fields are out of scope for the feed payload subset.",
@@ -323,10 +345,28 @@ export const sourceContractManifests: SourceContractManifest[] = [
       "https://developer.salesforce.com/docs/atlas.en-us.api_rest.meta/api_rest/intro_rest.htm",
       "https://developer.salesforce.com/docs/atlas.en-us.api_rest.meta/api_rest/resources_sobject_retrieve_get.htm",
       "https://developer.salesforce.com/docs/atlas.en-us.object_reference.meta/object_reference/sforce_api_objects_account.htm",
+      "https://developer.salesforce.com/docs/atlas.en-us.object_reference.meta/object_reference/sforce_api_objects_contact.htm",
       "https://developer.salesforce.com/docs/atlas.en-us.object_reference.meta/object_reference/sforce_api_objects_opportunity.htm",
       "https://developer.salesforce.com/docs/atlas.en-us.object_reference.meta/object_reference/sforce_api_objects_task.htm",
+      "https://developer.salesforce.com/docs/atlas.en-us.object_reference.meta/object_reference/sforce_api_objects_event.htm",
     ],
     families: [
+      {
+        family: "Account",
+        description: "Salesforce Account sObject subset.",
+        requiredFields: ["attributes", "Id", "Name", "OwnerId"],
+        lifecycleSemantics: [
+          "Account updates change LastModifiedDate and current field values; destructive deletes use outer changeType.",
+        ],
+      },
+      {
+        family: "Contact",
+        description: "Salesforce Contact sObject subset.",
+        requiredFields: ["attributes", "Id", "AccountId", "OwnerId", "LastName"],
+        lifecycleSemantics: [
+          "Contact updates change LastModifiedDate and current field values; destructive deletes use outer changeType.",
+        ],
+      },
       {
         family: "Opportunity",
         description: "Salesforce Opportunity sObject subset.",
@@ -359,6 +399,23 @@ export const sourceContractManifests: SourceContractManifest[] = [
         ],
         lifecycleSemantics: [
           "Status uses common task values such as Not Started, In Progress, Completed, or Deferred",
+        ],
+      },
+      {
+        family: "Event",
+        description: "Salesforce Event sObject subset.",
+        requiredFields: [
+          "attributes",
+          "Id",
+          "Subject",
+          "OwnerId",
+          "WhoId",
+          "WhatId",
+          "StartDateTime",
+          "EndDateTime",
+        ],
+        lifecycleSemantics: [
+          "Event time and participant relationships are represented by sObject fields.",
         ],
       },
     ],
@@ -397,6 +454,22 @@ export const sourceContractManifests: SourceContractManifest[] = [
         description: "Gainsight scorecard measure-style object subset.",
         requiredFields: ["objectName", "GSID", "CompanyId", "Score"],
         lifecycleSemantics: ["Score updates change Score/Trend fields"],
+      },
+      {
+        family: "TimelineActivity",
+        description: "Gainsight Timeline activity-style object subset used for milestone records.",
+        requiredFields: [
+          "objectName",
+          "GSID",
+          "Type",
+          "ActivityDate",
+          "Body",
+          "CompanyId",
+          "OwnerId",
+        ],
+        lifecycleSemantics: [
+          "Milestone records are represented as TimelineActivity entries, not scorecard measures.",
+        ],
       },
     ],
     limitations: [

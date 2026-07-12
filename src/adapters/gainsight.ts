@@ -39,6 +39,13 @@ export const gainsightAdapter = makeVendorAdapter(
         input.template.rawPayload.trend ?? (input.changeType === "updated" ? "changed" : "stable"),
       );
     }
+    if (objectName === "TimelineActivity") {
+      rawPayload.Type = "Milestone";
+      rawPayload.ActivityDate = dateOnlyFromIso(input.changeOccurredAt);
+      rawPayload.Body = String(input.template.rawPayload.milestone ?? input.template.title);
+      delete rawPayload.Score;
+      delete rawPayload.Trend;
+    }
     return { objectType: objectName, rawPayload };
   },
 );
@@ -48,6 +55,7 @@ function gainsightObjectName(
 ): "CallToAction" | "SuccessPlan" | "ScorecardMeasure" | "TimelineActivity" {
   if (objectType === "cta") return "CallToAction";
   if (objectType === "success_plan") return "SuccessPlan";
-  if (objectType === "milestone" || objectType === "health_score") return "ScorecardMeasure";
+  if (objectType === "milestone") return "TimelineActivity";
+  if (objectType === "health_score") return "ScorecardMeasure";
   return "TimelineActivity";
 }

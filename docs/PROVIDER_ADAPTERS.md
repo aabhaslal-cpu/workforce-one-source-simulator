@@ -9,7 +9,7 @@ Adapters shape simulator records into vendor-native supported-subset raw payload
 - Preserve stable `sourceSystem`, `sourceId`, `changeId`, `changeType`, and `changeOccurredAt`.
 - Include concrete generated actor/assignee/person references where the source would naturally have them.
 - Keep provider payloads fictional and deterministic.
-- Represent updates/deletes through provider-shaped lifecycle fields.
+- Represent updates/deletes through provider-shaped lifecycle fields where the provider has them; otherwise preserve the current provider object and let the outer source-change `changeType` carry the destructive simulator transition.
 - Keep ACL and permission behavior in the simulator record, not hidden inside adapter-only fields.
 - Keep simulator metadata out of `rawPayload`; use the outer `SourceRecord` for scenario correlation, actorRef, ACLs, source identity, and change identity.
 - Do not generate real routable emails, real customer names, real repository URLs, or real secrets.

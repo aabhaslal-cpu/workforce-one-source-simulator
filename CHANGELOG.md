@@ -31,12 +31,13 @@
 - Clock/orchestration configuration updates now reject with `clock_backlog_conflict` while bounded realtime catch-up backlog remains, so historical intervals are never processed under the wrong speed, mode, pause state, activity profile, or successor cadence.
 - Reconciliation reports source-object create, update, delete, and total changed counts from projection changes.
 - Source adapters now emit vendor-native supported-subset `rawPayload` objects validated by provider-family Zod schemas, with simulator metadata kept in the outer source record.
+- Adapter coverage now preserves GitHub commit/release families, Salesforce Account/Contact/Event families, Gainsight milestone Timeline activities, constrained Productboard feature/note payloads, and Amplitude response-only raw payloads.
 - Error responses include safe classifications and correlation IDs without credentials, stack traces, or database strings.
 
 ### Verification
 
-- Local suite: 79 Vitest tests total; 73 pass locally and 6 Postgres tests skip without `SIMULATOR_POSTGRES_TEST_URL`.
-- GitHub Actions provides Postgres and is expected to run all 79 tests plus Vercel config validation, route smoke tests, Docker build, and container readiness smoke. A real Vercel CLI build runs only when `VERCEL_TOKEN` is configured; a tokenless early exit is not Vercel deployment proof.
+- Local suite: 83 Vitest tests total; 77 pass locally and 6 Postgres tests skip without `SIMULATOR_POSTGRES_TEST_URL`.
+- GitHub Actions provides Postgres and is expected to run all 83 tests plus Vercel config validation, route smoke tests, Docker build, and container readiness smoke. A real Vercel CLI build runs only when `VERCEL_TOKEN` is configured; a tokenless early exit is not Vercel deployment proof.
 
 ### Performance Snapshot
 
@@ -78,9 +79,9 @@ Measured locally on July 11, 2026 with `docs-benchmark`:
 
 ### Dataset Counts
 
-- Small: 131 source changes, 10 scenario instances.
-- Medium: 1,048 source changes, 80 scenario instances.
-- Large: 5,240 source changes, 400 scenario instances.
+- Small: 136 source changes, 10 scenario instances.
+- Medium: 1,088 source changes, 80 scenario instances.
+- Large: 5,440 source changes, 400 scenario instances.
 
 ### Not Proven
 

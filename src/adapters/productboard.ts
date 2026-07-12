@@ -2,32 +2,33 @@ import { makeVendorAdapter, slug, templateStatus, templateText } from "./shared.
 
 export const productboardAdapter = makeVendorAdapter(
   "productboard",
-  ["feature", "insight", "component", "note"],
+  ["feature", "insight", "note"],
   (input) => {
     const isNote = input.template.objectType === "insight";
-    const type = isNote
-      ? "note"
-      : input.template.objectType === "component"
-        ? "component"
-        : "feature";
+    const type = isNote ? "note" : "feature";
     const id = String(input.template.rawPayload.featureId ?? `${type}-${slug(input.sourceId)}`);
+    const company = input.template.rawPayload.customer ?? input.instance.account;
     return {
       objectType: type,
       rawPayload: {
         data: {
           type,
           id,
-          attributes: {
-            name: input.template.title,
-            description: templateText(input),
-            status: templateStatus(input, isNote ? "processed" : "under_review"),
-            archived: input.changeType === "deleted" || input.template.rawPayload.archived === true,
-            type: isNote ? "textNote" : undefined,
-            product_area: input.template.rawPayload.productArea ?? input.instance.product,
-            roadmap_position: input.template.rawPayload.roadmapPosition ?? "candidate",
-            created_at: input.occurredAt,
-            updated_at: input.changeOccurredAt,
-          },
+          attributes: isNote
+            ? {
+                title: input.template.title,
+                content: templateText(input),
+                note_type: "textNote",
+                created_at: input.occurredAt,
+                updated_at: input.changeOccurredAt,
+              }
+            : {
+                name: input.template.title,
+                description: templateText(input),
+                status: { name: templateStatus(input, "under_review") },
+                created_at: input.occurredAt,
+                updated_at: input.changeOccurredAt,
+              },
           relationships: {
             owner: {
               data: {
@@ -38,10 +39,10 @@ export const productboardAdapter = makeVendorAdapter(
             product: {
               data: { type: "product", id: slug(input.instance.product ?? "simulated-product") },
             },
-            ...(input.template.rawPayload.customer
+            ...(company
               ? {
                   companies: {
-                    data: [{ type: "company", id: slug(input.template.rawPayload.customer) }],
+                    data: [{ type: "company", id: slug(company) }],
                   },
                 }
               : {}),

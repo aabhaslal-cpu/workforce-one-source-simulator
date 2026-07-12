@@ -16,7 +16,7 @@ export const jiraAdapter = makeVendorAdapter(
       input.template.rawPayload.issueKey ?? `${projectKey}-${numericId(input.sourceId, 100, 9000)}`,
     );
     const issueId = String(numericId(issueKey, 10_000, 90_000));
-    const status = input.changeType === "deleted" ? "Done" : templateStatus(input, "Open");
+    const status = templateStatus(input, "Open");
     const issueType = issueTypeName(input.template.objectType);
     const assignee = input.assignee
       ? {

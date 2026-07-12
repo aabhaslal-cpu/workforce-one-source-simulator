@@ -4,7 +4,7 @@ The connector feed envelope remains `source-feed.v1`. Inside each `SourceRecord`
 
 The machine-readable manifest lives in `src/source-contracts.ts`:
 
-- `SOURCE_PAYLOAD_CONTRACT_VERSION`: `source-payload-contract.v2`
+- `SOURCE_PAYLOAD_CONTRACT_VERSION`: `source-payload-contract.v3`
 - retrieval date: `2026-07-11`
 - official documentation URLs for each source
 - provider families and required fields
@@ -22,23 +22,42 @@ Provider-native person references remain inside `rawPayload` when the vendor obj
 
 ## Fidelity Status
 
-| Source          | Provider API                            | Status             |
-| --------------- | --------------------------------------- | ------------------ |
-| Slack           | Slack Events API message event          | verified           |
-| Gmail           | Gmail API v1 messages and threads       | verified           |
-| Google Calendar | Calendar API v3 events                  | verified           |
-| Notion          | Notion page/block/database/comment APIs | verified           |
-| Jira            | Jira Cloud REST API v3 issue resource   | verified           |
-| Productboard    | Productboard API v2                     | partially verified |
-| Amplitude       | Dashboard REST API                      | verified           |
-| GitHub          | REST API 2022-11-28                     | verified           |
-| PagerDuty       | REST API incident resource              | verified           |
-| Salesforce      | REST API sObject resources              | verified           |
-| Gainsight       | Gainsight NXT API and Developer Docs    | partially verified |
-| Zendesk         | Ticketing API tickets/comments/audits   | verified           |
+| Source          | Provider API                          | Status             |
+| --------------- | ------------------------------------- | ------------------ |
+| Slack           | Slack Events API message event        | verified           |
+| Gmail           | Gmail API v1 messages and threads     | verified           |
+| Google Calendar | Calendar API v3 events                | verified           |
+| Notion          | Notion API pages                      | verified           |
+| Jira            | Jira Cloud REST API v3 issue resource | verified           |
+| Productboard    | Productboard API v2                   | partially verified |
+| Amplitude       | Dashboard REST API                    | verified           |
+| GitHub          | REST API 2022-11-28                   | verified           |
+| PagerDuty       | REST API incident resource            | verified           |
+| Salesforce      | REST API sObject resources            | verified           |
+| Gainsight       | Gainsight NXT API and Developer Docs  | partially verified |
+| Zendesk         | Ticketing API tickets                 | verified           |
 
 Productboard and Gainsight are marked partially verified because their field sets, statuses, and object shapes are workspace or tenant configurable and some vendor pages are gated. The simulator uses a documented, deterministic supported subset and places scenario-specific extensions in vendor custom-field locations.
 
 ## Source URLs
 
-Official reference URLs are recorded in `src/source-contracts.ts` and covered by tests so every source has at least one documentation URL and at least one declared provider family. The simulator never calls those providers; the URLs are provenance for the contract design only.
+Official reference URLs are recorded in `src/source-contracts.ts` and covered by tests so every source has at least one documentation URL and its declared provider families match adapter support, runtime schemas, and generated records. The simulator never calls those providers; the URLs are provenance for the contract design only.
+
+## Supported Families
+
+The canonical generated families are:
+
+- Slack: `message`
+- Gmail: `message`, `thread`
+- Google Calendar: `event`
+- Notion: `page`
+- Jira: `issue`
+- Productboard: `feature`, `note`
+- Amplitude: `chart_response`
+- GitHub: `commit`, `issue`, `pull_request`, `release`
+- PagerDuty: `incident`
+- Salesforce: `Account`, `Contact`, `Event`, `Opportunity`, `Task`
+- Gainsight: `CallToAction`, `ScorecardMeasure`, `SuccessPlan`, `TimelineActivity`
+- Zendesk: `ticket`
+
+Legacy scenario labels such as Gmail `email`, Calendar `meeting`, Notion `decision_log`, Jira `bug`, Productboard `insight`, Amplitude `metric_snapshot`, Salesforce `activity`, and Gainsight `milestone` are deliberate template aliases. They canonicalize to the provider families above and are covered by tests.
