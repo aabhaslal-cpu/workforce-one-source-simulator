@@ -5,12 +5,12 @@ Milestone 2 implements modular adapters under `src/adapters/`.
 | Source       | Adapter           | Simplified Behavior                                                                                       |
 | ------------ | ----------------- | --------------------------------------------------------------------------------------------------------- |
 | Slack        | `slack.ts`        | Events API message events, thread timestamps, edits, reactions, and message_deleted events                |
-| Gmail        | `gmail.ts`        | Message and Thread resources, headers, labelIds, late email, and TRASH label representation               |
+| Gmail        | `gmail.ts`        | Message and Thread resources, headers, labelIds, late email, and users.messages.trash representation      |
 | Calendar     | `calendar.ts`     | meetings, recurring flags, organizers, attendees, agendas, reschedules, cancellations                     |
 | Notion       | `notion.ts`       | Page objects with parent, properties, owners, editors, restricted pages, updates, and archive flags       |
 | Jira         | `jira.ts`         | epics/stories/tasks/bugs, assignee/reporter, status, priority, sprint, dependencies, changelog            |
-| Productboard | `productboard.ts` | constrained feature and note envelopes for product work and customer insight records                      |
-| Amplitude    | `amplitude.ts`    | Dashboard REST chart-response subsets with delayed and corrected aggregate series                         |
+| Productboard | `productboard.ts` | Entities API feature GET responses and Notes API textNote GET responses                                   |
+| Amplitude    | `amplitude.ts`    | Dashboard REST active/new-user-count response subsets with delayed and corrected aggregate series         |
 | GitHub       | `github.ts`       | REST issue, pull request, commit, and release resources with users, reviewers, refs, and state            |
 | PagerDuty    | `pagerduty.ts`    | incidents, severity, responders, acknowledgement, reassignment, escalation, resolution                    |
 | Salesforce   | `salesforce.ts`   | Account, Contact, Opportunity, Task, and Event sObject subsets with fictional owners and dates            |

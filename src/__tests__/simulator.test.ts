@@ -43,6 +43,13 @@ type TestSQLiteDatabase = {
   close(): void;
 };
 
+type VendorPayloadFixture = {
+  sourceSystem: SourceSystem;
+  family: string;
+  provenanceUrl: string;
+  payload: Record<string, unknown>;
+};
+
 const require = createRequire(import.meta.url);
 const { Pool } = pg;
 
@@ -106,6 +113,49 @@ function recordsBySourceAndFamily(changes: SourceChangeLedgerEntry[]): Map<strin
     records.set(`${change.sourceSystem}:${change.record.objectType}`, change.record);
   }
   return records;
+}
+
+async function loadVendorPayloadFixtures(): Promise<VendorPayloadFixture[]> {
+  return JSON.parse(
+    await readFile(
+      join(process.cwd(), "fixtures/vendor-payloads/source-payload-fixtures.json"),
+      "utf8",
+    ),
+  ) as VendorPayloadFixture[];
+}
+
+function representativeObjectType(sourceSystem: SourceSystem, family: string): string {
+  const representative: Partial<Record<SourceSystem, Record<string, string>>> = {
+    slack: { message: "message" },
+    gmail: { message: "email", thread: "thread" },
+    calendar: { event: "meeting" },
+    notion: { page: "page" },
+    jira: { issue: "issue" },
+    productboard: { feature: "feature", note: "insight" },
+    amplitude: { chart_response: "metric_snapshot" },
+    github: {
+      issue: "issue",
+      pull_request: "pull_request",
+      commit: "commit",
+      release: "release",
+    },
+    pagerduty: { incident: "incident" },
+    salesforce: {
+      Account: "account",
+      Contact: "contact",
+      Event: "event",
+      Opportunity: "opportunity",
+      Task: "task",
+    },
+    gainsight: {
+      CallToAction: "cta",
+      ScorecardMeasure: "health_score",
+      SuccessPlan: "success_plan",
+      TimelineActivity: "milestone",
+    },
+    zendesk: { ticket: "ticket" },
+  };
+  return representative[sourceSystem]?.[family] ?? family;
 }
 
 function testPerson(overrides: Partial<Person> = {}): Person {
@@ -992,6 +1042,33 @@ describe("Milestone 2 scenario packs and adapters", () => {
     ).toBe(false);
   });
 
+  it("validates official-document-derived fixtures for every canonical payload family", async () => {
+    const fixtures = await loadVendorPayloadFixtures();
+    const expectedKeys = sourceSystems
+      .flatMap((sourceSystem) =>
+        canonicalVendorPayloadFamilies[sourceSystem].map((family) => `${sourceSystem}:${family}`),
+      )
+      .sort();
+    const fixtureKeys = fixtures
+      .map((fixture) => `${fixture.sourceSystem}:${fixture.family}`)
+      .sort();
+    expect(fixtureKeys).toEqual(expectedKeys);
+
+    for (const fixture of fixtures) {
+      expect(fixture.provenanceUrl, `${fixture.sourceSystem}:${fixture.family}`).toMatch(
+        /^https:\/\//,
+      );
+      expect(
+        validateVendorPayload(fixture.sourceSystem, fixture.family, fixture.payload),
+        `${fixture.sourceSystem}:${fixture.family}`,
+      ).toEqual({ ok: true, errors: [] });
+      expect(
+        assertNoSimulatorMetadata(fixture.payload),
+        `${fixture.sourceSystem}:${fixture.family}`,
+      ).toEqual({ ok: true, errors: [] });
+    }
+  });
+
   it("keeps adapter, manifest, schema, and generated payload families in parity", async () => {
     const simulator = await completedDatasetSimulator("family-parity-seed", "small");
     const changes = await simulator.sourceChanges();
@@ -1084,16 +1161,22 @@ describe("Milestone 2 scenario packs and adapters", () => {
     const productboardFeature = recordsBySourceAndFamily(changes).get("productboard:feature")!;
     const productboardPayload = productboardFeature.rawPayload as Record<string, unknown>;
     const productboardData = productboardPayload.data as Record<string, unknown>;
-    const productboardAttributes = productboardData.attributes as Record<string, unknown>;
+    const productboardFields = productboardData.fields as Record<string, unknown>;
     expect(
       validateVendorPayload("productboard", "feature", {
         ...productboardPayload,
         data: {
           ...productboardData,
-          attributes: { ...productboardAttributes, product_area: "Invented field" },
+          fields: { ...productboardFields, product_area: "Invented field" },
         },
       }).ok,
     ).toBe(false);
+
+    const gmailTrash = sourceAdapters
+      .find((adapter) => adapter.sourceSystem === "gmail")!
+      .remove(emissionInput("gmail", "email"));
+    expect(gmailTrash.objectType).toBe("message");
+    expect(gmailTrash.rawPayload.labelIds).toContain("TRASH");
 
     const slackDelete = sourceAdapters
       .find((adapter) => adapter.sourceSystem === "slack")!
@@ -1115,6 +1198,28 @@ describe("Milestone 2 scenario packs and adapters", () => {
     expect(githubDelete.objectType).toBe("issue");
     expect(githubDelete.rawPayload.state).toBe("open");
     expect(githubDelete.rawPayload.closed_at).toBeNull();
+  });
+
+  it("validates create, update, and delete drafts for every canonical provider family", async () => {
+    for (const sourceSystem of sourceSystems) {
+      const adapter = sourceAdapters.find((candidate) => candidate.sourceSystem === sourceSystem)!;
+      for (const family of canonicalVendorPayloadFamilies[sourceSystem]) {
+        const objectType = representativeObjectType(sourceSystem, family);
+        for (const [changeType, method] of [
+          ["created", "create"],
+          ["updated", "update"],
+          ["deleted", "remove"],
+        ] as const) {
+          const input = emissionInput(sourceSystem, objectType, { changeType });
+          const draft = adapter[method](input);
+          expect(draft.objectType, `${sourceSystem}:${family}:${changeType}`).toBe(family);
+          expect(
+            adapter.validatePayload(draft.rawPayload, draft.objectType),
+            `${sourceSystem}:${family}:${changeType}`,
+          ).toEqual({ ok: true, errors: [] });
+        }
+      }
+    }
   });
 
   it("covers all ten scenario packs, departments, levels, and source systems", async () => {

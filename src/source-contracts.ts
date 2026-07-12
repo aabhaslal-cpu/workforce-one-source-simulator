@@ -1,6 +1,6 @@
 import type { SourceSystem } from "./domain.js";
 
-export const SOURCE_PAYLOAD_CONTRACT_VERSION = "source-payload-contract.v3";
+export const SOURCE_PAYLOAD_CONTRACT_VERSION = "source-payload-contract.v4";
 export const SOURCE_PAYLOAD_CONTRACT_RETRIEVED_AT = "2026-07-11";
 
 export type SourceContractFidelityStatus = "verified" | "partially_verified";
@@ -59,6 +59,8 @@ export const sourceContractManifests: SourceContractManifest[] = [
     docs: [
       "https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages",
       "https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.threads",
+      "https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/trash",
+      "https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/delete",
     ],
     families: [
       {
@@ -68,7 +70,7 @@ export const sourceContractManifests: SourceContractManifest[] = [
         lifecycleSemantics: [
           "created appears as a message",
           "updated changes labels/snippet",
-          "deleted is represented by a TRASH label in the fictional current view",
+          "deleted source changes represent users.messages.trash and return a Message with TRASH label",
         ],
       },
       {
@@ -79,7 +81,7 @@ export const sourceContractManifests: SourceContractManifest[] = [
       },
     ],
     limitations: [
-      "MIME bodies are intentionally minimal and deterministic. Gmail history records are not emitted as a rawPayload family; incremental behavior is represented by the simulator source-change ledger.",
+      "MIME bodies are intentionally minimal and deterministic. Gmail history records are not emitted as a rawPayload family; incremental behavior is represented by the simulator source-change ledger. Gmail permanent delete is not emitted because users.messages.delete returns an empty response body; simulator deleted changes for Gmail mean trashing.",
     ],
   },
   {
@@ -173,11 +175,13 @@ export const sourceContractManifests: SourceContractManifest[] = [
   {
     sourceSystem: "productboard",
     contractVersion: SOURCE_PAYLOAD_CONTRACT_VERSION,
-    providerApi: "Productboard API v2",
+    providerApi: "Productboard API v2 Entities and Notes GET responses",
     retrievedAt: SOURCE_PAYLOAD_CONTRACT_RETRIEVED_AT,
     fidelityStatus: "partially_verified",
     docs: [
       "https://developer.productboard.com/reference/introduction",
+      "https://developer.productboard.com/openapi/entities.yaml",
+      "https://developer.productboard.com/reference/getnote",
       "https://developer.productboard.com/reference/migration-guide",
       "https://developer.productboard.com/reference/listnoterelationships",
       "https://developer.productboard.com/reference/createnoterelationship",
@@ -185,36 +189,54 @@ export const sourceContractManifests: SourceContractManifest[] = [
     families: [
       {
         family: "feature",
-        description:
-          "Productboard v2-style feature envelope with data, attributes, and relationships.",
-        requiredFields: ["data.type", "data.id", "data.attributes", "data.relationships"],
+        description: "Productboard Entities API GET response subset for feature entities.",
+        requiredFields: [
+          "data.id",
+          "data.type",
+          "data.fields",
+          "data.relationships",
+          "data.links",
+          "data.createdAt",
+          "data.updatedAt",
+        ],
         lifecycleSemantics: [
           "feature status is workspace configured",
-          "deleted changes preserve the current feature object while the top-level changeType marks deletion",
+          "deleted changes set fields.archived in the current feature view while the top-level changeType marks deletion",
         ],
       },
       {
         family: "note",
-        description: "Productboard v2 note envelope used for customer insight records.",
-        requiredFields: ["data.type", "data.id", "data.attributes", "data.relationships"],
-        lifecycleSemantics: ["note type is represented in attributes.note_type"],
+        description: "Productboard Notes API GET response subset for textNote records.",
+        requiredFields: [
+          "data.id",
+          "data.type",
+          "data.fields",
+          "data.relationships",
+          "data.links",
+          "data.createdAt",
+          "data.updatedAt",
+        ],
+        lifecycleSemantics: [
+          "note type is represented by data.type textNote",
+          "deleted changes set fields.archived in the current note view while the top-level changeType marks deletion",
+        ],
       },
     ],
     limitations: [
-      "Productboard fields and feature statuses are workspace configurable, so the simulator marks the provider subset as partially verified.",
+      "Productboard fields and feature statuses are workspace configurable, so the simulator marks the provider subset as partially verified. Permanent Productboard delete endpoints return no current object and are not emitted as rawPayload families.",
     ],
   },
   {
     sourceSystem: "amplitude",
     contractVersion: SOURCE_PAYLOAD_CONTRACT_VERSION,
-    providerApi: "Amplitude Dashboard REST API",
+    providerApi: "Amplitude Dashboard REST API active/new user count response",
     retrievedAt: SOURCE_PAYLOAD_CONTRACT_RETRIEVED_AT,
     fidelityStatus: "verified",
     docs: ["https://amplitude.com/docs/apis/analytics/dashboard-rest"],
     families: [
       {
         family: "chart_response",
-        description: "Dashboard REST API response subset with series data.",
+        description: "Dashboard REST API active/new user count response subset with series data.",
         requiredFields: ["data.series", "data.seriesMeta", "data.xValues"],
         lifecycleSemantics: [
           "updates correct the returned series values while preserving chart identity",

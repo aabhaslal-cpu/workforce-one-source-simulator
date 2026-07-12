@@ -1,0 +1,614 @@
+[
+  {
+    "sourceSystem": "slack",
+    "family": "message",
+    "provenanceUrl": "https://docs.slack.dev/reference/events/message/",
+    "payload": {
+      "type": "message",
+      "channel": "C0123456789",
+      "user": "U0123456789",
+      "text": "Launch readiness update",
+      "ts": "1783684800.000000",
+      "event_ts": "1783684800.000000",
+      "channel_type": "channel"
+    }
+  },
+  {
+    "sourceSystem": "gmail",
+    "family": "message",
+    "provenanceUrl": "https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages",
+    "payload": {
+      "id": "msg-fixture",
+      "threadId": "thread-fixture",
+      "labelIds": ["INBOX", "UNREAD"],
+      "snippet": "Customer launch question",
+      "historyId": "12345",
+      "internalDate": "1783684800000",
+      "sizeEstimate": 1234,
+      "payload": {
+        "partId": "",
+        "mimeType": "text/plain",
+        "filename": "",
+        "headers": [
+          { "name": "From", "value": "Fictional Sender <sender@example.test>" },
+          { "name": "To", "value": "Fictional Receiver <receiver@example.test>" },
+          { "name": "Subject", "value": "Launch readiness" }
+        ],
+        "body": { "size": 24 }
+      }
+    }
+  },
+  {
+    "sourceSystem": "gmail",
+    "family": "thread",
+    "provenanceUrl": "https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.threads",
+    "payload": {
+      "id": "thread-fixture",
+      "historyId": "12345",
+      "messages": [
+        {
+          "id": "msg-fixture",
+          "threadId": "thread-fixture",
+          "labelIds": ["INBOX"],
+          "snippet": "Thread message",
+          "historyId": "12345",
+          "internalDate": "1783684800000",
+          "sizeEstimate": 1234,
+          "payload": {
+            "partId": "",
+            "mimeType": "text/plain",
+            "filename": "",
+            "headers": [{ "name": "Subject", "value": "Thread fixture" }],
+            "body": { "size": 14 }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "sourceSystem": "calendar",
+    "family": "event",
+    "provenanceUrl": "https://developers.google.com/workspace/calendar/api/v3/reference/events",
+    "payload": {
+      "kind": "calendar#event",
+      "etag": "\"fixture\"",
+      "id": "calendar-fixture",
+      "htmlLink": "https://calendar.example.test/event/calendar-fixture",
+      "status": "confirmed",
+      "summary": "Launch review",
+      "organizer": {
+        "email": "organizer@example.test",
+        "displayName": "Fictional Organizer"
+      },
+      "creator": {
+        "email": "creator@example.test",
+        "displayName": "Fictional Creator"
+      },
+      "attendees": [
+        {
+          "email": "attendee@example.test",
+          "displayName": "Fictional Attendee",
+          "responseStatus": "accepted"
+        }
+      ],
+      "start": { "dateTime": "2026-07-10T16:00:00.000Z", "timeZone": "UTC" },
+      "end": { "dateTime": "2026-07-10T17:00:00.000Z", "timeZone": "UTC" },
+      "created": "2026-07-10T15:00:00.000Z",
+      "updated": "2026-07-10T15:30:00.000Z"
+    }
+  },
+  {
+    "sourceSystem": "notion",
+    "family": "page",
+    "provenanceUrl": "https://developers.notion.com/reference/page",
+    "payload": {
+      "object": "page",
+      "id": "123e4567-e89b-42d3-a456-426614174000",
+      "created_time": "2026-07-10T16:00:00.000Z",
+      "last_edited_time": "2026-07-10T17:00:00.000Z",
+      "created_by": { "object": "user", "id": "123e4567-e89b-42d3-a456-426614174001" },
+      "last_edited_by": { "object": "user", "id": "123e4567-e89b-42d3-a456-426614174001" },
+      "archived": false,
+      "in_trash": false,
+      "url": "https://notion.example.test/page/123e4567-e89b-42d3-a456-426614174000",
+      "parent": { "type": "database_id", "database_id": "123e4567-e89b-42d3-a456-426614174002" },
+      "properties": {
+        "Name": {
+          "id": "title",
+          "type": "title",
+          "title": [
+            {
+              "type": "text",
+              "text": { "content": "Launch decision" },
+              "plain_text": "Launch decision"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "sourceSystem": "jira",
+    "family": "issue",
+    "provenanceUrl": "https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/",
+    "payload": {
+      "id": "10001",
+      "self": "https://jira.example.test/rest/api/3/issue/10001",
+      "key": "ENG-101",
+      "fields": {
+        "summary": "Connector retry control",
+        "issuetype": { "id": "3", "name": "Task" },
+        "project": { "id": "10000", "key": "ENG", "name": "Engineering" },
+        "status": {
+          "name": "In Progress",
+          "statusCategory": { "key": "indeterminate", "name": "In Progress" }
+        },
+        "priority": { "name": "High" },
+        "reporter": {
+          "self": "https://jira.example.test/rest/api/3/user?accountId=reporter",
+          "accountId": "reporter",
+          "emailAddress": "reporter@example.test",
+          "displayName": "Fictional Reporter",
+          "active": true
+        },
+        "assignee": null,
+        "created": "2026-07-10T16:00:00.000Z",
+        "updated": "2026-07-10T17:00:00.000Z"
+      }
+    }
+  },
+  {
+    "sourceSystem": "productboard",
+    "family": "feature",
+    "provenanceUrl": "https://developer.productboard.com/openapi/entities.yaml",
+    "payload": {
+      "data": {
+        "id": "123e4567-e89b-42d3-a456-426614174010",
+        "type": "feature",
+        "fields": {
+          "name": "Awesome Public API",
+          "status": { "id": "123e4567-e89b-42d3-a456-426614174011", "name": "Upcoming" },
+          "owner": { "id": "123e4567-e89b-42d3-a456-426614174012", "email": "owner@example.test" },
+          "tags": [{ "id": "123e4567-e89b-42d3-a456-426614174013", "name": "api" }],
+          "archived": false
+        },
+        "relationships": {
+          "data": [
+            {
+              "type": "parent",
+              "target": {
+                "id": "123e4567-e89b-42d3-a456-426614174014",
+                "type": "component",
+                "links": {
+                  "self": "https://api.productboard.com/v2/entities/123e4567-e89b-42d3-a456-426614174014",
+                  "html": "https://example.productboard.com/detail/component"
+                }
+              }
+            }
+          ],
+          "links": { "next": null }
+        },
+        "links": {
+          "self": "https://api.productboard.com/v2/entities/123e4567-e89b-42d3-a456-426614174010",
+          "html": "https://example.productboard.com/detail/feature"
+        },
+        "createdAt": "2026-07-10T16:00:00.000Z",
+        "updatedAt": "2026-07-10T17:00:00.000Z"
+      }
+    }
+  },
+  {
+    "sourceSystem": "productboard",
+    "family": "note",
+    "provenanceUrl": "https://developer.productboard.com/reference/getnote",
+    "payload": {
+      "data": {
+        "id": "123e4567-e89b-42d3-a456-426614174020",
+        "type": "textNote",
+        "createdAt": "2026-07-10T16:00:00.000Z",
+        "updatedAt": "2026-07-10T17:00:00.000Z",
+        "fields": {
+          "name": "Customer feedback",
+          "tags": [{ "name": "sales" }],
+          "content": "This is a sample note content.",
+          "owner": { "id": "123e4567-e89b-42d3-a456-426614174021", "email": "owner@example.test" },
+          "creator": {
+            "id": "123e4567-e89b-42d3-a456-426614174021",
+            "email": "creator@example.test"
+          },
+          "processed": true,
+          "archived": false
+        },
+        "relationships": [
+          {
+            "type": "customer",
+            "target": {
+              "id": "123e4567-e89b-42d3-a456-426614174022",
+              "type": "company",
+              "links": {
+                "self": "https://api.productboard.com/v2/companies/123e4567-e89b-42d3-a456-426614174022"
+              }
+            }
+          },
+          {
+            "type": "link",
+            "target": {
+              "id": "123e4567-e89b-42d3-a456-426614174023",
+              "type": "feature",
+              "links": {
+                "self": "https://api.productboard.com/v2/entities/123e4567-e89b-42d3-a456-426614174023"
+              }
+            }
+          }
+        ],
+        "links": {
+          "self": "https://api.productboard.com/v2/notes/123e4567-e89b-42d3-a456-426614174020",
+          "html": "https://example.productboard.com/all-notes/notes/42"
+        }
+      }
+    }
+  },
+  {
+    "sourceSystem": "amplitude",
+    "family": "chart_response",
+    "provenanceUrl": "https://amplitude.com/docs/apis/analytics/dashboard-rest",
+    "payload": {
+      "data": {
+        "series": [[10, 12]],
+        "seriesMeta": ["Active Users"],
+        "xValues": ["2026-07-10", "2026-07-11"]
+      }
+    }
+  },
+  {
+    "sourceSystem": "github",
+    "family": "issue",
+    "provenanceUrl": "https://docs.github.com/en/rest/issues/issues?apiVersion=2022-11-28",
+    "payload": {
+      "id": 1,
+      "node_id": "I_fixture",
+      "number": 101,
+      "state": "open",
+      "title": "Connector issue",
+      "body": "Issue body",
+      "user": {
+        "login": "fictional-user",
+        "id": 100,
+        "node_id": "U_fixture",
+        "type": "User",
+        "site_admin": false,
+        "html_url": "https://github.example.test/fictional-user"
+      },
+      "labels": [{ "id": 1, "name": "simulation", "color": "ededed" }],
+      "assignees": [],
+      "comments": 0,
+      "html_url": "https://github.example.test/acme/repo/issues/101",
+      "created_at": "2026-07-10T16:00:00.000Z",
+      "updated_at": "2026-07-10T17:00:00.000Z",
+      "closed_at": null
+    }
+  },
+  {
+    "sourceSystem": "github",
+    "family": "pull_request",
+    "provenanceUrl": "https://docs.github.com/en/rest/pulls/pulls?apiVersion=2022-11-28",
+    "payload": {
+      "id": 2,
+      "node_id": "PR_fixture",
+      "number": 202,
+      "state": "open",
+      "title": "Connector pull request",
+      "body": "PR body",
+      "user": {
+        "login": "fictional-user",
+        "id": 100,
+        "node_id": "U_fixture",
+        "type": "User",
+        "site_admin": false,
+        "html_url": "https://github.example.test/fictional-user"
+      },
+      "html_url": "https://github.example.test/acme/repo/pull/202",
+      "draft": false,
+      "merged": false,
+      "mergeable": true,
+      "requested_reviewers": [],
+      "head": {
+        "ref": "feature",
+        "sha": "0123456789abcdef0123456789abcdef01234567",
+        "repo": { "full_name": "acme/repo" }
+      },
+      "base": {
+        "ref": "main",
+        "sha": "abcdef0123456789abcdef0123456789abcdef01",
+        "repo": { "full_name": "acme/repo" }
+      },
+      "created_at": "2026-07-10T16:00:00.000Z",
+      "updated_at": "2026-07-10T17:00:00.000Z",
+      "closed_at": null,
+      "merged_at": null
+    }
+  },
+  {
+    "sourceSystem": "github",
+    "family": "commit",
+    "provenanceUrl": "https://docs.github.com/en/rest/commits/commits?apiVersion=2022-11-28",
+    "payload": {
+      "sha": "0123456789abcdef0123456789abcdef01234567",
+      "node_id": "C_fixture",
+      "url": "https://api.github.example.test/repos/acme/repo/commits/0123456789abcdef0123456789abcdef01234567",
+      "html_url": "https://github.example.test/acme/repo/commit/0123456789abcdef0123456789abcdef01234567",
+      "comments_url": "https://api.github.example.test/repos/acme/repo/commits/0123456789abcdef0123456789abcdef01234567/comments",
+      "commit": {
+        "author": {
+          "name": "Fictional Author",
+          "email": "author@example.test",
+          "date": "2026-07-10T16:00:00.000Z"
+        },
+        "committer": {
+          "name": "Fictional Author",
+          "email": "author@example.test",
+          "date": "2026-07-10T16:00:00.000Z"
+        },
+        "message": "Commit message",
+        "tree": {
+          "sha": "abcdef0123456789abcdef0123456789abcdef01",
+          "url": "https://api.github.example.test/repos/acme/repo/git/trees/abcdef0123456789abcdef0123456789abcdef01"
+        },
+        "url": "https://api.github.example.test/repos/acme/repo/git/commits/0123456789abcdef0123456789abcdef01234567",
+        "comment_count": 0,
+        "verification": { "verified": true, "reason": "valid", "signature": null, "payload": null }
+      },
+      "author": null,
+      "committer": null,
+      "parents": []
+    }
+  },
+  {
+    "sourceSystem": "github",
+    "family": "release",
+    "provenanceUrl": "https://docs.github.com/en/rest/releases/releases?apiVersion=2022-11-28",
+    "payload": {
+      "id": 3,
+      "node_id": "RE_fixture",
+      "tag_name": "v1.0.0",
+      "target_commitish": "main",
+      "name": "Release",
+      "body": "Release notes",
+      "draft": false,
+      "prerelease": false,
+      "created_at": "2026-07-10T16:00:00.000Z",
+      "published_at": "2026-07-10T17:00:00.000Z",
+      "author": {
+        "login": "fictional-user",
+        "id": 100,
+        "node_id": "U_fixture",
+        "type": "User",
+        "site_admin": false,
+        "html_url": "https://github.example.test/fictional-user"
+      },
+      "html_url": "https://github.example.test/acme/repo/releases/tag/v1.0.0",
+      "url": "https://api.github.example.test/repos/acme/repo/releases/3",
+      "assets_url": "https://api.github.example.test/repos/acme/repo/releases/3/assets",
+      "upload_url": "https://uploads.github.example.test/repos/acme/repo/releases/3/assets{?name,label}",
+      "tarball_url": "https://api.github.example.test/repos/acme/repo/tarball/v1.0.0",
+      "zipball_url": "https://api.github.example.test/repos/acme/repo/zipball/v1.0.0",
+      "assets": []
+    }
+  },
+  {
+    "sourceSystem": "pagerduty",
+    "family": "incident",
+    "provenanceUrl": "https://developer.pagerduty.com/api-reference/",
+    "payload": {
+      "id": "P12345",
+      "type": "incident",
+      "summary": "Incident summary",
+      "title": "Incident title",
+      "incident_number": 42,
+      "status": "triggered",
+      "urgency": "high",
+      "html_url": "https://pagerduty.example.test/incidents/P12345",
+      "created_at": "2026-07-10T16:00:00.000Z",
+      "updated_at": "2026-07-10T17:00:00.000Z",
+      "service": {
+        "id": "S123",
+        "type": "service_reference",
+        "summary": "Ingestion",
+        "self": "https://api.pagerduty.example.test/services/S123",
+        "html_url": "https://pagerduty.example.test/services/S123"
+      },
+      "assignments": [],
+      "acknowledgements": [],
+      "escalation_policy": {
+        "id": "EP123",
+        "type": "escalation_policy_reference",
+        "summary": "Primary",
+        "self": "https://api.pagerduty.example.test/escalation_policies/EP123"
+      }
+    }
+  },
+  {
+    "sourceSystem": "salesforce",
+    "family": "Account",
+    "provenanceUrl": "https://developer.salesforce.com/docs/atlas.en-us.object_reference.meta/object_reference/sforce_api_objects_account.htm",
+    "payload": {
+      "attributes": {
+        "type": "Account",
+        "url": "/services/data/v60.0/sobjects/Account/001ABCDEF123456789"
+      },
+      "Id": "001ABCDEF123456789",
+      "Name": "Northstar Medical",
+      "OwnerId": "005ABCDEF123456789",
+      "Type": "Customer",
+      "Industry": "Healthcare",
+      "BillingCountry": "United States",
+      "LastModifiedDate": "2026-07-10T16:00:00.000Z"
+    }
+  },
+  {
+    "sourceSystem": "salesforce",
+    "family": "Contact",
+    "provenanceUrl": "https://developer.salesforce.com/docs/atlas.en-us.object_reference.meta/object_reference/sforce_api_objects_contact.htm",
+    "payload": {
+      "attributes": {
+        "type": "Contact",
+        "url": "/services/data/v60.0/sobjects/Contact/003ABCDEF123456789"
+      },
+      "Id": "003ABCDEF123456789",
+      "AccountId": "001ABCDEF123456789",
+      "OwnerId": "005ABCDEF123456789",
+      "FirstName": "Fictional",
+      "LastName": "Sponsor",
+      "Email": "sponsor@example.test",
+      "Title": "Executive Sponsor",
+      "LastModifiedDate": "2026-07-10T16:00:00.000Z"
+    }
+  },
+  {
+    "sourceSystem": "salesforce",
+    "family": "Event",
+    "provenanceUrl": "https://developer.salesforce.com/docs/atlas.en-us.object_reference.meta/object_reference/sforce_api_objects_event.htm",
+    "payload": {
+      "attributes": {
+        "type": "Event",
+        "url": "/services/data/v60.0/sobjects/Event/00UABCDEF123456789"
+      },
+      "Id": "00UABCDEF123456789",
+      "Subject": "Sponsor meeting",
+      "OwnerId": "005ABCDEF123456789",
+      "WhoId": "003ABCDEF123456789",
+      "WhatId": "001ABCDEF123456789",
+      "AccountId": "001ABCDEF123456789",
+      "StartDateTime": "2026-07-10T16:00:00.000Z",
+      "EndDateTime": "2026-07-10T17:00:00.000Z",
+      "Description": "Meeting description",
+      "LastModifiedDate": "2026-07-10T16:00:00.000Z"
+    }
+  },
+  {
+    "sourceSystem": "salesforce",
+    "family": "Opportunity",
+    "provenanceUrl": "https://developer.salesforce.com/docs/atlas.en-us.object_reference.meta/object_reference/sforce_api_objects_opportunity.htm",
+    "payload": {
+      "attributes": {
+        "type": "Opportunity",
+        "url": "/services/data/v60.0/sobjects/Opportunity/006ABCDEF123456789"
+      },
+      "Id": "006ABCDEF123456789",
+      "Name": "Renewal risk",
+      "AccountId": "001ABCDEF123456789",
+      "OwnerId": "005ABCDEF123456789",
+      "Amount": 50000,
+      "StageName": "Negotiation",
+      "CloseDate": "2026-07-31",
+      "NextStep": "Review",
+      "LastModifiedDate": "2026-07-10T16:00:00.000Z"
+    }
+  },
+  {
+    "sourceSystem": "salesforce",
+    "family": "Task",
+    "provenanceUrl": "https://developer.salesforce.com/docs/atlas.en-us.object_reference.meta/object_reference/sforce_api_objects_task.htm",
+    "payload": {
+      "attributes": {
+        "type": "Task",
+        "url": "/services/data/v60.0/sobjects/Task/00TABCDEF123456789"
+      },
+      "Id": "00TABCDEF123456789",
+      "Subject": "Follow up",
+      "Status": "In Progress",
+      "ActivityDate": "2026-07-10",
+      "OwnerId": "005ABCDEF123456789",
+      "WhatId": "001ABCDEF123456789",
+      "Description": "Task description",
+      "LastModifiedDate": "2026-07-10T16:00:00.000Z"
+    }
+  },
+  {
+    "sourceSystem": "gainsight",
+    "family": "CallToAction",
+    "provenanceUrl": "https://support.gainsight.com/gainsight_nxt/API_and_Developer_Docs/Cockpit_API/Call_To_Action_(CTA)_API_Documentation",
+    "payload": {
+      "objectName": "CallToAction",
+      "GSID": "123e4567-e89b-42d3-a456-426614174030",
+      "Name": "Executive risk",
+      "CompanyId": "123e4567-e89b-42d3-a456-426614174031",
+      "OwnerId": "123e4567-e89b-42d3-a456-426614174032",
+      "Status": "Open",
+      "DueDate": "2026-07-10",
+      "LastModifiedDate": "2026-07-10T16:00:00.000Z"
+    }
+  },
+  {
+    "sourceSystem": "gainsight",
+    "family": "ScorecardMeasure",
+    "provenanceUrl": "https://support.gainsight.com/gainsight_nxt/API_and_Developer_Docs",
+    "payload": {
+      "objectName": "ScorecardMeasure",
+      "GSID": "123e4567-e89b-42d3-a456-426614174033",
+      "CompanyId": "123e4567-e89b-42d3-a456-426614174031",
+      "Status": "Current",
+      "Score": 72,
+      "Trend": "stable",
+      "LastModifiedDate": "2026-07-10T16:00:00.000Z"
+    }
+  },
+  {
+    "sourceSystem": "gainsight",
+    "family": "SuccessPlan",
+    "provenanceUrl": "https://support.gainsight.com/gainsight_nxt/API_and_Developer_Docs/Success_Plan_APIs/Success_Plan_APIs",
+    "payload": {
+      "objectName": "SuccessPlan",
+      "GSID": "123e4567-e89b-42d3-a456-426614174034",
+      "Name": "Renewal plan",
+      "CompanyId": "123e4567-e89b-42d3-a456-426614174031",
+      "OwnerId": "123e4567-e89b-42d3-a456-426614174032",
+      "Status": "Open",
+      "DueDate": "2026-07-10",
+      "LastModifiedDate": "2026-07-10T16:00:00.000Z"
+    }
+  },
+  {
+    "sourceSystem": "gainsight",
+    "family": "TimelineActivity",
+    "provenanceUrl": "https://support.gainsight.com/gainsight_nxt/API_and_Developer_Docs/Timeline_API/Timeline_APIs",
+    "payload": {
+      "objectName": "TimelineActivity",
+      "GSID": "123e4567-e89b-42d3-a456-426614174035",
+      "Name": "Adoption milestone",
+      "CompanyId": "123e4567-e89b-42d3-a456-426614174031",
+      "OwnerId": "123e4567-e89b-42d3-a456-426614174032",
+      "Status": "complete",
+      "Type": "Milestone",
+      "ActivityDate": "2026-07-10",
+      "Body": "Milestone complete",
+      "LastModifiedDate": "2026-07-10T16:00:00.000Z"
+    }
+  },
+  {
+    "sourceSystem": "zendesk",
+    "family": "ticket",
+    "provenanceUrl": "https://developer.zendesk.com/api-reference/ticketing/tickets/tickets/",
+    "payload": {
+      "id": 12345,
+      "url": "https://zendesk.example.test/api/v2/tickets/12345.json",
+      "external_id": "ZD-12345",
+      "subject": "Support question",
+      "raw_subject": "Support question",
+      "description": "Ticket description",
+      "status": "open",
+      "priority": "high",
+      "type": "question",
+      "requester_id": 100,
+      "submitter_id": 101,
+      "assignee_id": 102,
+      "organization_id": 103,
+      "group_id": 104,
+      "tags": ["simulation"],
+      "custom_fields": [{ "id": 200, "value": "high" }],
+      "created_at": "2026-07-10T16:00:00.000Z",
+      "updated_at": "2026-07-10T17:00:00.000Z",
+      "comment": { "body": "Comment body", "public": true, "author_id": 101 }
+    }
+  }
+]

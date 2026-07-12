@@ -10,7 +10,9 @@ export const gainsightAdapter = makeVendorAdapter(
         ? input.template.rawPayload.updatedScore
         : typeof input.template.rawPayload.score === "number"
           ? input.template.rawPayload.score
-          : undefined;
+          : objectName === "ScorecardMeasure"
+            ? 70
+            : undefined;
     const rawPayload: Record<string, unknown> = {
       objectName,
       GSID: uuidLike(input.sourceId),

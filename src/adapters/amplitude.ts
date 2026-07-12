@@ -4,7 +4,7 @@ export const amplitudeAdapter = makeVendorAdapter(
   "amplitude",
   ["metric_snapshot", "funnel", "cohort", "chart_response"],
   (input) => {
-    const metric = String(input.template.rawPayload.metric ?? "feature_adoption");
+    const metric = String(input.template.rawPayload.metric ?? "active_users");
     const baseValue = Number(
       input.template.rawPayload.activeUsers ?? 100 + numericId(input.sourceId, 1, 200),
     );
@@ -21,12 +21,7 @@ export const amplitudeAdapter = makeVendorAdapter(
       rawPayload: {
         data: {
           series: [series],
-          seriesMeta: [
-            {
-              segment: String(input.template.rawPayload.cohort ?? input.instance.product ?? "all"),
-              metric,
-            },
-          ],
+          seriesMeta: [String(input.template.rawPayload.cohort ?? metric)],
           xValues: [input.occurredAt.slice(0, 10), input.changeOccurredAt.slice(0, 10)],
         },
       },

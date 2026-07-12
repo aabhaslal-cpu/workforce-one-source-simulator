@@ -326,85 +326,102 @@ const jiraIssueSchema = z
   })
   .strict();
 
-const productboardRelationshipResourceSchema = z
+const productboardReferenceLinksSchema = z
   .object({
-    data: z.union([
-      z.object({ type: z.string(), id: z.string() }).strict(),
-      z.array(z.object({ type: z.string(), id: z.string() }).strict()),
-    ]),
+    self: urlString,
+    html: urlString.nullable().optional(),
   })
   .strict();
-const productboardBaseSchema = z
+const productboardReferenceSchema = z
+  .object({
+    id: z.string().uuid(),
+    type: z.string(),
+    links: productboardReferenceLinksSchema.optional(),
+  })
+  .strict();
+const productboardMemberSchema = z
+  .object({
+    id: z.string().uuid(),
+    email: z.string().email(),
+  })
+  .strict();
+const productboardTagSchema = z
+  .object({ id: z.string().uuid().optional(), name: z.string() })
+  .strict();
+const productboardFeatureResponseSchema = z
   .object({
     data: z
       .object({
-        type: z.enum(["feature", "note"]),
-        id: z.string().min(1),
-        attributes: z.record(z.unknown()),
+        id: z.string().uuid(),
+        type: z.literal("feature"),
+        fields: z
+          .object({
+            name: z.string(),
+            status: z.object({ id: z.string().uuid(), name: z.string() }).strict(),
+            owner: productboardMemberSchema,
+            tags: z.array(productboardTagSchema).optional(),
+            archived: z.boolean().optional(),
+          })
+          .strict(),
         relationships: z
           .object({
-            owner: productboardRelationshipResourceSchema,
-            product: productboardRelationshipResourceSchema,
-            companies: productboardRelationshipResourceSchema.optional(),
+            data: z.array(
+              z
+                .object({
+                  type: z.enum(["parent", "child", "link", "isBlockedBy", "isBlocking"]),
+                  target: productboardReferenceSchema,
+                })
+                .strict(),
+            ),
+            links: z.object({ next: urlString.nullable() }).strict().optional(),
           })
-          .strict()
-          .optional(),
-        links: z.object({ self: urlString }).optional(),
+          .strict(),
+        links: productboardReferenceLinksSchema,
+        createdAt: isoDateTime,
+        updatedAt: isoDateTime,
       })
       .strict(),
   })
-  .strict()
-  .superRefine((payload, ctx) => {
-    const data = payload.data;
-    if (data.type === "feature") {
-      const parsed = z
-        .object({
-          name: z.string(),
-          description: z.string(),
-          status: z.object({ name: z.string() }).strict(),
-          created_at: isoDateTime,
-          updated_at: isoDateTime,
-        })
-        .strict()
-        .safeParse(data.attributes);
-      if (!parsed.success) {
-        for (const issue of parsed.error.issues) {
-          ctx.addIssue({
-            code: "custom",
-            path: ["data", "attributes", ...issue.path],
-            message: issue.message,
-          });
-        }
-      }
-    } else {
-      const parsed = z
-        .object({
-          title: z.string(),
-          content: z.string(),
-          note_type: z.literal("textNote"),
-          created_at: isoDateTime,
-          updated_at: isoDateTime,
-        })
-        .strict()
-        .safeParse(data.attributes);
-      if (!parsed.success) {
-        for (const issue of parsed.error.issues) {
-          ctx.addIssue({
-            code: "custom",
-            path: ["data", "attributes", ...issue.path],
-            message: issue.message,
-          });
-        }
-      }
-    }
-  });
+  .strict();
+const productboardTextNoteResponseSchema = z
+  .object({
+    data: z
+      .object({
+        id: z.string().uuid(),
+        type: z.literal("textNote"),
+        createdAt: isoDateTime,
+        updatedAt: isoDateTime,
+        fields: z
+          .object({
+            name: z.string(),
+            tags: z.array(productboardTagSchema).optional(),
+            content: z.string(),
+            owner: productboardMemberSchema,
+            creator: productboardMemberSchema,
+            processed: z.boolean(),
+            archived: z.boolean(),
+          })
+          .strict(),
+        relationships: z.array(
+          z
+            .object({
+              type: z.enum(["customer", "link"]),
+              target: productboardReferenceSchema,
+            })
+            .strict(),
+        ),
+        links: productboardReferenceLinksSchema,
+      })
+      .strict(),
+  })
+  .strict();
 
 const amplitudeChartResponseSchema = z
   .object({
     data: z
       .object({
         series: z.array(z.array(z.number())),
-        seriesMeta: z.array(z.record(z.unknown())),
+        seriesMeta: z.array(z.string()),
         xValues: z.array(z.string()),
       })
       .strict(),
@@ -758,9 +775,10 @@ export const vendorPayloadSchemas: Record<SourceSystem, Record<string, z.ZodType
     bug: jiraIssueSchema,
   },
   productboard: {
-    feature: productboardBaseSchema,
-    note: productboardBaseSchema,
-    insight: productboardBaseSchema,
+    feature: productboardFeatureResponseSchema,
+    note: productboardTextNoteResponseSchema,
+    insight: productboardTextNoteResponseSchema,
+    textNote: productboardTextNoteResponseSchema,
   },
   amplitude: {
     chart_response: amplitudeChartResponseSchema,
@@ -823,7 +841,8 @@ export function canonicalPayloadFamily(sourceSystem: SourceSystem, objectType: s
   if (sourceSystem === "calendar") return "event";
   if (sourceSystem === "notion") return "page";
   if (sourceSystem === "jira") return "issue";
-  if (sourceSystem === "productboard") return objectType === "insight" ? "note" : objectType;
+  if (sourceSystem === "productboard")
+    return objectType === "insight" || objectType === "textNote" ? "note" : objectType;
   if (sourceSystem === "amplitude") return "chart_response";
   if (sourceSystem === "salesforce") {
     if (["Account", "Contact", "Event", "Opportunity", "Task"].includes(objectType))
@@ -883,7 +902,9 @@ function familyDiscriminatorErrors(
   const candidate = payload as Record<string, unknown>;
   if (sourceSystem === "productboard") {
     const data = candidate.data as Record<string, unknown> | undefined;
-    if (data?.type !== family) return [`productboard payload data.type must be ${family}`];
+    const expectedType = family === "note" ? "textNote" : family;
+    if (data?.type !== expectedType)
+      return [`productboard payload data.type must be ${expectedType}`];
   }
   if (sourceSystem === "salesforce") {
     const attributes = candidate.attributes as Record<string, unknown> | undefined;
@@ -914,6 +935,7 @@ function inferPayloadFamily(sourceSystem: SourceSystem, payload: unknown): strin
     candidate.data !== null
   ) {
     const data = candidate.data as Record<string, unknown>;
+    if (data.type === "textNote") return "note";
     if (typeof data.type === "string") return data.type;
   }
   if (sourceSystem === "amplitude" && typeof candidate.data === "object") return "chart_response";

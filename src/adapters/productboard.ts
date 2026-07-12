@@ -1,55 +1,101 @@
-import { makeVendorAdapter, slug, templateStatus, templateText } from "./shared.js";
+import { makeVendorAdapter, slug, templateStatus, templateText, uuidLike } from "./shared.js";
 
 export const productboardAdapter = makeVendorAdapter(
   "productboard",
   ["feature", "insight", "note"],
   (input) => {
     const isNote = input.template.objectType === "insight";
-    const type = isNote ? "note" : "feature";
-    const id = String(input.template.rawPayload.featureId ?? `${type}-${slug(input.sourceId)}`);
+    const id = uuidLike(String(input.template.rawPayload.featureId ?? input.sourceId));
     const company = input.template.rawPayload.customer ?? input.instance.account;
+    const ownerId = uuidLike(input.actor.stableKey);
+    const linkedFeatureId = uuidLike(`${input.sourceId}:linked-feature`);
+    const customerId = uuidLike(String(company ?? `${input.sourceId}:company`));
+    if (isNote) {
+      return {
+        objectType: "note",
+        rawPayload: {
+          data: {
+            id,
+            type: "textNote",
+            createdAt: input.occurredAt,
+            updatedAt: input.changeOccurredAt,
+            fields: {
+              name: input.template.title,
+              tags: [{ name: slug(input.instance.product ?? "simulation") }],
+              content: templateText(input),
+              owner: { id: ownerId, email: input.actor.email },
+              creator: { id: ownerId, email: input.actor.email },
+              processed: input.changeType !== "created",
+              archived: input.changeType === "deleted",
+            },
+            relationships: [
+              {
+                type: "customer",
+                target: {
+                  id: customerId,
+                  type: "company",
+                  links: {
+                    self: `https://api.productboard.example.test/v2/companies/${customerId}`,
+                  },
+                },
+              },
+              {
+                type: "link",
+                target: {
+                  id: linkedFeatureId,
+                  type: "feature",
+                  links: {
+                    self: `https://api.productboard.example.test/v2/entities/${linkedFeatureId}`,
+                  },
+                },
+              },
+            ],
+            links: {
+              self: `https://api.productboard.example.test/v2/notes/${id}`,
+              html: `https://productboard.example.test/all-notes/notes/${id}`,
+            },
+          },
+        },
+      };
+    }
+
+    const status = templateStatus(input, "under_review");
+    const parentId = uuidLike(`${input.instance.product ?? "simulated-product"}:component`);
     return {
-      objectType: type,
+      objectType: "feature",
       rawPayload: {
         data: {
-          type,
           id,
-          attributes: isNote
-            ? {
-                title: input.template.title,
-                content: templateText(input),
-                note_type: "textNote",
-                created_at: input.occurredAt,
-                updated_at: input.changeOccurredAt,
-              }
-            : {
-                name: input.template.title,
-                description: templateText(input),
-                status: { name: templateStatus(input, "under_review") },
-                created_at: input.occurredAt,
-                updated_at: input.changeOccurredAt,
-              },
+          type: "feature",
+          fields: {
+            name: input.template.title,
+            status: { id: uuidLike(`productboard-status:${status}`), name: status },
+            owner: { id: ownerId, email: input.actor.email },
+            tags: [{ id: uuidLike(`${input.sourceId}:tag`), name: slug(input.scenario.id) }],
+            archived: input.changeType === "deleted",
+          },
           relationships: {
-            owner: {
-              data: {
-                type: "user",
-                id: input.actor.sourceIdentities.productboard ?? input.actor.id,
-              },
-            },
-            product: {
-              data: { type: "product", id: slug(input.instance.product ?? "simulated-product") },
-            },
-            ...(company
-              ? {
-                  companies: {
-                    data: [{ type: "company", id: slug(company) }],
+            data: [
+              {
+                type: "parent",
+                target: {
+                  id: parentId,
+                  type: "component",
+                  links: {
+                    self: `https://api.productboard.example.test/v2/entities/${parentId}`,
+                    html: `https://productboard.example.test/detail/${parentId}`,
                   },
-                }
-              : {}),
+                },
+              },
+            ],
+            links: { next: null },
           },
           links: {
-            self: `https://api.productboard.example.test/v2/${type}s/${id}`,
+            self: `https://api.productboard.example.test/v2/entities/${id}`,
+            html: `https://productboard.example.test/detail/${id}`,
           },
+          createdAt: input.occurredAt,
+          updatedAt: input.changeOccurredAt,
         },
       },
     };
