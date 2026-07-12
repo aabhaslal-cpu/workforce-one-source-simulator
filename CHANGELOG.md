@@ -33,13 +33,14 @@
 - Source adapters now emit vendor-native supported-subset `rawPayload` objects validated by provider-family Zod schemas, with simulator metadata kept in the outer source record.
 - Adapter coverage now preserves GitHub commit/release families, Salesforce Account/Contact/Event families, Gainsight milestone Timeline activities, constrained Productboard feature/note payloads, and Amplitude response-only raw payloads.
 - Productboard payloads now use Productboard API v2 Entity and Notes GET response envelopes, Amplitude analytics payloads use the Dashboard REST active/new-user response shape, Gmail trash is modeled as an update, and no-body vendor deletes use the outer simulator `changeType` with a last-known payload.
+- Gmail `internalDate` and RFC 2822 `Date` headers now stay tied to original message creation time, and no-body delete ledger entries copy the preceding source-object payload during world materialization.
 - Checked-in provider-family fixtures and lifecycle validation now cover create, update, and delete drafts across every canonical source family.
 - Error responses include safe classifications and correlation IDs without credentials, stack traces, or database strings.
 
 ### Verification
 
-- Local suite: 86 Vitest tests total; 80 pass locally and 6 Postgres tests skip without `SIMULATOR_POSTGRES_TEST_URL`.
-- GitHub Actions provides Postgres and is expected to run all 86 tests plus Vercel config validation, route smoke tests, Docker build, and container readiness smoke. A real Vercel CLI build runs only when `VERCEL_TOKEN` is configured; a tokenless early exit is not Vercel deployment proof.
+- Local suite: 88 Vitest tests total; 82 pass locally and 6 Postgres tests skip without `SIMULATOR_POSTGRES_TEST_URL`.
+- GitHub Actions provides Postgres and is expected to run all 88 tests plus Vercel config validation, route smoke tests, Docker build, and container readiness smoke. A real Vercel CLI build runs only when `VERCEL_TOKEN` is configured; a tokenless early exit is not Vercel deployment proof.
 
 ### Performance Snapshot
 

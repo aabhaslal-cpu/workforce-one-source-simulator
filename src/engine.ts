@@ -4,6 +4,7 @@ import { requireSourceAdapter } from "./adapters/registry.js";
 import { SourceFeedBatchV1Schema, type SourceFeedBatchV1 } from "./contracts.js";
 import { scenarios, tenant } from "./data.js";
 import { SOURCE_PAYLOAD_CONTRACT_VERSION } from "./source-contracts.js";
+import { preserveNoBodyDeletionPayloads } from "./source-lifecycle.js";
 import {
   type ContinuousOrchestrationState,
   type DatasetMetadata,
@@ -1485,10 +1486,9 @@ export class SourceSimulator {
       .filter((change) => !existingChangeIds.has(change.changeId))
       .sort(compareLedgerDrafts);
     const nextSequence = (existingChanges.at(-1)?.ledgerSequence ?? 0) + 1;
-    const sourceChanges = [
-      ...existingChanges,
-      ...assignLedgerSequences(newChanges, nextSequence),
-    ].sort(compareChanges);
+    const sourceChanges = preserveNoBodyDeletionPayloads(
+      [...existingChanges, ...assignLedgerSequences(newChanges, nextSequence)].sort(compareChanges),
+    );
     const sourceObjects = this.projectCurrentSourceObjects(sourceChanges);
     return {
       scenarioInstanceStates: instanceStates,
@@ -1549,11 +1549,13 @@ export class SourceSimulator {
     const organization = input.organizationConfig
       ? buildCompatibleOrganization(input.organizationConfig)
       : this.organization;
-    const changes = assignLedgerSequences(
-      instanceStates.flatMap((state) =>
-        this.changesForInstanceState(state, worldRevision, organization),
+    const changes = preserveNoBodyDeletionPayloads(
+      assignLedgerSequences(
+        instanceStates.flatMap((state) =>
+          this.changesForInstanceState(state, worldRevision, organization),
+        ),
+        1,
       ),
-      1,
     );
     const sourceObjects = this.projectCurrentSourceObjects(changes);
     return {

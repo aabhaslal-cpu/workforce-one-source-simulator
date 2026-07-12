@@ -46,10 +46,10 @@ The benchmark harness creates one extra manual-trigger instance during each run,
 - `pnpm run verify`: passed.
 - `pnpm run vercel:validate`: passed.
 - `git diff --check`: passed.
-- Vitest count: 86 tests total with 80 local passes and 6 Postgres tests skipped without `SIMULATOR_POSTGRES_TEST_URL`.
+- Vitest count: 88 tests total with 82 local passes and 6 Postgres tests skipped without `SIMULATOR_POSTGRES_TEST_URL`.
 - Real local `pnpm run vercel:build`: attempted and failed because Vercel CLI reported an invalid cached/account token; no `.vercel/output` was produced locally.
 
-GitHub Actions provides Postgres and should run all 86 tests, Vercel config validation, route smoke tests, Docker build, and container readiness smoke. A real Vercel CLI build runs only when `VERCEL_TOKEN` is configured; when it exits early because `VERCEL_TOKEN` is absent, that step is not deployment proof.
+GitHub Actions provides Postgres and should run all 88 tests, Vercel config validation, route smoke tests, Docker build, and container readiness smoke. A real Vercel CLI build runs only when `VERCEL_TOKEN` is configured; when it exits early because `VERCEL_TOKEN` is absent, that step is not deployment proof.
 
 ## Known Limitations
 

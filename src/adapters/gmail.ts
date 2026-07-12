@@ -12,13 +12,14 @@ export const gmailAdapter = makeVendorAdapter("gmail", ["email", "thread"], (inp
   const cc = input.managerChain.slice(1, 3);
   const subject = String(input.template.rawPayload.subject ?? input.template.title);
   const labels = gmailLabels(input);
+  const messageDate = new Date(input.occurredAt).toUTCString();
   const message = {
     id: gmailMessageId(input),
     threadId: String(input.template.rawPayload.threadId ?? `thread-${gmailMessageId(input)}`),
     labelIds: labels,
     snippet: templateText(input).slice(0, 160),
     historyId: String(numericId(`${input.sourceId}:${input.changeType}`, 10_000, 90_000)),
-    internalDate: String(Date.parse(input.changeOccurredAt)),
+    internalDate: String(Date.parse(input.occurredAt)),
     sizeEstimate: 1200 + numericId(input.sourceId, 1, 600),
     payload: {
       partId: "",
@@ -29,7 +30,7 @@ export const gmailAdapter = makeVendorAdapter("gmail", ["email", "thread"], (inp
         { name: "To", value: emailHeader(recipient) },
         ...(cc.length > 0 ? [{ name: "Cc", value: cc.map(emailHeader).join(", ") }] : []),
         { name: "Subject", value: subject },
-        { name: "Date", value: new Date(input.changeOccurredAt).toUTCString() },
+        { name: "Date", value: messageDate },
         { name: "Message-ID", value: `<${gmailMessageId(input)}@example.test>` },
       ],
       body: { size: templateText(input).length },

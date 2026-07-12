@@ -4,7 +4,7 @@ The connector feed envelope remains `source-feed.v1`. Inside each `SourceRecord`
 
 The machine-readable manifest lives in `src/source-contracts.ts`:
 
-- `SOURCE_PAYLOAD_CONTRACT_VERSION`: `source-payload-contract.v5`
+- `SOURCE_PAYLOAD_CONTRACT_VERSION`: `source-payload-contract.v6`
 - retrieval date: `2026-07-11`
 - official documentation URLs for each source
 - provider families and required fields
@@ -69,3 +69,5 @@ Gmail trash is modeled as an `updated` source change with the `TRASH` label beca
 Productboard `feature` records are modeled as `/v2/entities/{id}` GET responses. Productboard `note` records are modeled as `/v2/notes/{id}` GET responses with `data.type: "textNote"`. The simulator does not blend those responses with create requests or webhook envelopes.
 
 Productboard archive is modeled as an `updated` source change with `fields.archived: true`. Productboard permanent delete uses the outer `deleted` source change plus the last-known GET-style payload because the delete endpoint returns `204 No Content`. GitHub Release deletion follows the same no-body pattern: the raw release stays a last-known release object and the outer simulator `changeType` carries deletion.
+
+For provider delete operations that return no response body, the source-change ledger copies the preceding projected source object's `rawPayload` into the deletion entry. The delete is expressed only by the outer simulator change metadata, especially `changeType: "deleted"` and `changeOccurredAt`.

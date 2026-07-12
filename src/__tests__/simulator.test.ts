@@ -32,6 +32,7 @@ import {
 import type { SourceEmissionInput } from "../adapters/types.js";
 import { assertBenchmarkDatabaseIsIsolated } from "../performance.js";
 import { SOURCE_PAYLOAD_CONTRACT_VERSION, sourceContractManifests } from "../source-contracts.js";
+import { preserveNoBodyDeletionPayloads } from "../source-lifecycle.js";
 
 type TestSQLiteStatement = {
   all(...parameters: unknown[]): unknown[];
@@ -48,6 +49,12 @@ type VendorPayloadFixture = {
   family: string;
   provenanceUrl: string;
   payload: Record<string, unknown>;
+};
+
+type SourceDraftForTest = {
+  sourceUrl: string;
+  objectType?: string;
+  rawPayload: Record<string, unknown>;
 };
 
 const require = createRequire(import.meta.url);
@@ -268,6 +275,96 @@ function emissionInput(
     managerChain: [],
     ...overrides,
   };
+}
+
+function adapterDraft(
+  sourceSystem: SourceSystem,
+  objectType: string,
+  changeType: "created" | "updated" | "deleted",
+  rawPayload: Record<string, unknown> = {},
+): { input: SourceEmissionInput; draft: SourceDraftForTest } {
+  const adapter = sourceAdapters.find((candidate) => candidate.sourceSystem === sourceSystem)!;
+  const input = emissionInput(sourceSystem, objectType, {
+    changeType,
+    changeOccurredAt:
+      changeType === "created"
+        ? "2026-07-10T00:00:00.000Z"
+        : changeType === "updated"
+          ? "2026-07-10T02:00:00.000Z"
+          : "2026-07-10T04:00:00.000Z",
+  });
+  input.template.rawPayload = rawPayload;
+  const draft =
+    changeType === "created"
+      ? adapter.create(input)
+      : changeType === "updated"
+        ? adapter.update(input)
+        : adapter.remove(input);
+  return { input, draft };
+}
+
+function ledgerChangeForDraft(
+  sourceSystem: SourceSystem,
+  objectType: string,
+  changeType: "created" | "updated" | "deleted",
+  sequence: number,
+  rawPayload: Record<string, unknown> = {},
+): SourceChangeLedgerEntry {
+  const { input, draft } = adapterDraft(sourceSystem, objectType, changeType, rawPayload);
+  const record: SourceRecord = {
+    schemaVersion: "source-record.v1",
+    sourceSystem,
+    sourceId: input.sourceId,
+    objectType: draft.objectType ?? objectType,
+    occurredAt: input.occurredAt,
+    title: input.template.title,
+    sourceUrl: draft.sourceUrl,
+    actorRef: input.actor.id,
+    acl: input.template.acl,
+    rawPayload: draft.rawPayload,
+    changeId: `${sourceSystem}-${objectType}-${changeType}-${sequence}`,
+    changeType,
+    changeSequence: sequence,
+    changeOccurredAt: input.changeOccurredAt,
+    correlation: {
+      scenarioId: input.scenario.id,
+      eventId: input.event.id,
+      templateId: input.template.id,
+      seedFingerprint: "test-seed",
+    },
+  };
+  if (changeType !== "created") record.updatedAt = input.changeOccurredAt;
+  return {
+    ledgerSequence: sequence,
+    worldRevision: "test-world",
+    changeId: record.changeId,
+    changeType,
+    sourceSystem,
+    sourceId: input.sourceId,
+    changeOccurredAt: input.changeOccurredAt,
+    sourceOccurredAt: input.occurredAt,
+    scenarioId: input.scenario.id,
+    scenarioPackId: input.scenario.id,
+    scenarioInstanceId: input.state.scenarioInstanceId,
+    businessEventId: input.event.id,
+    templateId: input.template.id,
+    record,
+    permissionScope: input.template.acl,
+  };
+}
+
+function gmailHeader(payload: Record<string, unknown>, name: string): string | undefined {
+  const part = payload.payload as { headers?: Array<{ name: string; value: string }> };
+  return part.headers?.find((header) => header.name === name)?.value;
+}
+
+function recordWithoutDeletionOuterFields(record: SourceRecord): Record<string, unknown> {
+  const stableRecord: Record<string, unknown> = { ...record };
+  delete stableRecord.changeId;
+  delete stableRecord.changeType;
+  delete stableRecord.changeSequence;
+  delete stableRecord.changeOccurredAt;
+  return stableRecord;
 }
 
 function cloneDefaultOrganizationConfig() {
@@ -1250,6 +1347,80 @@ describe("Milestone 2 scenario packs and adapters", () => {
     expect(githubReleaseDelete.objectType).toBe("release");
     expect(githubReleaseDelete.rawPayload.draft).toBe(false);
     expect(githubReleaseDelete.rawPayload.published_at).toBe("2026-07-10T00:00:00.000Z");
+  });
+
+  it("keeps Gmail message identity and message-date fields stable across label updates and trash", async () => {
+    const created = adapterDraft("gmail", "email", "created").draft.rawPayload;
+    const labelUpdate = adapterDraft("gmail", "email", "updated").draft.rawPayload;
+    const trashUpdate = adapterDraft("gmail", "email", "updated", { trash: true }).draft.rawPayload;
+
+    for (const payload of [labelUpdate, trashUpdate]) {
+      expect(payload.id).toBe(created.id);
+      expect(payload.threadId).toBe(created.threadId);
+      expect(payload.internalDate).toBe(created.internalDate);
+      expect(gmailHeader(payload, "Date")).toBe(gmailHeader(created, "Date"));
+      expect(gmailHeader(payload, "Message-ID")).toBe(gmailHeader(created, "Message-ID"));
+      expect((payload.payload as Record<string, unknown>).body).toEqual(
+        (created.payload as Record<string, unknown>).body,
+      );
+    }
+    expect(labelUpdate.labelIds).toContain("IMPORTANT");
+    expect(labelUpdate.labelIds).not.toContain("TRASH");
+    expect(trashUpdate.labelIds).toContain("TRASH");
+    expect(trashUpdate.labelIds).not.toContain("INBOX");
+  });
+
+  it("preserves last-known payloads for provider delete operations that return no body", async () => {
+    const gmailCreated = ledgerChangeForDraft("gmail", "email", "created", 1);
+    const gmailTrashed = ledgerChangeForDraft("gmail", "email", "updated", 2, { trash: true });
+    const gmailDeleted = ledgerChangeForDraft("gmail", "email", "deleted", 3);
+    const productboardCreated = ledgerChangeForDraft("productboard", "feature", "created", 4);
+    const productboardArchived = ledgerChangeForDraft("productboard", "feature", "updated", 5, {
+      archived: true,
+    });
+    const productboardDeleted = ledgerChangeForDraft("productboard", "feature", "deleted", 6);
+    const releaseCreated = ledgerChangeForDraft("github", "release", "created", 7);
+    const releaseDeleted = ledgerChangeForDraft("github", "release", "deleted", 8);
+
+    const preserved = preserveNoBodyDeletionPayloads([
+      gmailCreated,
+      gmailTrashed,
+      gmailDeleted,
+      productboardCreated,
+      productboardArchived,
+      productboardDeleted,
+      releaseCreated,
+      releaseDeleted,
+    ]);
+    const preservedGmailDelete = preserved[2]!;
+    const preservedProductboardDelete = preserved[5]!;
+    const preservedReleaseDelete = preserved[7]!;
+
+    expect(preservedGmailDelete.record.rawPayload).toEqual(gmailTrashed.record.rawPayload);
+    expect(preservedProductboardDelete.record.rawPayload).toEqual(
+      productboardArchived.record.rawPayload,
+    );
+    expect(preservedReleaseDelete.record.rawPayload).toEqual(releaseCreated.record.rawPayload);
+
+    expect(recordWithoutDeletionOuterFields(preservedGmailDelete.record)).toEqual(
+      recordWithoutDeletionOuterFields(gmailTrashed.record),
+    );
+    expect(recordWithoutDeletionOuterFields(preservedProductboardDelete.record)).toEqual(
+      recordWithoutDeletionOuterFields(productboardArchived.record),
+    );
+    expect(recordWithoutDeletionOuterFields(preservedReleaseDelete.record)).toEqual(
+      recordWithoutDeletionOuterFields(releaseCreated.record),
+    );
+    for (const deletion of [
+      preservedGmailDelete,
+      preservedProductboardDelete,
+      preservedReleaseDelete,
+    ]) {
+      expect(deletion.changeType).toBe("deleted");
+      expect(deletion.record.changeType).toBe("deleted");
+      expect(deletion.changeOccurredAt).toBe("2026-07-10T04:00:00.000Z");
+      expect(deletion.record.changeOccurredAt).toBe("2026-07-10T04:00:00.000Z");
+    }
   });
 
   it("validates create, update, and delete drafts for every declared adapter object type", async () => {

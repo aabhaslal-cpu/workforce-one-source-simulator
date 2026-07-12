@@ -89,7 +89,7 @@ pnpm install --frozen-lockfile
 pnpm run verify
 ```
 
-The Milestone 3 suite has 86 Vitest tests. Local runs without `SIMULATOR_POSTGRES_TEST_URL` execute 80 tests and skip the 6 Postgres integration tests. GitHub Actions provides Postgres and runs the full suite plus Vercel config validation, route smoke tests, Docker build, and a container readiness smoke test. A real `vercel build` runs in CI only when `VERCEL_TOKEN` is configured; without that token, the optional Vercel build step is intentionally skipped and the owner-run preview verification command in `docs/DEPLOYMENT.md` remains required before calling Vercel deployability fully proven.
+The Milestone 3 suite has 88 Vitest tests. Local runs without `SIMULATOR_POSTGRES_TEST_URL` execute 82 tests and skip the 6 Postgres integration tests. GitHub Actions provides Postgres and runs the full suite plus Vercel config validation, route smoke tests, Docker build, and a container readiness smoke test. A real `vercel build` runs in CI only when `VERCEL_TOKEN` is configured; without that token, the optional Vercel build step is intentionally skipped and the owner-run preview verification command in `docs/DEPLOYMENT.md` remains required before calling Vercel deployability fully proven.
 
 ## Deployment Honesty
 
