@@ -94,7 +94,10 @@ export const githubAdapter = makeVendorAdapter(
       const tagName = String(
         input.template.rawPayload.tagName ?? `v${numericId(input.sourceId, 1, 20)}.0.0`,
       );
-      const draft = input.changeType === "deleted";
+      const draft = input.template.rawPayload.draft === true;
+      const publishedAt = draft
+        ? null
+        : String(input.template.rawPayload.publishedAt ?? input.occurredAt);
       return {
         objectType: "release",
         rawPayload: {
@@ -107,7 +110,7 @@ export const githubAdapter = makeVendorAdapter(
           draft,
           prerelease: input.template.rawPayload.prerelease === true,
           created_at: input.occurredAt,
-          published_at: draft ? null : input.changeOccurredAt,
+          published_at: publishedAt,
           author,
           html_url: `https://github.example.test/${repository}/releases/tag/${tagName}`,
           url: `https://api.github.example.test/repos/${repository}/releases/${releaseId}`,

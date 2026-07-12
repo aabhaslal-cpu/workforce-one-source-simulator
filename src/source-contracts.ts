@@ -1,6 +1,6 @@
 import type { SourceSystem } from "./domain.js";
 
-export const SOURCE_PAYLOAD_CONTRACT_VERSION = "source-payload-contract.v4";
+export const SOURCE_PAYLOAD_CONTRACT_VERSION = "source-payload-contract.v5";
 export const SOURCE_PAYLOAD_CONTRACT_RETRIEVED_AT = "2026-07-11";
 
 export type SourceContractFidelityStatus = "verified" | "partially_verified";
@@ -70,7 +70,8 @@ export const sourceContractManifests: SourceContractManifest[] = [
         lifecycleSemantics: [
           "created appears as a message",
           "updated changes labels/snippet",
-          "deleted source changes represent users.messages.trash and return a Message with TRASH label",
+          "trash is represented as an updated Message with TRASH label",
+          "permanent delete keeps the last-known Message payload and uses the outer simulator changeType",
         ],
       },
       {
@@ -81,7 +82,7 @@ export const sourceContractManifests: SourceContractManifest[] = [
       },
     ],
     limitations: [
-      "MIME bodies are intentionally minimal and deterministic. Gmail history records are not emitted as a rawPayload family; incremental behavior is represented by the simulator source-change ledger. Gmail permanent delete is not emitted because users.messages.delete returns an empty response body; simulator deleted changes for Gmail mean trashing.",
+      "MIME bodies are intentionally minimal and deterministic. Gmail history records are not emitted as a rawPayload family; incremental behavior is represented by the simulator source-change ledger. users.messages.delete returns an empty response body, so destructive deletes are represented by the outer simulator changeType plus the last-known Message payload.",
     ],
   },
   {
@@ -201,7 +202,8 @@ export const sourceContractManifests: SourceContractManifest[] = [
         ],
         lifecycleSemantics: [
           "feature status is workspace configured",
-          "deleted changes set fields.archived in the current feature view while the top-level changeType marks deletion",
+          "archive is represented as an updated feature with fields.archived true",
+          "permanent delete keeps the last-known feature payload and uses the outer simulator changeType",
         ],
       },
       {
@@ -218,12 +220,13 @@ export const sourceContractManifests: SourceContractManifest[] = [
         ],
         lifecycleSemantics: [
           "note type is represented by data.type textNote",
-          "deleted changes set fields.archived in the current note view while the top-level changeType marks deletion",
+          "archive is represented as an updated note with fields.archived true",
+          "permanent delete keeps the last-known note payload and uses the outer simulator changeType",
         ],
       },
     ],
     limitations: [
-      "Productboard fields and feature statuses are workspace configurable, so the simulator marks the provider subset as partially verified. Permanent Productboard delete endpoints return no current object and are not emitted as rawPayload families.",
+      "Productboard fields and feature statuses are workspace configurable, so the simulator marks the provider subset as partially verified. Productboard permanent delete endpoints return 204 No Content, so destructive deletes are represented by the outer simulator changeType plus the last-known Productboard GET-style payload.",
     ],
   },
   {
@@ -317,7 +320,7 @@ export const sourceContractManifests: SourceContractManifest[] = [
         ],
         lifecycleSemantics: [
           "published releases use published_at",
-          "deleted release changes are represented as draft in the fictional current view plus the outer simulator changeType",
+          "deleted release changes retain the last-known release payload and use the outer simulator changeType",
         ],
       },
     ],

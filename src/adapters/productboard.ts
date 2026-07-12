@@ -2,14 +2,18 @@ import { makeVendorAdapter, slug, templateStatus, templateText, uuidLike } from 
 
 export const productboardAdapter = makeVendorAdapter(
   "productboard",
-  ["feature", "insight", "note"],
+  ["feature", "insight", "note", "textNote"],
   (input) => {
-    const isNote = input.template.objectType === "insight";
+    const isNote =
+      input.template.objectType === "insight" ||
+      input.template.objectType === "note" ||
+      input.template.objectType === "textNote";
     const id = uuidLike(String(input.template.rawPayload.featureId ?? input.sourceId));
     const company = input.template.rawPayload.customer ?? input.instance.account;
     const ownerId = uuidLike(input.actor.stableKey);
     const linkedFeatureId = uuidLike(`${input.sourceId}:linked-feature`);
     const customerId = uuidLike(String(company ?? `${input.sourceId}:company`));
+    const archived = input.changeType === "updated" && input.template.rawPayload.archived === true;
     if (isNote) {
       return {
         objectType: "note",
@@ -26,7 +30,7 @@ export const productboardAdapter = makeVendorAdapter(
               owner: { id: ownerId, email: input.actor.email },
               creator: { id: ownerId, email: input.actor.email },
               processed: input.changeType !== "created",
-              archived: input.changeType === "deleted",
+              archived,
             },
             relationships: [
               {
@@ -72,7 +76,7 @@ export const productboardAdapter = makeVendorAdapter(
             status: { id: uuidLike(`productboard-status:${status}`), name: status },
             owner: { id: ownerId, email: input.actor.email },
             tags: [{ id: uuidLike(`${input.sourceId}:tag`), name: slug(input.scenario.id) }],
-            archived: input.changeType === "deleted",
+            archived,
           },
           relationships: {
             data: [

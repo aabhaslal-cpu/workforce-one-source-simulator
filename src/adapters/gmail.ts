@@ -57,11 +57,19 @@ function gmailLabels(input: SourceEmissionInput): string[] {
       )
     : [];
   const labels = new Set(["INBOX", ...base]);
+  const trashed =
+    input.changeType === "updated" &&
+    (input.template.rawPayload.trash === true ||
+      input.template.rawPayload.trashed === true ||
+      input.template.rawPayload.status === "trashed");
   if (input.changeType === "created") labels.add("UNREAD");
   if (input.changeType === "updated") {
     labels.delete("UNREAD");
     labels.add("IMPORTANT");
   }
-  if (input.changeType === "deleted") labels.add("TRASH");
+  if (trashed) {
+    labels.delete("INBOX");
+    labels.add("TRASH");
+  }
   return [...labels];
 }

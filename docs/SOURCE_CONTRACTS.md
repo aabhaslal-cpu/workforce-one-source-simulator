@@ -4,7 +4,7 @@ The connector feed envelope remains `source-feed.v1`. Inside each `SourceRecord`
 
 The machine-readable manifest lives in `src/source-contracts.ts`:
 
-- `SOURCE_PAYLOAD_CONTRACT_VERSION`: `source-payload-contract.v4`
+- `SOURCE_PAYLOAD_CONTRACT_VERSION`: `source-payload-contract.v5`
 - retrieval date: `2026-07-11`
 - official documentation URLs for each source
 - provider families and required fields
@@ -62,8 +62,10 @@ The canonical generated families are:
 - Gainsight: `CallToAction`, `ScorecardMeasure`, `SuccessPlan`, `TimelineActivity`
 - Zendesk: `ticket`
 
-Legacy scenario labels such as Gmail `email`, Calendar `meeting`, Notion `decision_log`, Jira `bug`, Productboard `insight`, Amplitude `metric_snapshot`, Salesforce `activity`, and Gainsight `milestone` are deliberate template aliases. They canonicalize to the provider families above and are covered by tests.
+Legacy scenario labels such as Gmail `email`, Calendar `meeting`, Notion `decision_log`, Jira `bug`, Productboard `insight`/`textNote`, Amplitude `metric_snapshot`, Salesforce `activity`, and Gainsight `milestone` are deliberate template aliases. They canonicalize to the provider families above and are covered by tests.
 
-Gmail `deleted` source changes intentionally represent `users.messages.trash`, which returns a Message resource with the `TRASH` label. Gmail permanent delete is not emitted because `users.messages.delete` returns an empty response body and leaves no current Message raw payload to expose.
+Gmail trash is modeled as an `updated` source change with the `TRASH` label because `users.messages.trash` returns a Message resource. Gmail permanent delete uses the outer `deleted` source change plus the last-known Message payload because `users.messages.delete` returns an empty response body.
 
 Productboard `feature` records are modeled as `/v2/entities/{id}` GET responses. Productboard `note` records are modeled as `/v2/notes/{id}` GET responses with `data.type: "textNote"`. The simulator does not blend those responses with create requests or webhook envelopes.
+
+Productboard archive is modeled as an `updated` source change with `fields.archived: true`. Productboard permanent delete uses the outer `deleted` source change plus the last-known GET-style payload because the delete endpoint returns `204 No Content`. GitHub Release deletion follows the same no-body pattern: the raw release stays a last-known release object and the outer simulator `changeType` carries deletion.

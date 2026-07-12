@@ -1134,6 +1134,7 @@ describe("Milestone 2 scenario packs and adapters", () => {
     expect(canonicalPayloadFamily("notion", "decision_log")).toBe("page");
     expect(canonicalPayloadFamily("jira", "bug")).toBe("issue");
     expect(canonicalPayloadFamily("productboard", "insight")).toBe("note");
+    expect(canonicalPayloadFamily("productboard", "textNote")).toBe("note");
     expect(canonicalPayloadFamily("amplitude", "metric_snapshot")).toBe("chart_response");
     expect(canonicalPayloadFamily("salesforce", "opportunity_update")).toBe("Opportunity");
     expect(canonicalPayloadFamily("salesforce", "activity")).toBe("Task");
@@ -1172,11 +1173,55 @@ describe("Milestone 2 scenario packs and adapters", () => {
       }).ok,
     ).toBe(false);
 
-    const gmailTrash = sourceAdapters
-      .find((adapter) => adapter.sourceSystem === "gmail")!
-      .remove(emissionInput("gmail", "email"));
+    const gmailAdapter = sourceAdapters.find((adapter) => adapter.sourceSystem === "gmail")!;
+    const gmailTrashInput = emissionInput("gmail", "email", { changeType: "updated" });
+    gmailTrashInput.template.rawPayload = { trash: true };
+    const gmailTrash = gmailAdapter.update(gmailTrashInput);
     expect(gmailTrash.objectType).toBe("message");
     expect(gmailTrash.rawPayload.labelIds).toContain("TRASH");
+    expect(gmailTrash.rawPayload.labelIds).not.toContain("INBOX");
+
+    const gmailPermanentDelete = gmailAdapter.remove(
+      emissionInput("gmail", "email", { changeType: "deleted" }),
+    );
+    expect(gmailPermanentDelete.objectType).toBe("message");
+    expect(gmailPermanentDelete.rawPayload.labelIds).not.toContain("TRASH");
+
+    const productboardAdapter = sourceAdapters.find(
+      (adapter) => adapter.sourceSystem === "productboard",
+    )!;
+    for (const noteAlias of ["insight", "note", "textNote"]) {
+      const productboardNote = productboardAdapter.create(
+        emissionInput("productboard", noteAlias, { changeType: "created" }),
+      );
+      expect(productboardNote.objectType, noteAlias).toBe("note");
+      expect((productboardNote.rawPayload.data as Record<string, unknown>).type).toBe("textNote");
+    }
+    const productboardArchiveInput = emissionInput("productboard", "feature", {
+      changeType: "updated",
+    });
+    productboardArchiveInput.template.rawPayload = { archived: true };
+    const productboardArchive = productboardAdapter.update(productboardArchiveInput);
+    expect(
+      (
+        ((productboardArchive.rawPayload.data as Record<string, unknown>).fields ?? {}) as Record<
+          string,
+          unknown
+        >
+      ).archived,
+    ).toBe(true);
+
+    const productboardDelete = productboardAdapter.remove(
+      emissionInput("productboard", "feature", { changeType: "deleted" }),
+    );
+    expect(
+      (
+        ((productboardDelete.rawPayload.data as Record<string, unknown>).fields ?? {}) as Record<
+          string,
+          unknown
+        >
+      ).archived,
+    ).toBe(false);
 
     const slackDelete = sourceAdapters
       .find((adapter) => adapter.sourceSystem === "slack")!
@@ -1198,6 +1243,36 @@ describe("Milestone 2 scenario packs and adapters", () => {
     expect(githubDelete.objectType).toBe("issue");
     expect(githubDelete.rawPayload.state).toBe("open");
     expect(githubDelete.rawPayload.closed_at).toBeNull();
+
+    const githubReleaseDelete = githubAdapter.remove(
+      emissionInput("github", "release", { changeType: "deleted" }),
+    );
+    expect(githubReleaseDelete.objectType).toBe("release");
+    expect(githubReleaseDelete.rawPayload.draft).toBe(false);
+    expect(githubReleaseDelete.rawPayload.published_at).toBe("2026-07-10T00:00:00.000Z");
+  });
+
+  it("validates create, update, and delete drafts for every declared adapter object type", async () => {
+    for (const adapter of sourceAdapters) {
+      for (const objectType of adapter.supportedObjectTypes) {
+        for (const [changeType, method] of [
+          ["created", "create"],
+          ["updated", "update"],
+          ["deleted", "remove"],
+        ] as const) {
+          const input = emissionInput(adapter.sourceSystem, objectType, { changeType });
+          const draft = adapter[method](input);
+          const expectedFamily = canonicalPayloadFamily(adapter.sourceSystem, objectType);
+          expect(draft.objectType, `${adapter.sourceSystem}:${objectType}:${changeType}`).toBe(
+            expectedFamily,
+          );
+          expect(
+            adapter.validatePayload(draft.rawPayload, draft.objectType),
+            `${adapter.sourceSystem}:${objectType}:${changeType}`,
+          ).toEqual({ ok: true, errors: [] });
+        }
+      }
+    }
   });
 
   it("validates create, update, and delete drafts for every canonical provider family", async () => {
