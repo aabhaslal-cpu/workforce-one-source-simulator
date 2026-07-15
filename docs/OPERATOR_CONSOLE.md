@@ -24,7 +24,7 @@ API responses distinguish primary reporting, dotted-line relationships, project/
 
 Supports:
 
-- all 10 scenario pack options
+- all 11 scenario pack options
 - scenario state
 - reset
 - advance time

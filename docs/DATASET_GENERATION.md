@@ -6,9 +6,9 @@ Dataset generation is deterministic from seed, dataset size, organization config
 
 | Size   | Instances | Source Changes |
 | ------ | --------: | -------------: |
-| Small  |        10 |            136 |
-| Medium |        80 |          1,088 |
-| Large  |       400 |          5,440 |
+| Small  |        11 |            159 |
+| Medium |        88 |          1,272 |
+| Large  |       440 |          6,360 |
 
 The ranges match Milestone 2 targets:
 
@@ -34,9 +34,9 @@ When enabled, reconciliation may create bounded deterministic successor instance
 
 Manual events remain manual in continuous mode. Lifecycle completion is based on scheduled nonmanual events and their delayed visible/update/delete horizons, so background successor generation does not depend on silently triggering manual story beats.
 
-The major cross-functional release pack remains the broadest cross-functional storyline and spans Product, Engineering, Customer Success, all four role levels, and the source systems used by its scheduled and manually triggered events.
+The regular workday pack adds routine operating rhythm data without replacing the generated organization, people, connections, or permission model. The major cross-functional release pack remains the broadest cross-functional storyline and spans Product, Engineering, Customer Success, all four role levels, and the source systems used by its scheduled and manually triggered events.
 
-The benchmark harness creates one additional manual-trigger instance while measuring each dataset size, so benchmark count rows show 11, 81, and 401 instances.
+The benchmark harness creates one additional manual-trigger instance while measuring each dataset size, so benchmark count rows show 12, 89, and 441 instances.
 
 ## Normal And Risk Activity
 

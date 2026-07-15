@@ -1468,13 +1468,14 @@ describe("Milestone 2 scenario packs and adapters", () => {
     }
   });
 
-  it("covers all ten scenario packs, departments, levels, and source systems", async () => {
+  it("covers all eleven scenario packs, departments, levels, and source systems", async () => {
     const simulator = await SourceSimulator.create({ seed: "pack-seed" });
     const packs = simulator.scenarioPacks();
     const unionSources = new Set(packs.flatMap((pack) => pack.sourceSystems));
     const unionRoles = new Set(packs.flatMap((pack) => pack.participantRoleTemplateCount));
 
     expect(packs.map((pack) => pack.scenarioPackId)).toEqual([
+      "regular-workday",
       "product-launch-readiness",
       "feature-adoption-lag",
       "roadmap-tradeoff",
@@ -1542,6 +1543,60 @@ describe("Milestone 2 scenario packs and adapters", () => {
         .teams()
         .some((team) => team.id === "team-project-aurora" && team.level === "project"),
     ).toBe(true);
+  });
+
+  it("adds regular-workday private work records without changing generated people", async () => {
+    const simulator = await completedDatasetSimulator("regular-world-private-acl", "small");
+    const allRecords = await simulator.allRecords();
+    const privateEngineerRecord = allRecords.find(
+      (record) => record.title === "Private focus note for assigned engineer",
+    );
+    const managerRecord = allRecords.find(
+      (record) => record.title === "Manager coaching follow-up",
+    );
+
+    expect(privateEngineerRecord?.acl.groups).toEqual([]);
+    expect(privateEngineerRecord?.acl.users).toHaveLength(1);
+    expect(managerRecord?.acl.groups).toEqual([]);
+    expect(managerRecord?.acl.users).toHaveLength(1);
+
+    const engineerId = privateEngineerRecord!.acl.users[0]!;
+    const managerId = managerRecord!.acl.users[0]!;
+    const engineer = simulator.person(engineerId).person;
+    const manager = simulator.person(managerId).person;
+    expect(engineer.roleTemplateId).toBe("role-engineering-ic");
+    expect(manager.roleTemplateId).toBe("role-product-manager");
+    expect(engineer.id).toMatch(/^person-engineering-ic-v\d+-d\d+-m\d+-i\d+-[a-f0-9]+$/);
+    expect(manager.id).toMatch(/^person-product-manager-v\d+-d\d+-m\d+-i0-[a-f0-9]+$/);
+
+    const engineerTitles = (await simulator.recordsForPerson(engineerId)).records.map(
+      (record) => record.title,
+    );
+    const managerTitles = (await simulator.recordsForPerson(managerId)).records.map(
+      (record) => record.title,
+    );
+    expect(engineerTitles).toContain("Private focus note for assigned engineer");
+    expect(engineerTitles).not.toContain("Manager coaching follow-up");
+    expect(managerTitles).toContain("Manager coaching follow-up");
+    expect(managerTitles).not.toContain("Private focus note for assigned engineer");
+  });
+
+  it("keeps unmapped regular-workday source ACLs fail-closed", async () => {
+    const simulator = await completedDatasetSimulator("regular-world-unmapped-acl", "small");
+    const allRecords = await simulator.allRecords();
+    const unmapped = allRecords.find(
+      (record) => record.title === "External vendor one-off note",
+    );
+
+    expect(unmapped?.acl.groups).toEqual(["external-vendor-acl-unmapped"]);
+    expect(unmapped?.acl.users).toEqual([]);
+
+    for (const person of simulator.people()) {
+      const titles = (await simulator.recordsForPerson(person.id)).records.map(
+        (record) => record.title,
+      );
+      expect(titles).not.toContain("External vendor one-off note");
+    }
   });
 });
 
@@ -2517,7 +2572,7 @@ describe("Milestone 3 operations", () => {
       "2026-07-10T00:00:00.000Z",
     );
     const first = await simulator.reconcileSimulationClock({ now: "2026-07-10T00:01:00.000Z" });
-    expect(first.instancesCreated).toBe(10);
+    expect(first.instancesCreated).toBe(11);
     const statesAfterFirst = await simulator.states();
     expect(new Set(statesAfterFirst.map((state) => state.scenarioInstanceId)).size).toBe(
       statesAfterFirst.length,
@@ -2633,12 +2688,12 @@ describe("Milestone 3 operations", () => {
       now: "2026-07-08T13:00:00.000Z",
       trigger: "cron",
     });
-    expect(finalBounded.instancesCreated).toBe(1);
+    expect(finalBounded.instancesCreated).toBe(2);
     expect(
       (await simulator.states()).filter((state) =>
         state.scenarioInstanceId.includes("-continuous-"),
       ),
-    ).toHaveLength(10);
+    ).toHaveLength(11);
     expect(new Set((await simulator.states()).map((state) => state.scenarioInstanceId)).size).toBe(
       (await simulator.states()).length,
     );
@@ -3140,13 +3195,13 @@ describe("Milestone 2 admin APIs", () => {
 
     const packs = await app.request("/v1/catalog/scenario-packs");
     expect(packs.status).toBe(200);
-    expect((await packs.json()).scenarioPacks).toHaveLength(10);
+    expect((await packs.json()).scenarioPacks).toHaveLength(11);
 
     const instances = await app.request("/v1/catalog/scenario-instances", {
       headers: adminHeaders(),
     });
     const instanceBody = await instances.json();
-    expect(instanceBody.scenarioInstances).toHaveLength(80);
+    expect(instanceBody.scenarioInstances).toHaveLength(88);
 
     const dataset = await app.request("/v1/admin/datasets/current", { headers: adminHeaders() });
     expect((await dataset.json()).totalSourceChanges).toBeGreaterThanOrEqual(1_000);

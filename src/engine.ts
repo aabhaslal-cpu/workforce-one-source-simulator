@@ -2029,6 +2029,7 @@ function materializeRecord(
       )
     : null;
   const managerChain = managementChain(organization, assignee ?? actor);
+  const acl = resolveRecordAcl(organization, state, scenario, event, template);
   const adapter = requireSourceAdapter(template.sourceSystem);
   const adapterInput = {
     baseUrl,
@@ -2068,7 +2069,7 @@ function materializeRecord(
     title: template.title,
     sourceUrl: draft.sourceUrl,
     actorRef: actor.id,
-    acl: template.acl,
+    acl,
     rawPayload: draft.rawPayload,
     changeId: stableId("change", sourceId, changeType),
     changeType,
@@ -2084,6 +2085,30 @@ function materializeRecord(
   if (isUpdatedChange && mutationAt) record.updatedAt = mutationAt;
   if (isDeletedChange && deletionAt) record.updatedAt = deletionAt;
   return record;
+}
+
+function resolveRecordAcl(
+  organization: GeneratedOrganization,
+  state: ScenarioInstanceState,
+  scenario: ScenarioDefinition,
+  event: ScenarioEventTemplate,
+  template: ScenarioRecordTemplate,
+): SourceRecord["acl"] {
+  const users = [...template.acl.users];
+  for (const roleTemplateId of template.aclUserRoleTemplateIds ?? []) {
+    const person = selectInstancePersonForRole(
+      organization,
+      state,
+      roleTemplateId,
+      `${scenario.id}:${state.scenarioInstanceId}:${event.id}:${template.id}:acl:${roleTemplateId}`,
+    );
+    users.push(person.id);
+  }
+  return {
+    visibility: template.acl.visibility,
+    groups: [...template.acl.groups],
+    users: [...new Set(users)].sort(),
+  };
 }
 
 function ledgerEntry(

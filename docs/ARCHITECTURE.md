@@ -15,7 +15,7 @@ The simulator owns fictional source data only. Workforce One owns interpretation
 - `src/local-server.ts`: standalone local/container Node server for the same Hono app.
 - `src/engine.ts`: deterministic organization-aware scenario engine, scenario instances, persisted simulation clock, continuous activity orchestration, source-change ledger, v3 cursor feed, world revision, snapshots, dataset metadata, and visibility filtering.
 - `src/adapters/*`: provider-shaped payload adapters and adapter registry.
-- `src/data.ts`: fictional tenant and 10 scenario-pack definitions.
+- `src/data.ts`: fictional tenant and 11 scenario-pack definitions.
 - `src/organization.ts`: role templates, deterministic people/teams/reporting graph, dotted-line relationships, cross-functional memberships, and connection IDs.
 - `src/storage.ts`: storage interface, memory test adapter, SQLite local durable adapter, and Postgres production adapter.
 - `src/observability.ts`: structured request telemetry and operational counters.
@@ -84,7 +84,7 @@ Updates and deletions preserve source identity. Deleted or archived provider sem
 
 ## Scenario Packs And Instances
 
-There are 10 scenario packs. Packs are reusable templates; they do not hold runtime clock or completion state. Each scenario instance is a persisted runtime entity with its own ID, pack ID, seed, dataset size, started time, current time, pause state, event occurrence-time map, triggered event IDs, event log, completion state, concrete participants, and account/product/project/service/workstream context.
+There are 11 scenario packs. Packs are reusable templates; they do not hold runtime clock or completion state. Each scenario instance is a persisted runtime entity with its own ID, pack ID, seed, dataset size, started time, current time, pause state, event occurrence-time map, triggered event IDs, event log, completion state, concrete participants, and account/product/project/service/workstream context.
 
 Dataset size controls deterministic instance count:
 
@@ -100,7 +100,7 @@ Realtime reconciliation never auto-triggers manual-labeled story beats. Manual e
 
 ## Continuous Activity
 
-Continuous activity reuses the existing 10 scenario packs. It does not add new business scenarios or Workforce One logic.
+Continuous activity reuses the existing 11 scenario packs. It does not add hidden Workforce One-specific scenario logic.
 
 When enabled, completed scenario instances become eligible for deterministic successor instances. Successor IDs, seeds, start times, and account/product/project/service/workstream context are derived from persisted orchestration state and the completed instance. Per-reconciliation creation limits and minimum successor intervals prevent unbounded catch-up.
 
