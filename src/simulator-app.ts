@@ -28,6 +28,7 @@ export interface AppOptions {
   runtimeEnv?: RuntimeEnv;
   storage?: SimulatorStorage;
   rateLimitConfigJson?: string;
+  feedReconciliationMaxCatchUpSeconds?: number;
 }
 
 type RuntimeEnv = "development" | "test" | "preview" | "production";
@@ -46,6 +47,7 @@ const MAX_DIRECTORS_PER_VP = 8;
 const MAX_MANAGERS_PER_DIRECTOR = 10;
 const MAX_ICS_PER_MANAGER = 25;
 const MAX_TOTAL_PEOPLE = 500;
+const DEFAULT_FEED_RECONCILIATION_MAX_CATCH_UP_SECONDS = 5 * 60;
 
 const DatasetSizeSchema = z.enum(datasetSizes);
 const BoundedSeedSchema = z.string().min(1).max(128);
@@ -173,6 +175,10 @@ export async function createApp(options: AppOptions = {}) {
   if (continuousActivity !== undefined) simulatorOptions.continuousActivity = continuousActivity;
   if (options.storage) simulatorOptions.storage = options.storage;
   if (!options.simulator && !options.storage) simulatorOptions.storage = createStorageForRuntime(runtimeEnv);
+  const feedReconciliationMaxCatchUpSeconds =
+    options.feedReconciliationMaxCatchUpSeconds ??
+    parsePositiveInteger(process.env.SIMULATOR_FEED_MAX_CATCH_UP_SECONDS) ??
+    DEFAULT_FEED_RECONCILIATION_MAX_CATCH_UP_SECONDS;
 
   const simulator = options.simulator ?? (await SourceSimulator.create(simulatorOptions));
   enforceProductionSimulatorStorage(runtimeEnv, simulator);
@@ -286,7 +292,13 @@ export async function createApp(options: AppOptions = {}) {
     const rateLimited = await rateLimitConnection(c, rateLimiter, requestIds, authenticated.connectionId);
     if (rateLimited) return rateLimited;
     const pagination = parseSchema(PaginationSchema, { cursor: c.req.query("cursor"), limit: c.req.query("limit") });
-    recordReconciliationTelemetry(telemetry, await simulator.reconcileSimulationClock({ trigger: "feed" }));
+    recordReconciliationTelemetry(
+      telemetry,
+      await simulator.reconcileSimulationClock({
+        trigger: "feed",
+        maxCatchUpSeconds: feedReconciliationMaxCatchUpSeconds,
+      }),
+    );
     const decision = failureController.evaluate({ operation: "feed", connectionId: authenticated.connectionId });
     const failure = await failureResponse(c, decision, requestIds);
     if (failure) return failure;

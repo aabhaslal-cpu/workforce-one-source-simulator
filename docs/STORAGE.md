@@ -54,6 +54,6 @@ Production runtime code does not expose `resetForTesting`. Tests and benchmarks 
 
 ## Cursor Impact
 
-Normal advance, manual trigger, feed-triggered realtime reconciliation, and cron-triggered realtime reconciliation append source changes without rotating world revision. Existing cursors remain valid.
+Normal advance, manual trigger, feed-triggered realtime micro-reconciliation, and cron-triggered realtime reconciliation append source changes without rotating world revision. Existing cursors remain valid.
 
 Scenario instance reset/delete, dataset generation, organization regeneration, and snapshot restore destructively rebuild the world and rotate world revision. Existing cursors become stale and must be discarded by connectors.

@@ -51,7 +51,7 @@ Clock tests cover:
 - realtime mode advancing by speed multiplier
 - pause/resume
 - SQLite restart persistence
-- feed-triggered reconciliation from a saved cursor
+- feed-triggered micro-reconciliation from a saved cursor
 - deterministic continuous successor creation
 - idempotent duplicate reconciliation
 - all-12-source activity through the major cross-functional release storyline

@@ -58,7 +58,7 @@ Activity profiles are real control presets:
 
 Operators can override `maxSuccessorInstancesPerReconciliation` and `minSuccessorIntervalHours`; omitted fields preserve existing state.
 
-Feed polling reconciles before reading `/v1/connections/{connectionId}/records`. `GET /api/cron/tick` is a Vercel-compatible warm-up path protected by `Authorization: Bearer <CRON_SECRET>`, but cron is not the source of truth. Missed cron delivery is recovered by the next cron tick or feed poll.
+Feed polling performs bounded micro-reconciliation before reading `/v1/connections/{connectionId}/records`. The feed cap is controlled by `SIMULATOR_FEED_MAX_CATCH_UP_SECONDS` and defaults to 300 seconds, so historical wall-clock backlog is drained across later polls instead of being processed inside one connector request. `GET /api/cron/tick` is a Vercel-compatible warm-up path protected by `Authorization: Bearer <CRON_SECRET>`, but cron is not the source of truth. Missed cron delivery is recovered by the next cron tick or by later feed micro-reconciliations.
 
 `POST /v1/admin/clock/reconcile`, `POST /v1/admin/clock/pause`, `POST /v1/admin/clock/resume`, `GET /v1/admin/clock`, and `PUT /v1/admin/clock` are admin-only controls. Client requests cannot set internal wall-clock checkpoints directly.
 

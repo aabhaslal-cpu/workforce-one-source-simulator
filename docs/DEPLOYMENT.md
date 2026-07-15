@@ -42,6 +42,7 @@ pnpm run verify
 - `SIMULATOR_CLOCK_SPEED`: positive multiplier, for example `30` means one wall minute is 30 simulated minutes.
 - `SIMULATOR_CONTINUOUS_ACTIVITY`: `true` keeps the fictional company producing successor activity.
 - `SIMULATOR_MAX_CATCH_UP_SECONDS`: maximum wall-time catch-up applied in one reconciliation.
+- `SIMULATOR_FEED_MAX_CATCH_UP_SECONDS`: maximum wall-time catch-up a connector feed poll may consume before returning records. Defaults to `300` so scheduled five-minute polling drains backlog in safe micro-batches.
 - `CRON_SECRET`: bearer secret required by `/api/cron/tick`.
 - `SIMULATOR_FAILURE_MODES`: optional JSON failure-mode configuration.
 - `SIMULATOR_RATE_LIMITS`: optional JSON real request-rate-limit configuration.
@@ -107,10 +108,11 @@ Required Vercel environment variables:
 - `SIMULATOR_CLOCK_SPEED`
 - `SIMULATOR_CONTINUOUS_ACTIVITY=true`
 - `SIMULATOR_MAX_CATCH_UP_SECONDS`
+- `SIMULATOR_FEED_MAX_CATCH_UP_SECONDS`
 - `SIMULATOR_RATE_LIMITS`
 - `CRON_SECRET`
 
-Vercel correctness does not depend on a warm function. Feed polling and the protected `/api/cron/tick` endpoint both call the same persisted clock reconciliation path, and canonical reconciliation reads the organization config from the locked world snapshot before materializing records. Vercel does not schedule `/api/cron/tick` itself; deployment owners may wire an external scheduler if they want warm reconciliation.
+Vercel correctness does not depend on a warm function. Feed polling performs bounded micro-reconciliation before reading records, while the protected `/api/cron/tick` endpoint can run the normal persisted clock reconciliation path. Canonical reconciliation reads the organization config from the locked world snapshot before materializing records. Vercel does not schedule `/api/cron/tick` itself; deployment owners may wire an external scheduler if they want warm reconciliation.
 
 When `VERCEL_TOKEN` is not available to CI, run the owner verification before marking Vercel deployment fully proven:
 

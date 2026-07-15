@@ -2062,6 +2062,39 @@ describe("Milestone 3 operations", () => {
     expect((await simulator.clockStatus()).clock.reconciliationCount).toBeGreaterThan(0);
   });
 
+  it("caps feed-triggered reconciliation so historical backlog is drained by later polls", async () => {
+    const startedAt = new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString();
+    const simulator = await SourceSimulator.create({
+      seed: "feed-cap-seed",
+      now: startedAt,
+      clockMode: "realtime",
+      clockSpeedMultiplier: 30,
+      maxCatchUpSeconds: 60 * 60 * 6,
+      baseUrl: "http://sim.test",
+    });
+    const app = await createApp({
+      simulator,
+      runtimeEnv: "test",
+      adminKey: "admin-test",
+      connectionCredentials: { "secret-product-manager": "conn-product-manager" },
+      feedReconciliationMaxCatchUpSeconds: 60,
+    });
+
+    const response = await app.request("/v1/connections/conn-product-manager/records?limit=10", {
+      headers: connectionHeaders("secret-product-manager"),
+    });
+
+    expect(response.status).toBe(200);
+    const status = await simulator.clockStatus();
+    const report = status.clock.lastReconciliationReport;
+    expect(status.clock.maxCatchUpSeconds).toBe(60 * 60 * 6);
+    expect(report?.trigger).toBe("feed");
+    expect(report?.wallTimeConsumedMs).toBe(60_000);
+    expect(report?.simulationDeltaMs).toBe(30 * 60_000);
+    expect(report?.wallTimeBacklogRemainingMs).toBeGreaterThan(0);
+    expect(status.clock.lastReconciledSimulationTime).toBe(addMinutesIso(startedAt, 30));
+  });
+
   it("preserves manual-event semantics during realtime reconciliation", async () => {
     const startedAt = "2026-07-10T00:00:00.000Z";
     const simulator = await SourceSimulator.create({

@@ -41,13 +41,13 @@ Cursor payload:
 
 The cursor is connection-bound, world-bound, retry-safe, and compact regardless of total change count.
 
-Normal time advancement, manual triggers, feed-triggered realtime reconciliation, and cron-triggered realtime reconciliation append new changes with increasing `ledgerSequence` values and do not rotate `worldRevision`. A saved cursor can be reused after those operations and returns only newly visible authorized changes after its `afterSequence`.
+Normal time advancement, manual triggers, feed-triggered realtime micro-reconciliation, and cron-triggered realtime reconciliation append new changes with increasing `ledgerSequence` values and do not rotate `worldRevision`. A saved cursor can be reused after those operations and returns only newly visible authorized changes after its `afterSequence`.
 
 Manual triggers use the selected scenario instance's current simulation time as the business event occurrence time. Initial source changes become eligible immediately. `updatedAfterHours` and `deletedAfterHours` are calculated from the actual trigger time, not from the template's original `atHour`.
 
 Realtime reconciliation never inserts a manual event ID and never assigns an occurrence time to an untriggered manual event. Continuous orchestration relies on scheduled nonmanual lifecycle horizons plus persisted successor due times.
 
-Bounded catch-up advances the persisted wall checkpoint only by the wall time consumed in that reconciliation. Unprocessed wall backlog remains available to later reconciliation, and appended ledger sequences remain monotonic across the drain.
+Bounded catch-up advances the persisted wall checkpoint only by the wall time consumed in that reconciliation. Connector feed polling applies an additional request-safe wall-time cap before returning records. Unprocessed wall backlog remains available to later reconciliation, and appended ledger sequences remain monotonic across the drain.
 
 Clock configuration changes do not consume historical backlog under new settings. If a bounded reconciliation would leave backlog and `PUT /v1/admin/clock` changes a time-affecting setting, the request fails with `clock_backlog_conflict` and rolls back the evaluation reconciliation, preserving the previous ledger, projection, clock, and scenario states.
 

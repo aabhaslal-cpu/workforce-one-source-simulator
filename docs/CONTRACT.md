@@ -33,7 +33,7 @@ For manually triggered events, the event occurrence time is the scenario instanc
 
 The server returns `nextCursor` even when `hasMore` is false so later polling can continue from the checkpoint.
 
-In realtime mode, `GET /v1/connections/{connectionId}/records` reconciles the persisted company clock before it reads authorized ledger entries. Consumers do not need to depend on a permanently warm process or cron delivery to see catch-up activity. Bounded catch-up cursors remain valid while backlog drains because normal reconciliation appends to the current world revision.
+In realtime mode, `GET /v1/connections/{connectionId}/records` performs bounded micro-reconciliation before it reads authorized ledger entries. Consumers do not need to depend on a permanently warm process or cron delivery to see catch-up activity. Bounded catch-up cursors remain valid while backlog drains because normal reconciliation appends to the current world revision.
 
 Admin clock updates are fail-closed while backlog remains. `PUT /v1/admin/clock` reconciles once under the current persisted configuration, then returns `409` with classification `clock_backlog_conflict` and `wallTimeBacklogRemainingMs` when the request would change a time-affecting setting before backlog is drained. The rejected transaction writes no checkpoint, source changes, scenario advancement, orchestration change, or partial configuration update. A true no-op update may succeed, but it cannot smuggle a time-affecting change.
 
@@ -91,7 +91,7 @@ Destructive world operations rotate `worldRevision`. Connectors must treat stale
 
 Real service protection can also return `429` with `Retry-After` and `rate_limit` classification. That protection is configured separately from deterministic failure modes.
 
-The cron-compatible endpoint `GET /api/cron/tick` is not part of the connector feed contract. It is an operational endpoint protected by `Authorization: Bearer <CRON_SECRET>` and calls the same clock reconciliation operation as feed-triggered catch-up. Vercel does not configure a scheduled cron job in `vercel.json`; operators may invoke the endpoint from their chosen scheduler.
+The cron-compatible endpoint `GET /api/cron/tick` is not part of the connector feed contract. It is an operational endpoint protected by `Authorization: Bearer <CRON_SECRET>` and calls the normal clock reconciliation operation. Connector feed polling performs the same kind of append-only realtime reconciliation with an additional request-safe catch-up cap before returning records. Vercel does not configure a scheduled cron job in `vercel.json`; operators may invoke the endpoint from their chosen scheduler.
 
 ## Artifacts
 

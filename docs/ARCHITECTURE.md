@@ -74,7 +74,7 @@ All realtime progression passes through `reconcileSimulationClock(now)`. The ope
 
 Clock configuration updates first run the same bounded reconciliation under the current persisted clock configuration inside one atomic world mutation. If `wallTimeBacklogRemainingMs` remains and the request changes a time-affecting field (`mode`, `speedMultiplier`, `paused`, `maxCatchUpSeconds`, `continuousActivity`, `activityProfile`, `maxSuccessorInstancesPerReconciliation`, or `minSuccessorIntervalHours`), the service rejects the update with `409 clock_backlog_conflict` and rolls back the evaluation reconciliation. Operators must explicitly call `POST /v1/admin/clock/reconcile` until backlog reaches zero before changing those settings.
 
-Feed polling calls reconciliation before reading authorized ledger changes in realtime mode. `/api/cron/tick` calls the same operation and is only a convenience to keep the world warm; correctness does not depend on a permanently running process.
+Feed polling calls bounded micro-reconciliation before reading authorized ledger changes in realtime mode. The micro-reconciliation cap defaults to five minutes of wall-clock backlog so connection reads stay inside connector request budgets while later polls continue draining historical backlog. `/api/cron/tick` calls the normal reconciliation operation and is only a convenience to keep the world warm; correctness does not depend on a permanently running process.
 
 ## Source Objects
 

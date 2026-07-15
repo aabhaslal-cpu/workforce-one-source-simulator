@@ -162,6 +162,7 @@ export interface ClockUpdateInput {
 export interface ReconcileSimulationClockInput {
   now?: string;
   trigger?: SimulationReconciliationReport["trigger"];
+  maxCatchUpSeconds?: number;
 }
 
 export class SourceSimulator {
@@ -382,12 +383,18 @@ export class SourceSimulator {
   ): Promise<SimulationReconciliationReport> {
     const now = new Date(input.now ?? new Date().toISOString()).toISOString();
     const trigger = input.trigger ?? "manual";
+    validateReconciliationInput(input);
     const output = await this.storage.mutateWorld<{
       report: SimulationReconciliationReport;
       worldRevision: string;
       organizationConfig: OrganizationConfig;
     }>((snapshot) => {
-      const reconciled = this.computeReconciliation(snapshot, now, trigger);
+      const reconciled = this.computeReconciliation(
+        snapshot,
+        now,
+        trigger,
+        input.maxCatchUpSeconds,
+      );
       return {
         replacement: reconciled.replacement,
         result: {
@@ -1125,6 +1132,7 @@ export class SourceSimulator {
     snapshot: WorldSnapshot,
     now: string,
     trigger: SimulationReconciliationReport["trigger"],
+    maxCatchUpSecondsOverride?: number,
   ): {
     replacement: WorldReplacement;
     report: SimulationReconciliationReport;
@@ -1150,7 +1158,11 @@ export class SourceSimulator {
     );
     const elapsedWallMs = Math.max(0, Date.parse(now) - Date.parse(previousWallTime));
     const shouldAdvanceSimulation = clock.mode === "realtime" && !clock.paused && elapsedWallMs > 0;
-    const catchUpLimitMs = clock.maxCatchUpSeconds * 1_000;
+    const effectiveMaxCatchUpSeconds =
+      maxCatchUpSecondsOverride === undefined
+        ? clock.maxCatchUpSeconds
+        : Math.min(clock.maxCatchUpSeconds, maxCatchUpSecondsOverride);
+    const catchUpLimitMs = effectiveMaxCatchUpSeconds * 1_000;
     const wallTimeConsumedMs = shouldAdvanceSimulation
       ? Math.min(elapsedWallMs, catchUpLimitMs)
       : elapsedWallMs;
@@ -2374,6 +2386,17 @@ function validateClockUpdate(input: ClockUpdateInput): void {
       input.minSuccessorIntervalHours > 24 * 30)
   ) {
     throw badRequest("Clock successor interval is out of bounds", "clock_validation_error");
+  }
+}
+
+function validateReconciliationInput(input: ReconcileSimulationClockInput): void {
+  if (
+    input.maxCatchUpSeconds !== undefined &&
+    (!Number.isInteger(input.maxCatchUpSeconds) ||
+      input.maxCatchUpSeconds < 1 ||
+      input.maxCatchUpSeconds > 60 * 60 * 24 * 7)
+  ) {
+    throw badRequest("Clock catch-up window is out of bounds", "clock_validation_error");
   }
 }
 
