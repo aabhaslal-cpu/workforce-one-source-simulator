@@ -195,6 +195,7 @@ export interface ScenarioRecordTemplate {
   title: string;
   actorRoleTemplateId: string;
   assignmentRoleTemplateId?: string;
+  aclUserRoleTemplateIds?: string[];
   acl: Acl;
   rawPayload: Record<string, unknown>;
   visibleAfterHours?: number;

@@ -52,7 +52,7 @@ Delivered in this draft:
 - Production-like startup with Postgres and continued fail-closed behavior for memory/SQLite.
 - Deployment verification, smoke-test guidance, and runbooks.
 - Persisted manual/realtime company clock with bounded catch-up, feed-triggered micro-reconciliation, protected cron-compatible tick endpoint, and restart persistence.
-- Deterministic continuous successor activity using the existing 10 scenario packs and one shared company world.
+- Deterministic continuous successor activity using the existing 11 scenario packs and one shared company world.
 - Postgres-backed distributed rate limiting for production-like runtimes.
 - Deterministic failure simulation controls.
 - Structured safe logging and operational telemetry.

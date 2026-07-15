@@ -1,6 +1,6 @@
 # Scenarios
 
-The simulator implements 10 scenario packs. Packs define reusable business-event templates; source adapters shape how those events appear in provider payloads.
+The simulator implements 11 scenario packs. Packs define reusable business-event templates; source adapters shape how those events appear in provider payloads.
 
 The simulator creates source evidence only. It does not define expected Workforce One conclusions.
 
@@ -8,6 +8,7 @@ The simulator creates source evidence only. It does not define expected Workforc
 
 | Pack | Departments | Key Sources |
 | --- | --- | --- |
+| `regular-workday` | Product, Engineering, CS | All 12 source systems |
 | `product-launch-readiness` | Product, Engineering, CS | Slack, Gmail, Calendar, Notion, Jira, Productboard, Amplitude |
 | `feature-adoption-lag` | Product, CS | Amplitude, Productboard, Zendesk, Slack, Gmail, Notion |
 | `roadmap-tradeoff` | Product, Engineering, CS | Productboard, Gmail, Jira, Calendar, Notion, Slack |
@@ -34,9 +35,9 @@ The packs include late email, Slack edits, corrected analytics, delayed Salesfor
 
 Dataset size controls deterministic scenario instances:
 
-- Small: 10 instances total.
-- Medium: 80 instances total.
-- Large: 400 instances total.
+- Small: 11 instances total.
+- Medium: 88 instances total.
+- Large: 440 instances total.
 
 Each instance has a scenario pack ID and distinct scenario instance ID.
 
@@ -50,6 +51,6 @@ Realtime reconciliation never inserts manual event IDs and never assigns occurre
 
 Continuous mode determines lifecycle completion from scheduled nonmanual events plus their delayed visible/update/delete horizons. Completed instances become eligible for successors after their persisted successor due time; due successors are created in deterministic bounded batches.
 
-Continuous mode reuses these same 10 packs. It does not add hidden Workforce One-specific scenario logic.
+Continuous mode reuses these same 11 packs. It does not add hidden Workforce One-specific scenario logic.
 
 Scenario authoring rules live in `docs/SCENARIO_AUTHORING.md`.
