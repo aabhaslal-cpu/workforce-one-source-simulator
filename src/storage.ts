@@ -981,7 +981,7 @@ export class PostgresSimulatorStorage implements SimulatorStorage {
         this.failNextWorldReplacement = false;
         throw new Error("Injected world replacement failure");
       }
-      await writePostgresWorldReplacement(client, output.replacement);
+      await writePostgresWorldReplacement(client, output.replacement, snapshot);
       return output.result;
     }, "mutate world");
   }
@@ -1208,7 +1208,15 @@ async function readPostgresWorldSnapshot(client: PoolClient): Promise<WorldSnaps
   };
 }
 
-async function writePostgresWorldReplacement(client: PoolClient, replacement: WorldReplacement): Promise<void> {
+async function writePostgresWorldReplacement(
+  client: PoolClient,
+  replacement: WorldReplacement,
+  snapshot?: WorldSnapshot,
+): Promise<void> {
+  if (snapshot && canWritePostgresWorldPatch(snapshot, replacement)) {
+    await writePostgresWorldPatch(client, snapshot, replacement);
+    return;
+  }
   if (replacement.scenarioStates) {
     await client.query("DELETE FROM scenario_states");
     for (const state of replacement.scenarioStates) {
@@ -1241,6 +1249,124 @@ async function writePostgresWorldReplacement(client: PoolClient, replacement: Wo
   await writePostgresSourceChanges(client, replacement.sourceChanges);
   await client.query("DELETE FROM source_objects");
   await writePostgresSourceObjects(client, replacement.sourceObjects);
+  await client.query(
+    `INSERT INTO dataset_metadata (id, metadata_json)
+     VALUES ('singleton', $1)
+     ON CONFLICT (id) DO UPDATE SET metadata_json = EXCLUDED.metadata_json`,
+    [JSON.stringify(replacement.datasetMetadata)],
+  );
+  if (replacement.clockState) {
+    await client.query(
+      `INSERT INTO simulation_clock_state (id, state_json)
+       VALUES ('singleton', $1)
+       ON CONFLICT (id) DO UPDATE SET state_json = EXCLUDED.state_json`,
+      [JSON.stringify(replacement.clockState)],
+    );
+  }
+  if (replacement.orchestrationState) {
+    await client.query(
+      `INSERT INTO continuous_orchestration_state (id, state_json)
+       VALUES ('singleton', $1)
+       ON CONFLICT (id) DO UPDATE SET state_json = EXCLUDED.state_json`,
+      [JSON.stringify(replacement.orchestrationState)],
+    );
+  }
+}
+
+function canWritePostgresWorldPatch(
+  snapshot: WorldSnapshot,
+  replacement: WorldReplacement,
+): boolean {
+  if (!snapshot.worldRevision || snapshot.worldRevision !== replacement.worldRevision) return false;
+  if (replacement.scenarioStates) return false;
+  if (
+    replacement.organizationConfig &&
+    JSON.stringify(replacement.organizationConfig) !== JSON.stringify(snapshot.organizationConfig)
+  ) {
+    return false;
+  }
+  if (!containsAllScenarioInstances(snapshot.scenarioInstanceStates, replacement.scenarioInstanceStates)) return false;
+  if (!containsAllSourceObjects(snapshot.sourceObjects, replacement.sourceObjects)) return false;
+  return sourceChangesAreAppendOnly(snapshot.sourceChanges, replacement.sourceChanges);
+}
+
+function containsAllScenarioInstances(
+  before: ScenarioInstanceState[],
+  after: ScenarioInstanceState[],
+): boolean {
+  const afterIds = new Set(after.map((state) => state.scenarioInstanceId));
+  return before.every((state) => afterIds.has(state.scenarioInstanceId));
+}
+
+function containsAllSourceObjects(
+  before: SourceObjectProjection[],
+  after: SourceObjectProjection[],
+): boolean {
+  const afterKeys = new Set(after.map((object) => object.sourceKey));
+  return before.every((object) => afterKeys.has(object.sourceKey));
+}
+
+function sourceChangesAreAppendOnly(
+  before: SourceChangeLedgerEntry[],
+  after: SourceChangeLedgerEntry[],
+): boolean {
+  if (after.length < before.length) return false;
+  for (const [index, beforeChange] of before.entries()) {
+    const afterChange = after[index];
+    if (!afterChange) return false;
+    if (beforeChange.ledgerSequence !== afterChange.ledgerSequence) return false;
+    if (beforeChange.changeId !== afterChange.changeId) return false;
+    if (JSON.stringify(beforeChange) !== JSON.stringify(afterChange)) return false;
+  }
+  return true;
+}
+
+async function writePostgresWorldPatch(
+  client: PoolClient,
+  snapshot: WorldSnapshot,
+  replacement: WorldReplacement,
+): Promise<void> {
+  const previousInstances = new Map(
+    snapshot.scenarioInstanceStates.map((state) => [
+      state.scenarioInstanceId,
+      JSON.stringify(state),
+    ]),
+  );
+  for (const state of replacement.scenarioInstanceStates) {
+    const stateJson = JSON.stringify(state);
+    if (previousInstances.get(state.scenarioInstanceId) === stateJson) continue;
+    await client.query(
+      `INSERT INTO scenario_instance_states (scenario_instance_id, scenario_pack_id, state_json)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (scenario_instance_id)
+       DO UPDATE SET scenario_pack_id = EXCLUDED.scenario_pack_id, state_json = EXCLUDED.state_json`,
+      [state.scenarioInstanceId, state.scenarioPackId, stateJson],
+    );
+  }
+  await client.query(
+    `INSERT INTO world_state (id, world_revision)
+     VALUES ('singleton', $1)
+     ON CONFLICT (id) DO UPDATE SET world_revision = EXCLUDED.world_revision`,
+    [replacement.worldRevision],
+  );
+  await writePostgresSourceChanges(
+    client,
+    replacement.sourceChanges.slice(snapshot.sourceChanges.length),
+  );
+  const previousObjects = new Map(
+    snapshot.sourceObjects.map((object) => [object.sourceKey, JSON.stringify(object)]),
+  );
+  for (const object of replacement.sourceObjects) {
+    const objectJson = JSON.stringify(object);
+    if (previousObjects.get(object.sourceKey) === objectJson) continue;
+    await client.query(
+      `INSERT INTO source_objects (source_key, world_revision, object_json)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (source_key)
+       DO UPDATE SET world_revision = EXCLUDED.world_revision, object_json = EXCLUDED.object_json`,
+      [object.sourceKey, object.worldRevision, objectJson],
+    );
+  }
   await client.query(
     `INSERT INTO dataset_metadata (id, metadata_json)
      VALUES ('singleton', $1)
