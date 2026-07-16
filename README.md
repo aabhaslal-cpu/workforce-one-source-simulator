@@ -35,6 +35,7 @@ Built:
 - Structured request telemetry, sanitized error envelopes with correlation IDs, operational metrics, `/healthz` liveness, `/readyz` readiness, storage inspection, and request inspection.
 - Deterministic failure simulation for connector development: rate limits, timeouts, 500/503, latency, partial pages, cursor corruption, auth failures, expired credentials, outages, malformed payloads, permission changes, deletes, edits, late arrivals, duplicate objects, and stale objects.
 - Connector test kit covering initial sync, incremental sync, late arrivals, updates/deletes, world reset, stale cursor rejection, new cursor acquisition, permission differences, and connection-regeneration behavior.
+- Admin-only Workforce One bootstrap snapshot export with organization metadata, full current source bodies, occurred ledger entries, per-connection checkpoints, visibility summaries, and integrity hashes.
 - Built-in deterministic benchmark harness for small, medium, and large datasets across memory, SQLite, and Postgres when a separate `SIMULATOR_BENCHMARK_DATABASE_URL` is configured.
 - Simulator-owned source deep links at `/sim/{sourceSystem}/{sourceId}` with the same connection visibility checks as feeds.
 - Internal operator console at `/console` with organization, scenario, clock, ledger, storage, snapshot, metrics, failure-mode, benchmark, and connector-kit controls.
@@ -68,6 +69,7 @@ curl -H 'x-admin-api-key: dev-admin-key' http://localhost:3000/v1/catalog/scenar
 curl -H 'x-admin-api-key: dev-admin-key' http://localhost:3000/v1/admin/datasets/current
 curl -H 'x-admin-api-key: dev-admin-key' http://localhost:3000/v1/admin/metrics
 curl -H 'x-admin-api-key: dev-admin-key' http://localhost:3000/v1/admin/source-changes
+curl -H 'x-admin-api-key: dev-admin-key' http://localhost:3000/v1/admin/exports/workforce-one-snapshot
 curl -H 'x-admin-api-key: dev-admin-key' http://localhost:3000/v1/admin/clock
 curl -H 'x-connection-secret: dev-connection-secret:conn-product-manager' \
   'http://localhost:3000/v1/connections/conn-product-manager/records?limit=5'
@@ -124,4 +126,4 @@ Postgres is implemented and CI-proven for the simulator storage, clock, orchestr
 
 ## Non-Goals
 
-The simulator does not build Workforce One UI, AI reasoning, recommendations, priorities, Signals, Forces, Objectives, Outcomes, real OAuth integrations, public demos, load tests, or a direct Workforce One database importer.
+The simulator does not build Workforce One UI, AI reasoning, recommendations, priorities, Signals, Forces, Objectives, Outcomes, real OAuth integrations, public demos, load tests, or the Workforce One-side snapshot importer.

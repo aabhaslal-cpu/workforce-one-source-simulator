@@ -74,6 +74,10 @@ Logs never include credentials, request bodies, stack traces, or database connec
 
 `GET /v1/admin/storage` reports storage health, dataset metadata, world revision, scenario instance count, snapshot count, source-change count, and source-object count.
 
+## Workforce One Bootstrap Export
+
+`GET /v1/admin/exports/workforce-one-snapshot` is an admin-only, read-only export for owner-controlled demo bootstrap workflows. It returns the current generated organization, credential-free connections, full current source-object bodies, occurred source-change ledger entries, per-connection checkpoints, visibility summaries, counts, and integrity hashes. The route does not reconcile clocks, mutate storage, rotate world revision, or replace normal connector polling.
+
 ## Recovery
 
 Use snapshots for deterministic simulator recovery:
@@ -93,13 +97,13 @@ Postgres benchmarks require `SIMULATOR_BENCHMARK_DATABASE_URL`. The benchmark UR
 
 Measured locally on July 11, 2026 with `docs-benchmark`:
 
-| Storage | Dataset | Generate | Advance | Trigger | Feed | Snapshot | Restore | Org Regen |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| memory | small | 4.97 ms | 5.43 ms | 5.01 ms | 3.36 ms | 0.32 ms | 4.67 ms | 5.79 ms |
-| memory | medium | 30.92 ms | 41.12 ms | 39.08 ms | 11.81 ms | 1.94 ms | 33.01 ms | 29.38 ms |
-| memory | large | 151.97 ms | 205.48 ms | 196.19 ms | 55.02 ms | 8.70 ms | 134.29 ms | 154.50 ms |
-| sqlite | small | 4.12 ms | 5.25 ms | 5.72 ms | 1.89 ms | 0.64 ms | 5.48 ms | 6.19 ms |
-| sqlite | medium | 30.11 ms | 42.85 ms | 42.61 ms | 8.74 ms | 1.94 ms | 38.30 ms | 40.79 ms |
-| sqlite | large | 160.21 ms | 231.39 ms | 218.81 ms | 37.37 ms | 7.83 ms | 191.81 ms | 197.34 ms |
+| Storage | Dataset |  Generate |   Advance |   Trigger |     Feed | Snapshot |   Restore | Org Regen |
+| ------- | ------- | --------: | --------: | --------: | -------: | -------: | --------: | --------: |
+| memory  | small   |   4.97 ms |   5.43 ms |   5.01 ms |  3.36 ms |  0.32 ms |   4.67 ms |   5.79 ms |
+| memory  | medium  |  30.92 ms |  41.12 ms |  39.08 ms | 11.81 ms |  1.94 ms |  33.01 ms |  29.38 ms |
+| memory  | large   | 151.97 ms | 205.48 ms | 196.19 ms | 55.02 ms |  8.70 ms | 134.29 ms | 154.50 ms |
+| sqlite  | small   |   4.12 ms |   5.25 ms |   5.72 ms |  1.89 ms |  0.64 ms |   5.48 ms |   6.19 ms |
+| sqlite  | medium  |  30.11 ms |  42.85 ms |  42.61 ms |  8.74 ms |  1.94 ms |  38.30 ms |  40.79 ms |
+| sqlite  | large   | 160.21 ms | 231.39 ms | 218.81 ms | 37.37 ms |  7.83 ms | 191.81 ms | 197.34 ms |
 
 Postgres benchmark numbers should be captured in a benchmark database, not against the live application database.

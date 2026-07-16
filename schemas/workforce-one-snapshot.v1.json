@@ -1,0 +1,294 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://workforce-one-source-simulator.local/schemas/workforce-one-snapshot.v1.json",
+  "title": "WorkforceOneSnapshotV1",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "contractVersion",
+    "exportedAt",
+    "tenant",
+    "worldRevision",
+    "datasetMetadata",
+    "organization",
+    "connections",
+    "sourceObjects",
+    "sourceChanges",
+    "counts",
+    "integrity"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "workforce-one-snapshot.v1" },
+    "contractVersion": { "type": "string", "minLength": 1 },
+    "exportedAt": { "type": "string", "format": "date-time" },
+    "tenant": {
+      "type": "object",
+      "required": ["id", "name", "slug"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "slug": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "worldRevision": { "type": "string", "minLength": 1 },
+    "datasetMetadata": { "type": "object" },
+    "organization": {
+      "type": "object",
+      "required": [
+        "seed",
+        "config",
+        "counts",
+        "validation",
+        "roleTemplates",
+        "people",
+        "teams",
+        "reportingRelationships",
+        "tree"
+      ],
+      "properties": {
+        "seed": { "type": "string", "minLength": 1 },
+        "config": { "type": "object" },
+        "counts": { "type": "object" },
+        "validation": { "type": "object" },
+        "roleTemplates": { "type": "array", "items": { "type": "object" } },
+        "people": { "type": "array", "items": { "type": "object" } },
+        "teams": { "type": "array", "items": { "type": "object" } },
+        "reportingRelationships": { "type": "array", "items": { "type": "object" } },
+        "tree": { "type": "array", "items": { "type": "object" } }
+      },
+      "additionalProperties": false
+    },
+    "connections": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/connectionExport" }
+    },
+    "sourceObjects": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/sourceObject" }
+    },
+    "sourceChanges": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/sourceChange" }
+    },
+    "counts": {
+      "type": "object",
+      "required": [
+        "people",
+        "teams",
+        "roleTemplates",
+        "connections",
+        "roleAliasConnections",
+        "personConnections",
+        "sourceObjects",
+        "sourceChanges",
+        "bySourceSystem"
+      ],
+      "properties": {
+        "people": { "type": "integer", "minimum": 0 },
+        "teams": { "type": "integer", "minimum": 0 },
+        "roleTemplates": { "type": "integer", "minimum": 0 },
+        "connections": { "type": "integer", "minimum": 0 },
+        "roleAliasConnections": { "type": "integer", "minimum": 0 },
+        "personConnections": { "type": "integer", "minimum": 0 },
+        "sourceObjects": { "type": "integer", "minimum": 0 },
+        "sourceChanges": { "type": "integer", "minimum": 0 },
+        "bySourceSystem": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "additionalProperties": false
+    },
+    "integrity": {
+      "type": "object",
+      "required": [
+        "organizationHash",
+        "connectionsHash",
+        "sourceObjectsHash",
+        "sourceChangesHash",
+        "snapshotHash"
+      ],
+      "properties": {
+        "organizationHash": { "type": "string", "minLength": 1 },
+        "connectionsHash": { "type": "string", "minLength": 1 },
+        "sourceObjectsHash": { "type": "string", "minLength": 1 },
+        "sourceChangesHash": { "type": "string", "minLength": 1 },
+        "snapshotHash": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "acl": {
+      "type": "object",
+      "required": ["visibility", "groups", "users"],
+      "properties": {
+        "visibility": { "enum": ["public", "group", "restricted", "private"] },
+        "groups": { "type": "array", "items": { "type": "string" } },
+        "users": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "connectionExport": {
+      "type": "object",
+      "required": [
+        "id",
+        "tenantId",
+        "personId",
+        "roleTemplateId",
+        "label",
+        "allowedSources",
+        "allowedGroups",
+        "checkpoint",
+        "visibility"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "tenantId": { "type": "string", "minLength": 1 },
+        "personId": { "type": "string", "minLength": 1 },
+        "roleTemplateId": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "allowedSources": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "allowedGroups": { "type": "array", "items": { "type": "string" } },
+        "checkpoint": {
+          "type": "object",
+          "required": ["cursorVersion", "worldRevision", "afterSequence", "cursor"],
+          "properties": {
+            "cursorVersion": { "const": 3 },
+            "worldRevision": { "type": "string", "minLength": 1 },
+            "afterSequence": { "type": "integer", "minimum": 0 },
+            "cursor": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        "visibility": {
+          "type": "object",
+          "required": [
+            "visibleSourceObjectCount",
+            "visibleSourceChangeCount",
+            "visibleSourceKeysHash",
+            "visibleLedgerSequencesHash"
+          ],
+          "properties": {
+            "visibleSourceObjectCount": { "type": "integer", "minimum": 0 },
+            "visibleSourceChangeCount": { "type": "integer", "minimum": 0 },
+            "visibleSourceKeysHash": { "type": "string", "minLength": 1 },
+            "visibleLedgerSequencesHash": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "sourceObject": {
+      "type": "object",
+      "required": [
+        "sourceKey",
+        "worldRevision",
+        "sourceSystem",
+        "sourceId",
+        "currentChangeId",
+        "currentChangeType",
+        "record"
+      ],
+      "properties": {
+        "sourceKey": { "type": "string", "minLength": 1 },
+        "worldRevision": { "type": "string", "minLength": 1 },
+        "sourceSystem": { "type": "string", "minLength": 1 },
+        "sourceId": { "type": "string", "minLength": 1 },
+        "currentChangeId": { "type": "string", "minLength": 1 },
+        "currentChangeType": { "enum": ["created", "updated", "deleted"] },
+        "record": { "$ref": "#/$defs/sourceRecord" }
+      },
+      "additionalProperties": false
+    },
+    "sourceChange": {
+      "type": "object",
+      "required": [
+        "ledgerSequence",
+        "worldRevision",
+        "changeId",
+        "changeType",
+        "sourceSystem",
+        "sourceId",
+        "changeOccurredAt",
+        "sourceOccurredAt",
+        "scenarioId",
+        "scenarioPackId",
+        "scenarioInstanceId",
+        "businessEventId",
+        "templateId",
+        "record",
+        "permissionScope"
+      ],
+      "properties": {
+        "ledgerSequence": { "type": "integer", "minimum": 1 },
+        "worldRevision": { "type": "string", "minLength": 1 },
+        "changeId": { "type": "string", "minLength": 1 },
+        "changeType": { "enum": ["created", "updated", "deleted"] },
+        "sourceSystem": { "type": "string", "minLength": 1 },
+        "sourceId": { "type": "string", "minLength": 1 },
+        "changeOccurredAt": { "type": "string", "format": "date-time" },
+        "sourceOccurredAt": { "type": "string", "format": "date-time" },
+        "scenarioId": { "type": "string", "minLength": 1 },
+        "scenarioPackId": { "type": "string", "minLength": 1 },
+        "scenarioInstanceId": { "type": "string", "minLength": 1 },
+        "businessEventId": { "type": "string", "minLength": 1 },
+        "templateId": { "type": "string", "minLength": 1 },
+        "record": { "$ref": "#/$defs/sourceRecord" },
+        "permissionScope": { "$ref": "#/$defs/acl" }
+      },
+      "additionalProperties": false
+    },
+    "sourceRecord": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "sourceSystem",
+        "sourceId",
+        "objectType",
+        "occurredAt",
+        "title",
+        "sourceUrl",
+        "acl",
+        "rawPayload",
+        "changeId",
+        "changeType",
+        "changeSequence",
+        "changeOccurredAt",
+        "correlation"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "source-record.v1" },
+        "sourceSystem": { "type": "string" },
+        "sourceId": { "type": "string", "minLength": 1 },
+        "objectType": { "type": "string", "minLength": 1 },
+        "occurredAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "title": { "type": "string" },
+        "sourceUrl": { "type": "string" },
+        "actorRef": { "type": "string" },
+        "acl": { "$ref": "#/$defs/acl" },
+        "rawPayload": { "type": "object" },
+        "changeId": { "type": "string", "minLength": 1 },
+        "changeType": { "enum": ["created", "updated", "deleted"] },
+        "changeSequence": { "type": "integer", "minimum": 1 },
+        "changeOccurredAt": { "type": "string", "format": "date-time" },
+        "correlation": {
+          "type": "object",
+          "required": ["scenarioId", "eventId", "templateId", "seedFingerprint"],
+          "properties": {
+            "scenarioId": { "type": "string", "minLength": 1 },
+            "eventId": { "type": "string", "minLength": 1 },
+            "templateId": { "type": "string", "minLength": 1 },
+            "seedFingerprint": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

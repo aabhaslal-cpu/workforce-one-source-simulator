@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { requireSourceAdapter } from "./adapters/registry.js";
-import { SourceFeedBatchV1Schema, type SourceFeedBatchV1 } from "./contracts.js";
+import {
+  SourceFeedBatchV1Schema,
+  WorkforceOneSnapshotV1Schema,
+  type SourceFeedBatchV1,
+  type WorkforceOneSnapshotV1,
+} from "./contracts.js";
 import { scenarios, tenant } from "./data.js";
 import { SOURCE_PAYLOAD_CONTRACT_VERSION } from "./source-contracts.js";
 import { preserveNoBodyDeletionPayloads } from "./source-lifecycle.js";
@@ -27,6 +32,7 @@ import {
   type SourceConnection,
   type SourceObjectProjection,
   type SourceRecord,
+  type SourceSystem,
   type Team,
 } from "./domain.js";
 import {
@@ -1041,6 +1047,115 @@ export class SourceSimulator {
       hasMore: visibleChanges.length > page.length,
     };
     return SourceFeedBatchV1Schema.parse(batch);
+  }
+
+  async workforceOneSnapshot(): Promise<WorkforceOneSnapshotV1> {
+    const worldRevision = await this.requireWorldRevision();
+    const datasetMetadata = await this.datasetMetadata();
+    const sourceChanges = (await this.visibleLedgerEntries()).sort(compareChanges);
+    const sourceObjects = (await this.sourceObjects()).sort(compareSourceObjects);
+    const afterSequence = sourceChanges.at(-1)?.ledgerSequence ?? 0;
+    const organization = {
+      seed: this.organization.seed,
+      config: this.organization.config,
+      counts: this.organization.counts,
+      validation: this.organization.validation,
+      roleTemplates: this.organization.roleTemplates,
+      people: this.organization.people,
+      teams: this.organization.teams,
+      reportingRelationships: this.organization.reportingRelationships,
+      tree: this.organization.tree,
+    };
+    const connections = this.connections
+      .map((connection) => {
+        const visibleSourceKeys = sourceObjects
+          .filter((object) => canConnectionSee(object.record, connection))
+          .map((object) => object.sourceKey)
+          .sort();
+        const visibleLedgerSequences = sourceChanges
+          .filter((change) => canConnectionSee(change.record, connection))
+          .map((change) => change.ledgerSequence)
+          .sort((left, right) => left - right);
+        return {
+          id: connection.id,
+          tenantId: connection.tenantId,
+          personId: connection.personId,
+          roleTemplateId: connection.roleTemplateId,
+          label: connection.label,
+          allowedSources: [...connection.allowedSources],
+          allowedGroups: [...connection.allowedGroups],
+          checkpoint: {
+            cursorVersion: 3 as const,
+            worldRevision,
+            afterSequence,
+            cursor: encodeCursor({
+              v: 3,
+              connectionId: connection.id,
+              worldRevision,
+              afterSequence,
+            }),
+          },
+          visibility: {
+            visibleSourceObjectCount: visibleSourceKeys.length,
+            visibleSourceChangeCount: visibleLedgerSequences.length,
+            visibleSourceKeysHash: hashJson(visibleSourceKeys),
+            visibleLedgerSequencesHash: hashJson(visibleLedgerSequences),
+          },
+        };
+      })
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const countsBySourceSystem = Object.fromEntries(
+      sourceSystems.map((source) => [source, 0]),
+    ) as Record<SourceSystem, number>;
+    for (const change of sourceChanges) {
+      countsBySourceSystem[change.sourceSystem] =
+        (countsBySourceSystem[change.sourceSystem] ?? 0) + 1;
+    }
+    const counts = {
+      people: this.organization.people.length,
+      teams: this.organization.teams.length,
+      roleTemplates: this.organization.roleTemplates.length,
+      connections: connections.length,
+      roleAliasConnections: connections.filter(
+        (connection) => !connection.id.startsWith("conn-person-"),
+      ).length,
+      personConnections: connections.filter((connection) =>
+        connection.id.startsWith("conn-person-"),
+      ).length,
+      sourceObjects: sourceObjects.length,
+      sourceChanges: sourceChanges.length,
+      bySourceSystem: countsBySourceSystem,
+    };
+    const snapshotWithoutIntegrity = {
+      schemaVersion: "workforce-one-snapshot.v1" as const,
+      contractVersion: SOURCE_PAYLOAD_CONTRACT_VERSION,
+      exportedAt: datasetMetadata.generatedAt,
+      tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug },
+      worldRevision,
+      datasetMetadata,
+      organization,
+      connections,
+      sourceObjects,
+      sourceChanges,
+      counts,
+    };
+    const integrityWithoutSnapshot = {
+      organizationHash: hashJson(organization),
+      connectionsHash: hashJson(connections),
+      sourceObjectsHash: hashJson(sourceObjects),
+      sourceChangesHash: hashJson(sourceChanges),
+    };
+    const snapshot = {
+      ...snapshotWithoutIntegrity,
+      integrity: {
+        ...integrityWithoutSnapshot,
+        snapshotHash: hashJson({
+          ...snapshotWithoutIntegrity,
+          integrity: integrityWithoutSnapshot,
+        }),
+      },
+    };
+    return WorkforceOneSnapshotV1Schema.parse(snapshot);
   }
 
   async createSnapshot(): Promise<Snapshot> {
@@ -2225,6 +2340,13 @@ function compareChanges(left: SourceChangeLedgerEntry, right: SourceChangeLedger
   return left.ledgerSequence - right.ledgerSequence || left.changeId.localeCompare(right.changeId);
 }
 
+function compareSourceObjects(left: SourceObjectProjection, right: SourceObjectProjection): number {
+  return (
+    left.sourceSystem.localeCompare(right.sourceSystem) ||
+    left.sourceId.localeCompare(right.sourceId)
+  );
+}
+
 function assignLedgerSequences(
   changes: SourceChangeLedgerEntry[],
   firstSequence: number,
@@ -2689,6 +2811,24 @@ function managementChain(organization: GeneratedOrganization, person: Person): P
 function stableId(prefix: string, ...parts: string[]): string {
   const digest = createHash("sha256").update(parts.join("|"), "utf8").digest("hex").slice(0, 16);
   return `${prefix}-${digest}`;
+}
+
+function hashJson(value: unknown): string {
+  return createHash("sha256").update(stableJson(value), "utf8").digest("hex");
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(sortJson(value));
+}
+
+function sortJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJson);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, sortJson(item)]),
+  );
 }
 
 function hashNumber(...parts: string[]): number {

@@ -1,0 +1,149 @@
+{
+  "schemaVersion": "workforce-one-snapshot.v1",
+  "contractVersion": "source-payload-contract.v6",
+  "exportedAt": "2026-07-10T20:00:00.000Z",
+  "tenant": {
+    "id": "tenant-acme",
+    "name": "Acme Demo",
+    "slug": "acme-demo"
+  },
+  "worldRevision": "world-example",
+  "datasetMetadata": {
+    "schemaVersion": "dataset-metadata.v1",
+    "datasetId": "dataset-example",
+    "generatedAt": "2026-07-10T20:00:00.000Z",
+    "totalSourceChanges": 1,
+    "totalSourceObjects": 1,
+    "worldRevision": "world-example"
+  },
+  "organization": {
+    "seed": "demo-seed",
+    "config": { "seed": "demo-seed" },
+    "counts": { "totalPeople": 1 },
+    "validation": { "ok": true, "errors": [] },
+    "roleTemplates": [{ "id": "role-product-manager" }],
+    "people": [{ "id": "person-product-manager", "email": "product.manager@example.test" }],
+    "teams": [{ "id": "team-product" }],
+    "reportingRelationships": [],
+    "tree": []
+  },
+  "connections": [
+    {
+      "id": "conn-product-manager",
+      "tenantId": "tenant-acme",
+      "personId": "person-product-manager",
+      "roleTemplateId": "role-product-manager",
+      "label": "Product Manager simulator connection",
+      "allowedSources": ["jira"],
+      "allowedGroups": ["product"],
+      "checkpoint": {
+        "cursorVersion": 3,
+        "worldRevision": "world-example",
+        "afterSequence": 1,
+        "cursor": "opaque-v3-cursor"
+      },
+      "visibility": {
+        "visibleSourceObjectCount": 1,
+        "visibleSourceChangeCount": 1,
+        "visibleSourceKeysHash": "hash-source-keys",
+        "visibleLedgerSequencesHash": "hash-ledger-sequences"
+      }
+    }
+  ],
+  "sourceObjects": [
+    {
+      "sourceKey": "jira:jira-example",
+      "worldRevision": "world-example",
+      "sourceSystem": "jira",
+      "sourceId": "jira-example",
+      "currentChangeId": "change-example",
+      "currentChangeType": "created",
+      "record": {
+        "schemaVersion": "source-record.v1",
+        "sourceSystem": "jira",
+        "sourceId": "jira-example",
+        "objectType": "issue",
+        "occurredAt": "2026-07-10T20:00:00.000Z",
+        "title": "Example implementation blocker",
+        "sourceUrl": "https://simulator.example.test/sim/jira/jira-example",
+        "acl": { "visibility": "group", "groups": ["product"], "users": [] },
+        "rawPayload": {
+          "id": "jira-example",
+          "key": "DEMO-1",
+          "summary": "Example implementation blocker"
+        },
+        "changeId": "change-example",
+        "changeType": "created",
+        "changeSequence": 1,
+        "changeOccurredAt": "2026-07-10T20:00:00.000Z",
+        "correlation": {
+          "scenarioId": "example-scenario",
+          "eventId": "example-event",
+          "templateId": "example-template",
+          "seedFingerprint": "seed-example"
+        }
+      }
+    }
+  ],
+  "sourceChanges": [
+    {
+      "ledgerSequence": 1,
+      "worldRevision": "world-example",
+      "changeId": "change-example",
+      "changeType": "created",
+      "sourceSystem": "jira",
+      "sourceId": "jira-example",
+      "changeOccurredAt": "2026-07-10T20:00:00.000Z",
+      "sourceOccurredAt": "2026-07-10T20:00:00.000Z",
+      "scenarioId": "example-scenario",
+      "scenarioPackId": "example-pack",
+      "scenarioInstanceId": "example-instance",
+      "businessEventId": "example-event",
+      "templateId": "example-template",
+      "record": {
+        "schemaVersion": "source-record.v1",
+        "sourceSystem": "jira",
+        "sourceId": "jira-example",
+        "objectType": "issue",
+        "occurredAt": "2026-07-10T20:00:00.000Z",
+        "title": "Example implementation blocker",
+        "sourceUrl": "https://simulator.example.test/sim/jira/jira-example",
+        "acl": { "visibility": "group", "groups": ["product"], "users": [] },
+        "rawPayload": {
+          "id": "jira-example",
+          "key": "DEMO-1",
+          "summary": "Example implementation blocker"
+        },
+        "changeId": "change-example",
+        "changeType": "created",
+        "changeSequence": 1,
+        "changeOccurredAt": "2026-07-10T20:00:00.000Z",
+        "correlation": {
+          "scenarioId": "example-scenario",
+          "eventId": "example-event",
+          "templateId": "example-template",
+          "seedFingerprint": "seed-example"
+        }
+      },
+      "permissionScope": { "visibility": "group", "groups": ["product"], "users": [] }
+    }
+  ],
+  "counts": {
+    "people": 1,
+    "teams": 1,
+    "roleTemplates": 1,
+    "connections": 1,
+    "roleAliasConnections": 1,
+    "personConnections": 0,
+    "sourceObjects": 1,
+    "sourceChanges": 1,
+    "bySourceSystem": { "jira": 1 }
+  },
+  "integrity": {
+    "organizationHash": "hash-organization",
+    "connectionsHash": "hash-connections",
+    "sourceObjectsHash": "hash-source-objects",
+    "sourceChangesHash": "hash-source-changes",
+    "snapshotHash": "hash-snapshot"
+  }
+}

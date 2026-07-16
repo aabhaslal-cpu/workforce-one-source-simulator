@@ -11,9 +11,9 @@ The simulator owns fictional source data only. Workforce One owns interpretation
 ## Runtime Components
 
 - `src/app.ts`: canonical Hono-native Vercel entrypoint that creates and default-exports the app.
-- `src/simulator-app.ts`: HTTP API, admin auth, connection-bound auth, request validation, operator console, source deep links, admin inspection routes, health, metrics, failure controls, benchmark, and connector-kit routes.
+- `src/simulator-app.ts`: HTTP API, admin auth, connection-bound auth, request validation, operator console, source deep links, admin inspection routes, Workforce One bootstrap export route, health, metrics, failure controls, benchmark, and connector-kit routes.
 - `src/local-server.ts`: standalone local/container Node server for the same Hono app.
-- `src/engine.ts`: deterministic organization-aware scenario engine, scenario instances, persisted simulation clock, continuous activity orchestration, source-change ledger, v3 cursor feed, world revision, snapshots, dataset metadata, and visibility filtering.
+- `src/engine.ts`: deterministic organization-aware scenario engine, scenario instances, persisted simulation clock, continuous activity orchestration, source-change ledger, v3 cursor feed, Workforce One snapshot export construction, world revision, snapshots, dataset metadata, and visibility filtering.
 - `src/adapters/*`: provider-shaped payload adapters and adapter registry.
 - `src/data.ts`: fictional tenant and 11 scenario-pack definitions.
 - `src/organization.ts`: role templates, deterministic people/teams/reporting graph, dotted-line relationships, cross-functional memberships, and connection IDs.
@@ -22,7 +22,7 @@ The simulator owns fictional source data only. Workforce One owns interpretation
 - `src/failures.ts`: deterministic failure-mode configuration and feed mutation helpers.
 - `src/performance.ts`: deterministic benchmark harness.
 - `src/connector-kit.ts`: reference connector lifecycle kit.
-- `src/contracts.ts`: Zod runtime contract for `SourceFeedBatchV1`.
+- `src/contracts.ts`: Zod runtime contracts for `SourceFeedBatchV1` and `WorkforceOneSnapshotV1`.
 
 ## Determinism
 
@@ -52,6 +52,8 @@ Each ledger entry has:
 The v3 cursor stores only connection ID, world revision, and `afterSequence`. It remains compact regardless of dataset size.
 
 Normal time advancement, manual triggers, and realtime clock reconciliation append new changes with increasing `ledgerSequence` values and keep the same `worldRevision`. Destructive reset/delete of a scenario instance, dataset generation, organization regeneration, and snapshot restore atomically rebuild the world and rotate `worldRevision`.
+
+The admin-only Workforce One bootstrap export reads the same occurred ledger and current source-object projection. It packages the current world with credential-free connections and per-connection checkpoint cursors whose `afterSequence` is the highest exported `ledgerSequence`, so an importer can seed Workforce One once and then resume normal feed polling after the exported world.
 
 ## Company Clock And Reconciliation
 

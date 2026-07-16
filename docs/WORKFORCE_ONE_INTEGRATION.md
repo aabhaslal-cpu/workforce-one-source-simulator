@@ -21,6 +21,19 @@ No Workforce One code was changed for this simulator milestone. No Workforce One
 9. Workforce One may fetch simulator `sourceUrl` links with the same connection credential.
 10. Connector teams can run `/v1/admin/connector-test-kit/run` as the reference lifecycle test before integrating with Workforce One ingestion code.
 
+## Bootstrap Snapshot Export
+
+For demo seeding and importer development, an operator may call:
+
+```bash
+curl -H "x-admin-api-key: $SIMULATOR_ADMIN_KEY" \
+  "$SIMULATOR_BASE_URL/v1/admin/exports/workforce-one-snapshot"
+```
+
+The returned `WorkforceOneSnapshotV1` artifact is credential-free and contains the current generated organization, source connections, full current source-object bodies, occurred source-change ledger entries, dataset metadata, `worldRevision`, per-connection visibility summaries, per-connection v3 checkpoint cursors, counts, and integrity hashes.
+
+This export is not a replacement for the connector feed. It is intended for a one-time Workforce One bootstrap importer that can ingest the current world and then resume normal `/records` polling from the exported checkpoints. The simulator does not write to the Workforce One database and does not import Workforce One code.
+
 ## Cursor
 
 The cursor is not an offset and does not contain consumed change IDs. It is a compact checkpoint over the source-change ledger:
@@ -96,13 +109,14 @@ The connector test kit demonstrates:
 
 ## Operations
 
-Workforce One integration environments should poll `/healthz` for liveness and `/readyz` for deployment readiness and use admin metrics/request inspection during connector development. Production Workforce One code should consume only manifest, records, and simulator-owned source deep links.
+Workforce One integration environments should poll `/healthz` for liveness and `/readyz` for deployment readiness and use admin metrics/request inspection during connector development. Production Workforce One connector polling should consume manifest, records, and simulator-owned source deep links. Owner-controlled bootstrap tooling may additionally consume the admin snapshot export.
 
 ## Do Not Do
 
 - Do not import simulator code into Workforce One.
 - Do not read the simulator database directly from Workforce One.
 - Do not write simulator records directly to the Workforce One database.
+- Do not use the bootstrap snapshot export as the ongoing sync mechanism.
 - Do not trust client-supplied tenant, person, role, or scope values.
 - Do not use one credential for multiple simulator connections.
 - Do not reason from simulator admin event logs.

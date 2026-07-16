@@ -77,6 +77,27 @@ GET /sim/{sourceSystem}/{sourceId}
 
 The endpoint returns the current fictional source object in JSON or simple HTML. It requires connection authentication and enforces the same visibility checks as feeds.
 
+## Workforce One Bootstrap Snapshot
+
+`GET /v1/admin/exports/workforce-one-snapshot` returns `WorkforceOneSnapshotV1`. It is an admin-only bootstrap artifact for a future Workforce One importer, not the ongoing connector polling path.
+
+The artifact contains:
+
+- tenant metadata
+- current `worldRevision`
+- dataset metadata
+- generated organization config, role templates, people, teams, reporting relationships, and tree
+- credential-free source connections
+- full current source-object projections with provider-shaped `rawPayload` bodies
+- occurred source-change ledger entries
+- per-connection visibility counts and deterministic visibility hashes
+- per-connection v3 checkpoint cursors
+- counts and integrity hashes
+
+Every exported checkpoint uses the current world's highest occurred `ledgerSequence` as `afterSequence`. After Workforce One imports the snapshot, the existing `/v1/connections/{connectionId}/records` feed can resume from that checkpoint and return only future changes for that connection. The export never includes admin keys, connection credentials, revoked credentials, database URLs, or internal stack traces.
+
+The snapshot export reads the current world and writes nothing. It does not reconcile clocks, advance scenarios, rotate world revisions, create source records, or change normal feed semantics.
+
 ## Admin Inspection
 
 Admin APIs expose scenario packs, scenario instances, source changes, source objects, source history, dataset metadata, organization relationships, and visibility comparison. Scenario packs are templates. Scenario instances are persisted runtime entities and include concrete participants and context, so instance listing/detail requires admin authentication.
@@ -97,5 +118,6 @@ The cron-compatible endpoint `GET /api/cron/tick` is not part of the connector f
 
 - Zod runtime schema: `src/contracts.ts`
 - JSON Schema: `schemas/source-feed-batch.v1.json`
+- Snapshot JSON Schema: `schemas/workforce-one-snapshot.v1.json`
 - OpenAPI: `openapi/source-simulator.v1.yaml`
 - Examples: `examples/*.json`
