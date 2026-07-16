@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Admin-only `WorkforceOneSnapshotV1` export at `/v1/admin/exports/workforce-one-snapshot` for a future Workforce One bootstrap importer.
+- Runtime Zod contract, JSON Schema, OpenAPI entry, checked example, and tests for the bootstrap snapshot artifact.
+
+### Notes
+
+- The export is read-only and credential-free. It does not change normal connection feed semantics, clock reconciliation, scenario generation, storage schema, or Workforce One code.
+
 ## 0.3.0 - Milestone 3 Draft
 
 ### Added

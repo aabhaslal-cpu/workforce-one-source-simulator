@@ -12,9 +12,27 @@ import {
 } from "./engine.js";
 import { scenarios } from "./data.js";
 import { previewOrganizationCounts, roleTemplates } from "./organization.js";
-import { MemorySimulatorStorage, PostgresSimulatorStorage, SQLiteSimulatorStorage, StorageError, WorldConflictError, type SimulatorStorage } from "./storage.js";
-import { datasetSizes, sourceSystems, type DatasetSize, type OrganizationConfig } from "./domain.js";
-import { applyFeedFailure, FailureController, FailureModeConfigSchema, parseFailureConfig, type FailureDecision } from "./failures.js";
+import {
+  MemorySimulatorStorage,
+  PostgresSimulatorStorage,
+  SQLiteSimulatorStorage,
+  StorageError,
+  WorldConflictError,
+  type SimulatorStorage,
+} from "./storage.js";
+import {
+  datasetSizes,
+  sourceSystems,
+  type DatasetSize,
+  type OrganizationConfig,
+} from "./domain.js";
+import {
+  applyFeedFailure,
+  FailureController,
+  FailureModeConfigSchema,
+  parseFailureConfig,
+  type FailureDecision,
+} from "./failures.js";
 import { OperationalTelemetry, type RequestTelemetryInput } from "./observability.js";
 import { BenchmarkRequestSchema, runPerformanceBenchmark } from "./performance.js";
 import { runConnectorTestKit } from "./connector-kit.js";
@@ -60,11 +78,19 @@ const ScenarioResetSchema = z
   .strict();
 const ScenarioAdvanceSchema = z
   .object({
-    hours: z.number().int().min(0).max(24 * 30).optional(),
+    hours: z
+      .number()
+      .int()
+      .min(0)
+      .max(24 * 30)
+      .optional(),
     days: z.number().int().min(0).max(30).optional(),
   })
   .strict()
-  .refine((input) => input.hours !== undefined || input.days !== undefined, "hours or days is required");
+  .refine(
+    (input) => input.hours !== undefined || input.days !== undefined,
+    "hours or days is required",
+  );
 const TriggerSchema = z.object({ eventId: z.string().min(1).max(100) }).strict();
 const EmptyBodySchema = z.object({}).strict();
 const PaginationSchema = z
@@ -74,9 +100,18 @@ const PaginationSchema = z
   })
   .strict();
 const SnapshotParamsSchema = z.object({ snapshotId: z.string().min(1).max(128) }).strict();
-const OverrideDirectorsSchema = z.record(z.string().min(1).max(96), z.number().int().min(0).max(MAX_DIRECTORS_PER_VP));
-const OverrideManagersSchema = z.record(z.string().min(1).max(96), z.number().int().min(0).max(MAX_MANAGERS_PER_DIRECTOR));
-const OverrideIcsSchema = z.record(z.string().min(1).max(96), z.number().int().min(0).max(MAX_ICS_PER_MANAGER));
+const OverrideDirectorsSchema = z.record(
+  z.string().min(1).max(96),
+  z.number().int().min(0).max(MAX_DIRECTORS_PER_VP),
+);
+const OverrideManagersSchema = z.record(
+  z.string().min(1).max(96),
+  z.number().int().min(0).max(MAX_MANAGERS_PER_DIRECTOR),
+);
+const OverrideIcsSchema = z.record(
+  z.string().min(1).max(96),
+  z.number().int().min(0).max(MAX_ICS_PER_MANAGER),
+);
 const DepartmentOrgConfigSchema = z
   .object({
     vpCount: z.number().int().min(0).max(MAX_VPS),
@@ -103,7 +138,10 @@ const OrganizationConfigSchema = z
   .superRefine((config, ctx) => {
     const counts = previewOrganizationCounts(config as OrganizationConfig);
     if (counts.totalPeople > MAX_TOTAL_PEOPLE) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `organization may not generate more than ${MAX_TOTAL_PEOPLE} people` });
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `organization may not generate more than ${MAX_TOTAL_PEOPLE} people`,
+      });
     }
     for (const issue of validateOrganizationConfigCompatibility(config as OrganizationConfig)) {
       ctx.addIssue({
@@ -112,7 +150,9 @@ const OrganizationConfigSchema = z
       });
     }
   });
-const OrganizationGenerateSchema = z.object({ seed: BoundedSeedSchema.optional(), config: OrganizationConfigSchema.optional() }).strict();
+const OrganizationGenerateSchema = z
+  .object({ seed: BoundedSeedSchema.optional(), config: OrganizationConfigSchema.optional() })
+  .strict();
 const DatasetGenerateSchema = z
   .object({
     seed: BoundedSeedSchema.optional(),
@@ -132,19 +172,35 @@ const ScenarioInstanceCreateSchema = z
     project: z.string().min(1).max(160).optional(),
     service: z.string().min(1).max(160).optional(),
     workstream: z.string().min(1).max(160).optional(),
-    participantPersonIds: z.record(z.string().min(1).max(128), z.string().min(1).max(160)).optional(),
+    participantPersonIds: z
+      .record(z.string().min(1).max(128), z.string().min(1).max(160))
+      .optional(),
   })
   .strict();
 const ClockUpdateSchema = z
   .object({
     mode: z.enum(["manual", "realtime"]).optional(),
-    speedMultiplier: z.number().positive().max(24 * 60).optional(),
+    speedMultiplier: z
+      .number()
+      .positive()
+      .max(24 * 60)
+      .optional(),
     paused: z.boolean().optional(),
     continuousActivity: z.boolean().optional(),
-    maxCatchUpSeconds: z.number().int().min(1).max(60 * 60 * 24 * 7).optional(),
+    maxCatchUpSeconds: z
+      .number()
+      .int()
+      .min(1)
+      .max(60 * 60 * 24 * 7)
+      .optional(),
     activityProfile: z.enum(["quiet", "standard", "intense"]).optional(),
     maxSuccessorInstancesPerReconciliation: z.number().int().min(0).max(100).optional(),
-    minSuccessorIntervalHours: z.number().int().min(0).max(24 * 30).optional(),
+    minSuccessorIntervalHours: z
+      .number()
+      .int()
+      .min(0)
+      .max(24 * 30)
+      .optional(),
   })
   .strict();
 
@@ -161,10 +217,12 @@ export async function createApp(options: AppOptions = {}) {
   const runtimeEnv = options.runtimeEnv ?? resolveRuntimeEnv(process.env);
   enforceProductionStorageOptions(runtimeEnv, options);
   const simulatorOptions: SimulatorOptions = {};
-  if (process.env.SIMULATOR_DEFAULT_SEED) simulatorOptions.seed = process.env.SIMULATOR_DEFAULT_SEED;
+  if (process.env.SIMULATOR_DEFAULT_SEED)
+    simulatorOptions.seed = process.env.SIMULATOR_DEFAULT_SEED;
   const configuredDatasetSize = parseDatasetSize(process.env.SIMULATOR_DEFAULT_DATASET_SIZE);
   if (configuredDatasetSize) simulatorOptions.datasetSize = configuredDatasetSize;
-  if (process.env.SIMULATOR_PUBLIC_BASE_URL) simulatorOptions.baseUrl = process.env.SIMULATOR_PUBLIC_BASE_URL;
+  if (process.env.SIMULATOR_PUBLIC_BASE_URL)
+    simulatorOptions.baseUrl = process.env.SIMULATOR_PUBLIC_BASE_URL;
   const clockMode = parseClockMode(process.env.SIMULATOR_CLOCK_MODE);
   if (clockMode) simulatorOptions.clockMode = clockMode;
   const clockSpeed = parsePositiveNumber(process.env.SIMULATOR_CLOCK_SPEED);
@@ -174,7 +232,8 @@ export async function createApp(options: AppOptions = {}) {
   const continuousActivity = parseBoolean(process.env.SIMULATOR_CONTINUOUS_ACTIVITY);
   if (continuousActivity !== undefined) simulatorOptions.continuousActivity = continuousActivity;
   if (options.storage) simulatorOptions.storage = options.storage;
-  if (!options.simulator && !options.storage) simulatorOptions.storage = createStorageForRuntime(runtimeEnv);
+  if (!options.simulator && !options.storage)
+    simulatorOptions.storage = createStorageForRuntime(runtimeEnv);
   const feedReconciliationMaxCatchUpSeconds =
     options.feedReconciliationMaxCatchUpSeconds ??
     parsePositiveInteger(process.env.SIMULATOR_FEED_MAX_CATCH_UP_SECONDS) ??
@@ -183,8 +242,13 @@ export async function createApp(options: AppOptions = {}) {
   const simulator = options.simulator ?? (await SourceSimulator.create(simulatorOptions));
   enforceProductionSimulatorStorage(runtimeEnv, simulator);
   const auth = buildAuthConfig(simulator, options, runtimeEnv);
-  const telemetry = new OperationalTelemetry(process.env.SIMULATOR_STRUCTURED_LOGS === "true" || isProductionLike(runtimeEnv));
-  const rateLimiter = new RateLimiter(buildRateLimitConfig(runtimeEnv, options.rateLimitConfigJson), (input) => simulator.checkDistributedRateLimit(input));
+  const telemetry = new OperationalTelemetry(
+    process.env.SIMULATOR_STRUCTURED_LOGS === "true" || isProductionLike(runtimeEnv),
+  );
+  const rateLimiter = new RateLimiter(
+    buildRateLimitConfig(runtimeEnv, options.rateLimitConfigJson),
+    (input) => simulator.checkDistributedRateLimit(input),
+  );
   const failureController = new FailureController();
   failureController.setConfig(parseFailureConfig(process.env.SIMULATOR_FAILURE_MODES));
   const requestIds = new WeakMap<Request, string>();
@@ -193,15 +257,32 @@ export async function createApp(options: AppOptions = {}) {
   app.onError((error, c) => {
     const correlationId = requestIds.get(c.req.raw) ?? "unknown";
     if (error instanceof HttpError) {
-      return jsonError(error.status, { ...error.details, error: error.message, classification: error.classification, correlationId });
+      return jsonError(error.status, {
+        ...error.details,
+        error: error.message,
+        classification: error.classification,
+        correlationId,
+      });
     }
     if (error instanceof WorldConflictError) {
-      return jsonError(409, { error: error.message, classification: "world_conflict", correlationId });
+      return jsonError(409, {
+        error: error.message,
+        classification: "world_conflict",
+        correlationId,
+      });
     }
     if (error instanceof StorageError) {
-      return jsonError(503, { error: error.message, classification: "storage_error", correlationId });
+      return jsonError(503, {
+        error: error.message,
+        classification: "storage_error",
+        correlationId,
+      });
     }
-    return jsonError(500, { error: "Internal simulator error", classification: "internal_error", correlationId });
+    return jsonError(500, {
+      error: "Internal simulator error",
+      classification: "internal_error",
+      correlationId,
+    });
   });
 
   app.use("*", async (c, next) => {
@@ -228,7 +309,8 @@ export async function createApp(options: AppOptions = {}) {
       };
       const connectionId = connectionIdFromPath(c.req.path);
       const worldRevision = await safeWorldRevision(simulator);
-      const responseClassification = c.res.headers.get("x-simulator-error-classification") ?? undefined;
+      const responseClassification =
+        c.res.headers.get("x-simulator-error-classification") ?? undefined;
       const errorClassification = thrown
         ? thrown instanceof HttpError
           ? thrown.classification
@@ -250,7 +332,11 @@ export async function createApp(options: AppOptions = {}) {
   app.get("/", (c) => c.redirect("/console"));
   app.get("/healthz", (c) => c.json(buildLiveness(telemetry)));
   app.get("/readyz", async (c) => {
-    const readiness = await buildReadiness(simulator, telemetry, requestIds.get(c.req.raw) ?? "unknown");
+    const readiness = await buildReadiness(
+      simulator,
+      telemetry,
+      requestIds.get(c.req.raw) ?? "unknown",
+    );
     return c.json(readiness.body, readiness.status);
   });
   app.get("/console", (c) => c.html(consoleHtml));
@@ -266,32 +352,94 @@ export async function createApp(options: AppOptions = {}) {
       })),
     }),
   );
-  app.get("/v1/catalog/scenario-packs", (c) => c.json({ scenarioPacks: simulator.scenarioPacks() }));
-  app.get("/v1/catalog/scenario-instances", (c) => withAdmin(c, auth, rateLimiter, requestIds, simulator, async () => c.json({ scenarioInstances: await simulator.scenarioInstances() })));
+  app.get("/v1/catalog/scenario-packs", (c) =>
+    c.json({ scenarioPacks: simulator.scenarioPacks() }),
+  );
+  app.get("/v1/catalog/scenario-instances", (c) =>
+    withAdmin(c, auth, rateLimiter, requestIds, simulator, async () =>
+      c.json({ scenarioInstances: await simulator.scenarioInstances() }),
+    ),
+  );
   app.get("/v1/catalog/seats", (c) => c.json({ roleTemplates }));
-  app.get("/v1/catalog/people", (c) => withAdmin(c, auth, rateLimiter, requestIds, simulator, () => c.json({ people: simulator.people() })));
-  app.get("/v1/catalog/people/:personId", (c) => withAdmin(c, auth, rateLimiter, requestIds, simulator, () => c.json(simulator.person(c.req.param("personId")))));
-  app.get("/v1/catalog/organization", (c) => withAdmin(c, auth, rateLimiter, requestIds, simulator, () => c.json(simulator.organizationSummary())));
-  app.get("/v1/catalog/organization/tree", (c) => withAdmin(c, auth, rateLimiter, requestIds, simulator, () => c.json(simulator.organizationTree())));
-  app.get("/v1/catalog/teams", (c) => withAdmin(c, auth, rateLimiter, requestIds, simulator, () => c.json({ teams: simulator.teams() })));
-  app.get("/v1/catalog/teams/:teamId", (c) => withAdmin(c, auth, rateLimiter, requestIds, simulator, () => c.json(simulator.team(c.req.param("teamId")))));
+  app.get("/v1/catalog/people", (c) =>
+    withAdmin(c, auth, rateLimiter, requestIds, simulator, () =>
+      c.json({ people: simulator.people() }),
+    ),
+  );
+  app.get("/v1/catalog/people/:personId", (c) =>
+    withAdmin(c, auth, rateLimiter, requestIds, simulator, () =>
+      c.json(simulator.person(c.req.param("personId"))),
+    ),
+  );
+  app.get("/v1/catalog/organization", (c) =>
+    withAdmin(c, auth, rateLimiter, requestIds, simulator, () =>
+      c.json(simulator.organizationSummary()),
+    ),
+  );
+  app.get("/v1/catalog/organization/tree", (c) =>
+    withAdmin(c, auth, rateLimiter, requestIds, simulator, () =>
+      c.json(simulator.organizationTree()),
+    ),
+  );
+  app.get("/v1/catalog/teams", (c) =>
+    withAdmin(c, auth, rateLimiter, requestIds, simulator, () =>
+      c.json({ teams: simulator.teams() }),
+    ),
+  );
+  app.get("/v1/catalog/teams/:teamId", (c) =>
+    withAdmin(c, auth, rateLimiter, requestIds, simulator, () =>
+      c.json(simulator.team(c.req.param("teamId"))),
+    ),
+  );
 
   app.get("/v1/connections/:connectionId/manifest", async (c) => {
-    const authenticated = await authenticateConnection(c, auth, simulator, requestIds, c.req.param("connectionId"));
+    const authenticated = await authenticateConnection(
+      c,
+      auth,
+      simulator,
+      requestIds,
+      c.req.param("connectionId"),
+    );
     if (!authenticated.ok) return authenticated.response;
-    const rateLimited = await rateLimitConnection(c, rateLimiter, requestIds, authenticated.connectionId);
+    const rateLimited = await rateLimitConnection(
+      c,
+      rateLimiter,
+      requestIds,
+      authenticated.connectionId,
+    );
     if (rateLimited) return rateLimited;
-    const failure = await failureResponse(c, failureController.evaluate({ operation: "manifest", connectionId: authenticated.connectionId }), requestIds);
+    const failure = await failureResponse(
+      c,
+      failureController.evaluate({
+        operation: "manifest",
+        connectionId: authenticated.connectionId,
+      }),
+      requestIds,
+    );
     if (failure) return failure;
     return c.json(simulator.manifest(authenticated.connectionId));
   });
 
   app.get("/v1/connections/:connectionId/records", async (c) => {
-    const authenticated = await authenticateConnection(c, auth, simulator, requestIds, c.req.param("connectionId"));
+    const authenticated = await authenticateConnection(
+      c,
+      auth,
+      simulator,
+      requestIds,
+      c.req.param("connectionId"),
+    );
     if (!authenticated.ok) return authenticated.response;
-    const rateLimited = await rateLimitConnection(c, rateLimiter, requestIds, authenticated.connectionId);
+    const rateLimited = await rateLimitConnection(
+      c,
+      rateLimiter,
+      requestIds,
+      authenticated.connectionId,
+    );
     if (rateLimited) return rateLimited;
-    const pagination = parseSchema(PaginationSchema, { cursor: c.req.query("cursor"), limit: c.req.query("limit") });
+    const pagination = parseSchema(PaginationSchema, {
+      cursor: c.req.query("cursor"),
+      limit: c.req.query("limit"),
+    });
     recordReconciliationTelemetry(
       telemetry,
       await simulator.reconcileSimulationClock({
@@ -299,28 +447,53 @@ export async function createApp(options: AppOptions = {}) {
         maxCatchUpSeconds: feedReconciliationMaxCatchUpSeconds,
       }),
     );
-    const decision = failureController.evaluate({ operation: "feed", connectionId: authenticated.connectionId });
+    const decision = failureController.evaluate({
+      operation: "feed",
+      connectionId: authenticated.connectionId,
+    });
     const failure = await failureResponse(c, decision, requestIds);
     if (failure) return failure;
-    const boundedLimit = decision.pageSize ? Math.min(pagination.limit ?? MAX_PAGE_SIZE, decision.pageSize) : pagination.limit;
-    return c.json(applyFeedFailure(await simulator.feed(authenticated.connectionId, pagination.cursor, boundedLimit), decision));
+    const boundedLimit = decision.pageSize
+      ? Math.min(pagination.limit ?? MAX_PAGE_SIZE, decision.pageSize)
+      : pagination.limit;
+    return c.json(
+      applyFeedFailure(
+        await simulator.feed(authenticated.connectionId, pagination.cursor, boundedLimit),
+        decision,
+      ),
+    );
   });
 
   app.get("/sim/:sourceSystem/:sourceId", async (c) => {
     const authenticated = await authenticateConnection(c, auth, simulator, requestIds);
     if (!authenticated.ok) return authenticated.response;
-    const rateLimited = await rateLimitConnection(c, rateLimiter, requestIds, authenticated.connectionId);
+    const rateLimited = await rateLimitConnection(
+      c,
+      rateLimiter,
+      requestIds,
+      authenticated.connectionId,
+    );
     if (rateLimited) return rateLimited;
     const failure = await failureResponse(
       c,
-      failureController.evaluate({ operation: "deep_link", connectionId: authenticated.connectionId, sourceSystem: c.req.param("sourceSystem") }),
+      failureController.evaluate({
+        operation: "deep_link",
+        connectionId: authenticated.connectionId,
+        sourceSystem: c.req.param("sourceSystem"),
+      }),
       requestIds,
     );
     if (failure) return failure;
-    const record = await simulator.findRecordForConnection(authenticated.connectionId, c.req.param("sourceSystem"), c.req.param("sourceId"));
+    const record = await simulator.findRecordForConnection(
+      authenticated.connectionId,
+      c.req.param("sourceSystem"),
+      c.req.param("sourceId"),
+    );
     const accept = c.req.header("accept") ?? "";
     if (accept.includes("text/html")) {
-      return c.html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${escapeHtml(record.title)}</title></head><body><main><h1>${escapeHtml(record.title)}</h1><pre>${escapeHtml(JSON.stringify(record, null, 2))}</pre></main></body></html>`);
+      return c.html(
+        `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${escapeHtml(record.title)}</title></head><body><main><h1>${escapeHtml(record.title)}</h1><pre>${escapeHtml(JSON.stringify(record, null, 2))}</pre></main></body></html>`,
+      );
     }
     return c.json({ record });
   });
@@ -345,11 +518,15 @@ export async function createApp(options: AppOptions = {}) {
   });
 
   app.post("/v1/admin/scenarios/:scenarioId/reset", async (c) => {
-    const body = compactOptional(await readJsonBody(c.req.raw, ScenarioResetSchema)) as ScenarioResetInput;
+    const body = compactOptional(
+      await readJsonBody(c.req.raw, ScenarioResetSchema),
+    ) as ScenarioResetInput;
     return c.json(await simulator.resetScenario(c.req.param("scenarioId"), body));
   });
   app.post("/v1/admin/scenarios/:scenarioId/advance", async (c) => {
-    const body = compactOptional(await readJsonBody(c.req.raw, ScenarioAdvanceSchema)) as ScenarioAdvanceInput;
+    const body = compactOptional(
+      await readJsonBody(c.req.raw, ScenarioAdvanceSchema),
+    ) as ScenarioAdvanceInput;
     return c.json(await simulator.advanceScenario(c.req.param("scenarioId"), body));
   });
   app.post("/v1/admin/scenarios/:scenarioId/trigger", async (c) => {
@@ -364,25 +541,37 @@ export async function createApp(options: AppOptions = {}) {
     await readJsonBody(c.req.raw, EmptyBodySchema);
     return c.json(await simulator.resumeScenario(c.req.param("scenarioId")));
   });
-  app.get("/v1/admin/scenarios/:scenarioId/state", async (c) => c.json(await simulator.state(c.req.param("scenarioId"))));
-  app.get("/v1/admin/scenarios/:scenarioId/events", async (c) => c.json({ events: await simulator.eventLog(c.req.param("scenarioId")) }));
+  app.get("/v1/admin/scenarios/:scenarioId/state", async (c) =>
+    c.json(await simulator.state(c.req.param("scenarioId"))),
+  );
+  app.get("/v1/admin/scenarios/:scenarioId/events", async (c) =>
+    c.json({ events: await simulator.eventLog(c.req.param("scenarioId")) }),
+  );
   app.get("/v1/admin/records", async (c) => c.json({ records: await simulator.allRecords() }));
   app.get("/v1/admin/connections", (c) => c.json({ connections: simulator.connectionsForAdmin() }));
   app.post("/v1/admin/scenario-instances", async (c) => {
-    const body = compactOptional(await readJsonBody(c.req.raw, ScenarioInstanceCreateSchema)) as unknown as ScenarioInstanceCreateInput;
+    const body = compactOptional(
+      await readJsonBody(c.req.raw, ScenarioInstanceCreateSchema),
+    ) as unknown as ScenarioInstanceCreateInput;
     return c.json(await simulator.createScenarioInstance(body));
   });
   app.post("/v1/admin/scenario-instances/:instanceId/reset", async (c) => {
-    const body = compactOptional(await readJsonBody(c.req.raw, ScenarioResetSchema)) as ScenarioResetInput;
+    const body = compactOptional(
+      await readJsonBody(c.req.raw, ScenarioResetSchema),
+    ) as ScenarioResetInput;
     return c.json(await simulator.resetScenarioInstance(c.req.param("instanceId"), body));
   });
   app.post("/v1/admin/scenario-instances/:instanceId/advance", async (c) => {
-    const body = compactOptional(await readJsonBody(c.req.raw, ScenarioAdvanceSchema)) as ScenarioAdvanceInput;
+    const body = compactOptional(
+      await readJsonBody(c.req.raw, ScenarioAdvanceSchema),
+    ) as ScenarioAdvanceInput;
     return c.json(await simulator.advanceScenarioInstance(c.req.param("instanceId"), body));
   });
   app.post("/v1/admin/scenario-instances/:instanceId/trigger", async (c) => {
     const body = await readJsonBody(c.req.raw, TriggerSchema);
-    return c.json(await simulator.triggerScenarioInstanceEvent(c.req.param("instanceId"), body.eventId));
+    return c.json(
+      await simulator.triggerScenarioInstanceEvent(c.req.param("instanceId"), body.eventId),
+    );
   });
   app.post("/v1/admin/scenario-instances/:instanceId/pause", async (c) => {
     await readJsonBody(c.req.raw, EmptyBodySchema);
@@ -392,11 +581,21 @@ export async function createApp(options: AppOptions = {}) {
     await readJsonBody(c.req.raw, EmptyBodySchema);
     return c.json(await simulator.resumeScenarioInstance(c.req.param("instanceId")));
   });
-  app.get("/v1/admin/scenario-instances/:instanceId", async (c) => c.json(await simulator.scenarioInstance(c.req.param("instanceId"))));
-  app.delete("/v1/admin/scenario-instances/:instanceId", async (c) => c.json(await simulator.deleteScenarioInstance(c.req.param("instanceId"))));
-  app.get("/v1/admin/scenario-instances/:instanceId/events", async (c) => c.json({ events: (await simulator.scenarioInstance(c.req.param("instanceId"))).events }));
-  app.get("/v1/admin/scenario-instances/:instanceId/changes", async (c) => c.json({ changes: (await simulator.scenarioInstance(c.req.param("instanceId"))).changes }));
-  app.get("/v1/admin/snapshots", async (c) => c.json({ snapshots: await simulator.listSnapshots() }));
+  app.get("/v1/admin/scenario-instances/:instanceId", async (c) =>
+    c.json(await simulator.scenarioInstance(c.req.param("instanceId"))),
+  );
+  app.delete("/v1/admin/scenario-instances/:instanceId", async (c) =>
+    c.json(await simulator.deleteScenarioInstance(c.req.param("instanceId"))),
+  );
+  app.get("/v1/admin/scenario-instances/:instanceId/events", async (c) =>
+    c.json({ events: (await simulator.scenarioInstance(c.req.param("instanceId"))).events }),
+  );
+  app.get("/v1/admin/scenario-instances/:instanceId/changes", async (c) =>
+    c.json({ changes: (await simulator.scenarioInstance(c.req.param("instanceId"))).changes }),
+  );
+  app.get("/v1/admin/snapshots", async (c) =>
+    c.json({ snapshots: await simulator.listSnapshots() }),
+  );
   app.post("/v1/admin/snapshots", async (c) => {
     await readJsonBody(c.req.raw, EmptyBodySchema);
     return c.json(await simulator.createSnapshot());
@@ -407,34 +606,68 @@ export async function createApp(options: AppOptions = {}) {
     return c.json(await simulator.restoreSnapshot(params.snapshotId));
   });
   app.post("/v1/admin/organization/generate", async (c) => {
-    const body = compactOptional(await readJsonBody(c.req.raw, OrganizationGenerateSchema)) as OrganizationGenerateInput;
+    const body = compactOptional(
+      await readJsonBody(c.req.raw, OrganizationGenerateSchema),
+    ) as OrganizationGenerateInput;
     return c.json(await simulator.regenerateOrganization(body));
   });
   app.post("/v1/admin/organization/reset", async (c) => {
     await readJsonBody(c.req.raw, EmptyBodySchema);
     return c.json(await simulator.resetOrganization());
   });
-  app.get("/v1/admin/organization/relationships", (c) => c.json(simulator.organizationRelationships()));
+  app.get("/v1/admin/organization/relationships", (c) =>
+    c.json(simulator.organizationRelationships()),
+  );
   app.get("/v1/admin/organization/preview", (c) => c.json(simulator.previewOrganization()));
   app.get("/v1/admin/organization/config", (c) => c.json(simulator.getOrganizationConfig()));
   app.put("/v1/admin/organization/config", async (c) =>
-    c.json(await simulator.putOrganizationConfig((await readJsonBody(c.req.raw, OrganizationConfigSchema)) as OrganizationConfig)),
+    c.json(
+      await simulator.putOrganizationConfig(
+        (await readJsonBody(c.req.raw, OrganizationConfigSchema)) as OrganizationConfig,
+      ),
+    ),
   );
-  app.get("/v1/admin/people/:personId/records", async (c) => c.json(await simulator.recordsForPerson(c.req.param("personId"))));
+  app.get("/v1/admin/people/:personId/records", async (c) =>
+    c.json(await simulator.recordsForPerson(c.req.param("personId"))),
+  );
   app.get("/v1/admin/people/:personId/compare/:otherPersonId", async (c) =>
-    c.json(await simulator.comparePersonVisibility(c.req.param("personId"), c.req.param("otherPersonId"))),
+    c.json(
+      await simulator.comparePersonVisibility(
+        c.req.param("personId"),
+        c.req.param("otherPersonId"),
+      ),
+    ),
   );
-  app.get("/v1/admin/source-objects", async (c) => c.json({ sourceObjects: await simulator.sourceObjects() }));
+  app.get("/v1/admin/source-objects", async (c) =>
+    c.json({ sourceObjects: await simulator.sourceObjects() }),
+  );
   app.get("/v1/admin/source-objects/:sourceSystem/:sourceId", async (c) =>
-    c.json({ sourceObject: await simulator.sourceObject(c.req.param("sourceSystem"), c.req.param("sourceId")) }),
+    c.json({
+      sourceObject: await simulator.sourceObject(
+        c.req.param("sourceSystem"),
+        c.req.param("sourceId"),
+      ),
+    }),
   );
   app.get("/v1/admin/source-objects/:sourceSystem/:sourceId/history", async (c) =>
-    c.json({ history: await simulator.sourceObjectHistory(c.req.param("sourceSystem"), c.req.param("sourceId")) }),
+    c.json({
+      history: await simulator.sourceObjectHistory(
+        c.req.param("sourceSystem"),
+        c.req.param("sourceId"),
+      ),
+    }),
   );
-  app.get("/v1/admin/source-changes", async (c) => c.json({ sourceChanges: await simulator.sourceChanges() }));
+  app.get("/v1/admin/source-changes", async (c) =>
+    c.json({ sourceChanges: await simulator.sourceChanges() }),
+  );
+  app.get("/v1/admin/exports/workforce-one-snapshot", async (c) =>
+    c.json(await simulator.workforceOneSnapshot()),
+  );
   app.get("/v1/admin/clock", async (c) => c.json(await simulator.clockStatus()));
   app.put("/v1/admin/clock", async (c) => {
-    const body = compactOptional(await readJsonBody(c.req.raw, ClockUpdateSchema)) as ClockUpdateInput;
+    const body = compactOptional(
+      await readJsonBody(c.req.raw, ClockUpdateSchema),
+    ) as ClockUpdateInput;
     return c.json(await simulator.updateClock(body));
   });
   app.post("/v1/admin/clock/reconcile", async (c) => {
@@ -451,11 +684,15 @@ export async function createApp(options: AppOptions = {}) {
     await readJsonBody(c.req.raw, EmptyBodySchema);
     return c.json(await simulator.resumeClock());
   });
-  app.get("/v1/admin/metrics", async (c) => c.json(await buildMetrics(simulator, telemetry, failureController, rateLimiter)));
+  app.get("/v1/admin/metrics", async (c) =>
+    c.json(await buildMetrics(simulator, telemetry, failureController, rateLimiter)),
+  );
   app.get("/v1/admin/requests", (c) => c.json({ requests: telemetry.snapshot().requests.recent }));
   app.get("/v1/admin/storage", async (c) => c.json(await buildStorageInspector(simulator)));
   app.get("/v1/admin/failure-modes", (c) => c.json(failureController.getConfig()));
-  app.put("/v1/admin/failure-modes", async (c) => c.json(failureController.setConfig(await readJsonBody(c.req.raw, FailureModeConfigSchema))));
+  app.put("/v1/admin/failure-modes", async (c) =>
+    c.json(failureController.setConfig(await readJsonBody(c.req.raw, FailureModeConfigSchema))),
+  );
   app.post("/v1/admin/failure-modes/reset", async (c) => {
     await readJsonBody(c.req.raw, EmptyBodySchema);
     return c.json(failureController.reset());
@@ -465,7 +702,9 @@ export async function createApp(options: AppOptions = {}) {
     return c.json(
       await runPerformanceBenchmark(body, {
         ...(process.env.DATABASE_URL ? { applicationDatabaseUrl: process.env.DATABASE_URL } : {}),
-        ...(process.env.SIMULATOR_BENCHMARK_DATABASE_URL ? { benchmarkDatabaseUrl: process.env.SIMULATOR_BENCHMARK_DATABASE_URL } : {}),
+        ...(process.env.SIMULATOR_BENCHMARK_DATABASE_URL
+          ? { benchmarkDatabaseUrl: process.env.SIMULATOR_BENCHMARK_DATABASE_URL }
+          : {}),
         runtimeEnv,
       }),
     );
@@ -475,7 +714,9 @@ export async function createApp(options: AppOptions = {}) {
     return c.json(await runConnectorTestKit());
   });
   app.post("/v1/admin/datasets/generate", async (c) => {
-    const body = compactOptional(await readJsonBody(c.req.raw, DatasetGenerateSchema)) as DatasetGenerateInput;
+    const body = compactOptional(
+      await readJsonBody(c.req.raw, DatasetGenerateSchema),
+    ) as DatasetGenerateInput;
     return c.json(await simulator.generateDataset(body));
   });
   app.get("/v1/admin/datasets/current", async (c) => c.json(await simulator.datasetMetadata()));
@@ -501,7 +742,11 @@ function buildLiveness(telemetry: OperationalTelemetry) {
   };
 }
 
-async function buildReadiness(simulator: SourceSimulator, telemetry: OperationalTelemetry, correlationId: string): Promise<{ status: 200 | 503; body: Record<string, unknown> }> {
+async function buildReadiness(
+  simulator: SourceSimulator,
+  telemetry: OperationalTelemetry,
+  correlationId: string,
+): Promise<{ status: 200 | 503; body: Record<string, unknown> }> {
   const storage = await simulator.storageHealth();
   try {
     if (!storage.ok) {
@@ -540,7 +785,9 @@ async function buildReadiness(simulator: SourceSimulator, telemetry: Operational
           mode: clockStatus.clock.mode,
           paused: clockStatus.clock.paused,
           lastReconciledWallTime: clockStatus.clock.lastReconciledWallTime,
-          lastReconciliationStatus: clockStatus.clock.lastReconciliationReport ? "available" : "not_reconciled",
+          lastReconciliationStatus: clockStatus.clock.lastReconciliationReport
+            ? "available"
+            : "not_reconciled",
         },
         datasetMetadata: metadata,
         organization: {
@@ -626,7 +873,11 @@ async function buildStorageInspector(simulator: SourceSimulator) {
   };
 }
 
-async function failureResponse(c: Context, decision: FailureDecision, requestIds: WeakMap<Request, string>): Promise<Response | null> {
+async function failureResponse(
+  c: Context,
+  decision: FailureDecision,
+  requestIds: WeakMap<Request, string>,
+): Promise<Response | null> {
   if (decision.latencyMs) await sleep(decision.latencyMs);
   if (!decision.errorStatus) return null;
   return jsonError(decision.errorStatus, {
@@ -636,11 +887,19 @@ async function failureResponse(c: Context, decision: FailureDecision, requestIds
   });
 }
 
-function jsonError(status: number, body: Record<string, unknown>, headers: Record<string, string> = {}): Response {
+function jsonError(
+  status: number,
+  body: Record<string, unknown>,
+  headers: Record<string, string> = {},
+): Response {
   const classification = typeof body.classification === "string" ? body.classification : "error";
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json", "x-simulator-error-classification": classification, ...headers },
+    headers: {
+      "content-type": "application/json",
+      "x-simulator-error-classification": classification,
+      ...headers,
+    },
   });
 }
 
@@ -669,10 +928,15 @@ function connectionIdFromPath(path: string): string | undefined {
   return /^\/v1\/connections\/([^/]+)/.exec(path)?.[1];
 }
 
-function readCursorTelemetry(cursor: string | undefined): { version?: number; afterSequence?: number } | undefined {
+function readCursorTelemetry(
+  cursor: string | undefined,
+): { version?: number; afterSequence?: number } | undefined {
   if (!cursor) return undefined;
   try {
-    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Record<string, unknown>;
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Record<
+      string,
+      unknown
+    >;
     const telemetry: { version?: number; afterSequence?: number } = {};
     if (typeof parsed.v === "number") telemetry.version = parsed.v;
     if (typeof parsed.afterSequence === "number") telemetry.afterSequence = parsed.afterSequence;
@@ -690,11 +954,16 @@ async function safeWorldRevision(simulator: SourceSimulator): Promise<string | u
   }
 }
 
-async function readJsonBody<TSchema extends z.ZodTypeAny>(request: Request, schema: TSchema): Promise<z.infer<TSchema>> {
+async function readJsonBody<TSchema extends z.ZodTypeAny>(
+  request: Request,
+  schema: TSchema,
+): Promise<z.infer<TSchema>> {
   const contentLength = Number(request.headers.get("content-length") ?? "0");
-  if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) throw badRequest("Request body is too large");
+  if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES)
+    throw badRequest("Request body is too large");
   const text = await request.text();
-  if (Buffer.byteLength(text, "utf8") > MAX_BODY_BYTES) throw badRequest("Request body is too large");
+  if (Buffer.byteLength(text, "utf8") > MAX_BODY_BYTES)
+    throw badRequest("Request body is too large");
   if (!text.trim()) return parseSchema(schema, {});
   let parsed: unknown;
   try {
@@ -705,7 +974,10 @@ async function readJsonBody<TSchema extends z.ZodTypeAny>(request: Request, sche
   return parseSchema(schema, parsed);
 }
 
-function parseSchema<TSchema extends z.ZodTypeAny>(schema: TSchema, value: unknown): z.infer<TSchema> {
+function parseSchema<TSchema extends z.ZodTypeAny>(
+  schema: TSchema,
+  value: unknown,
+): z.infer<TSchema> {
   const parsed = schema.safeParse(value);
   if (!parsed.success) {
     throw badRequest(parsed.error.issues[0]?.message ?? "Invalid request");
@@ -733,10 +1005,18 @@ async function withAdmin(
   return handler();
 }
 
-function authenticateAdmin(c: Context, auth: AuthConfig, requestIds: WeakMap<Request, string>): Response | null {
+function authenticateAdmin(
+  c: Context,
+  auth: AuthConfig,
+  requestIds: WeakMap<Request, string>,
+): Response | null {
   return hasSecret(c.req.header(), auth.adminKey, "x-admin-api-key")
     ? null
-    : jsonError(401, { error: "Unauthorized", classification: "authentication_error", correlationId: requestIds.get(c.req.raw) ?? "unknown" });
+    : jsonError(401, {
+        error: "Unauthorized",
+        classification: "authentication_error",
+        correlationId: requestIds.get(c.req.raw) ?? "unknown",
+      });
 }
 
 function authenticateCron(c: Context, requestIds: WeakMap<Request, string>): Response | null {
@@ -749,7 +1029,9 @@ function authenticateCron(c: Context, requestIds: WeakMap<Request, string>): Res
     });
   }
   const authorization = c.req.header("authorization") ?? c.req.header("Authorization");
-  const supplied = authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : undefined;
+  const supplied = authorization?.startsWith("Bearer ")
+    ? authorization.slice("Bearer ".length)
+    : undefined;
   if (!supplied || !constantTimeEqual(supplied, expected)) {
     return jsonError(401, {
       error: "Unauthorized",
@@ -769,18 +1051,30 @@ async function authenticateConnection(
 ): Promise<ConnectionAuthResult> {
   await simulator.refreshOrganizationFromStorage();
   const credential = extractSecret(c.req.header(), "x-connection-secret");
-  if (!credential || auth.revokedConnectionCredentials.has(credential)) return authFailure(c, requestIds, 401, "Unauthorized");
+  if (!credential || auth.revokedConnectionCredentials.has(credential))
+    return authFailure(c, requestIds, 401, "Unauthorized");
   let authenticatedConnectionId = auth.connectionCredentialToConnectionId.get(credential);
-  if (!authenticatedConnectionId && auth.dynamicDevelopmentCredentials && credential.startsWith(`${DEV_CONNECTION_PREFIX}:`)) {
+  if (
+    !authenticatedConnectionId &&
+    auth.dynamicDevelopmentCredentials &&
+    credential.startsWith(`${DEV_CONNECTION_PREFIX}:`)
+  ) {
     authenticatedConnectionId = credential.slice(`${DEV_CONNECTION_PREFIX}:`.length);
   }
   if (!authenticatedConnectionId) return authFailure(c, requestIds, 401, "Unauthorized");
-  if (!simulator.hasConnection(authenticatedConnectionId)) return authFailure(c, requestIds, 401, "Unauthorized");
-  if (requestedConnectionId && requestedConnectionId !== authenticatedConnectionId) return authFailure(c, requestIds, 403, "Forbidden");
+  if (!simulator.hasConnection(authenticatedConnectionId))
+    return authFailure(c, requestIds, 401, "Unauthorized");
+  if (requestedConnectionId && requestedConnectionId !== authenticatedConnectionId)
+    return authFailure(c, requestIds, 403, "Forbidden");
   return { ok: true, connectionId: authenticatedConnectionId };
 }
 
-function authFailure(c: Context, requestIds: WeakMap<Request, string>, status: 401 | 403, message: string): ConnectionAuthResult {
+function authFailure(
+  c: Context,
+  requestIds: WeakMap<Request, string>,
+  status: 401 | 403,
+  message: string,
+): ConnectionAuthResult {
   return {
     ok: false,
     response: jsonError(status, {
@@ -791,19 +1085,36 @@ function authFailure(c: Context, requestIds: WeakMap<Request, string>, status: 4
   };
 }
 
-async function rateLimitAdmin(c: Context, rateLimiter: RateLimiter, requestIds: WeakMap<Request, string>): Promise<Response | null> {
+async function rateLimitAdmin(
+  c: Context,
+  rateLimiter: RateLimiter,
+  requestIds: WeakMap<Request, string>,
+): Promise<Response | null> {
   return rateLimitResponse(c, await rateLimiter.check("admin", "admin"), requestIds);
 }
 
-async function rateLimitConnection(c: Context, rateLimiter: RateLimiter, requestIds: WeakMap<Request, string>, connectionId: string): Promise<Response | null> {
+async function rateLimitConnection(
+  c: Context,
+  rateLimiter: RateLimiter,
+  requestIds: WeakMap<Request, string>,
+  connectionId: string,
+): Promise<Response | null> {
   return rateLimitResponse(c, await rateLimiter.check("connection", connectionId), requestIds);
 }
 
-async function rateLimitCron(c: Context, rateLimiter: RateLimiter, requestIds: WeakMap<Request, string>): Promise<Response | null> {
+async function rateLimitCron(
+  c: Context,
+  rateLimiter: RateLimiter,
+  requestIds: WeakMap<Request, string>,
+): Promise<Response | null> {
   return rateLimitResponse(c, await rateLimiter.check("cron", "cron"), requestIds);
 }
 
-function rateLimitResponse(c: Context, decision: { allowed: boolean; retryAfterSeconds?: number }, requestIds: WeakMap<Request, string>): Response | null {
+function rateLimitResponse(
+  c: Context,
+  decision: { allowed: boolean; retryAfterSeconds?: number },
+  requestIds: WeakMap<Request, string>,
+): Response | null {
   if (decision.allowed) return null;
   return jsonError(
     429,
@@ -816,11 +1127,18 @@ function rateLimitResponse(c: Context, decision: { allowed: boolean; retryAfterS
   );
 }
 
-function hasSecret(headers: Record<string, string | undefined>, expected: string, headerName: string): boolean {
+function hasSecret(
+  headers: Record<string, string | undefined>,
+  expected: string,
+  headerName: string,
+): boolean {
   return extractSecret(headers, headerName) === expected;
 }
 
-function extractSecret(headers: Record<string, string | undefined>, headerName: string): string | undefined {
+function extractSecret(
+  headers: Record<string, string | undefined>,
+  headerName: string,
+): string | undefined {
   const headerSecret = headers[headerName] ?? headers[headerName.toLowerCase()];
   const auth = headers.authorization ?? headers.Authorization;
   const bearerSecret = auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length) : undefined;
@@ -834,7 +1152,16 @@ function constantTimeEqual(left: string, right: string): boolean {
   return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-function recordReconciliationTelemetry(telemetry: OperationalTelemetry, report: { trigger: string; simulationDeltaMs: number; instancesCreated: number; changesAppended: number; alreadyCurrent: boolean }): void {
+function recordReconciliationTelemetry(
+  telemetry: OperationalTelemetry,
+  report: {
+    trigger: string;
+    simulationDeltaMs: number;
+    instancesCreated: number;
+    changesAppended: number;
+    alreadyCurrent: boolean;
+  },
+): void {
   telemetry.increment("reconciliation.count");
   telemetry.increment(`reconciliation.trigger.${report.trigger}`);
   if (report.alreadyCurrent) telemetry.increment("reconciliation.already_current");
@@ -843,12 +1170,21 @@ function recordReconciliationTelemetry(telemetry: OperationalTelemetry, report: 
   telemetry.increment("reconciliation.source_changes_appended", report.changesAppended);
 }
 
-function buildAuthConfig(simulator: SourceSimulator, options: AppOptions, runtimeEnv: RuntimeEnv): AuthConfig {
+function buildAuthConfig(
+  simulator: SourceSimulator,
+  options: AppOptions,
+  runtimeEnv: RuntimeEnv,
+): AuthConfig {
   const productionLike = isProductionLike(runtimeEnv);
-  const adminKey = options.adminKey ?? process.env.SIMULATOR_ADMIN_API_KEY ?? (productionLike ? undefined : DEV_ADMIN_KEY);
+  const adminKey =
+    options.adminKey ??
+    process.env.SIMULATOR_ADMIN_API_KEY ??
+    (productionLike ? undefined : DEV_ADMIN_KEY);
   if (!adminKey) throw new Error("SIMULATOR_ADMIN_API_KEY is required outside local development");
 
-  const configuredCredentials = options.connectionCredentials ?? parseConnectionCredentials(process.env.SIMULATOR_CONNECTION_CREDENTIALS);
+  const configuredCredentials =
+    options.connectionCredentials ??
+    parseConnectionCredentials(process.env.SIMULATOR_CONNECTION_CREDENTIALS);
   const dynamicDevelopmentCredentials = !configuredCredentials && !productionLike;
   const connectionCredentials = configuredCredentials ?? {};
   if (!dynamicDevelopmentCredentials && Object.keys(connectionCredentials).length === 0) {
@@ -859,7 +1195,13 @@ function buildAuthConfig(simulator: SourceSimulator, options: AppOptions, runtim
     ...parseCsv(process.env.SIMULATOR_REVOKED_CONNECTION_CREDENTIALS),
     ...(options.revokedConnectionCredentials ?? []),
   ]);
-  validateAuthConfig({ adminKey, connectionCredentials, revokedConnectionCredentials, simulator, productionLike });
+  validateAuthConfig({
+    adminKey,
+    connectionCredentials,
+    revokedConnectionCredentials,
+    simulator,
+    productionLike,
+  });
   return {
     adminKey,
     connectionCredentialToConnectionId: new Map(Object.entries(connectionCredentials)),
@@ -878,10 +1220,14 @@ function validateAuthConfig(input: {
   const validConnectionIds = new Set(input.simulator.connectionIds());
   for (const [credential, connectionId] of Object.entries(input.connectionCredentials)) {
     if (!credential.trim()) throw new Error("Connection credential keys must be non-empty");
-    if (!validConnectionIds.has(connectionId)) throw new Error(`Connection credential references unknown connection ${connectionId}`);
-    if (credential === input.adminKey) throw new Error("Admin and connection credentials must be different");
+    if (!validConnectionIds.has(connectionId))
+      throw new Error(`Connection credential references unknown connection ${connectionId}`);
+    if (credential === input.adminKey)
+      throw new Error("Admin and connection credentials must be different");
     if (input.productionLike && isKnownDevelopmentConnectionCredential(credential)) {
-      throw new Error("Known development connection credentials are rejected outside local development");
+      throw new Error(
+        "Known development connection credentials are rejected outside local development",
+      );
     }
   }
   if (input.productionLike && input.adminKey === DEV_ADMIN_KEY) {
@@ -918,15 +1264,27 @@ function enforceProductionStorageOptions(runtimeEnv: RuntimeEnv, options: AppOpt
   }
 }
 
-function enforceProductionSimulatorStorage(runtimeEnv: RuntimeEnv, simulator: SourceSimulator): void {
+function enforceProductionSimulatorStorage(
+  runtimeEnv: RuntimeEnv,
+  simulator: SourceSimulator,
+): void {
   if (!isProductionLike(runtimeEnv)) return;
   rejectProductionStorageKind(simulator.storageKind(), "Simulator storage");
 }
 
 function rejectProductionStorageKind(kind: SimulatorStorage["kind"], label: string): void {
-  if (kind === "memory") throw new Error(`${label} uses memory storage, which is forbidden in production-like environments`);
-  if (kind === "sqlite") throw new Error(`${label} uses SQLite storage, which is forbidden in production-like environments`);
-  if (kind !== "postgres") throw new Error(`${label} uses unknown storage, which is forbidden in production-like environments`);
+  if (kind === "memory")
+    throw new Error(
+      `${label} uses memory storage, which is forbidden in production-like environments`,
+    );
+  if (kind === "sqlite")
+    throw new Error(
+      `${label} uses SQLite storage, which is forbidden in production-like environments`,
+    );
+  if (kind !== "postgres")
+    throw new Error(
+      `${label} uses unknown storage, which is forbidden in production-like environments`,
+    );
 }
 
 function createStorageForRuntime(runtimeEnv: RuntimeEnv): SimulatorStorage {
@@ -935,7 +1293,9 @@ function createStorageForRuntime(runtimeEnv: RuntimeEnv): SimulatorStorage {
   const databaseUrl = process.env.DATABASE_URL;
   if (driver === "memory") {
     if (productionLike || process.env.SIMULATOR_ALLOW_EPHEMERAL_MEMORY !== "true") {
-      throw new Error("In-memory storage must be explicitly selected and is forbidden in production-like environments");
+      throw new Error(
+        "In-memory storage must be explicitly selected and is forbidden in production-like environments",
+      );
     }
     return new MemorySimulatorStorage();
   }
@@ -943,23 +1303,32 @@ function createStorageForRuntime(runtimeEnv: RuntimeEnv): SimulatorStorage {
     throw new Error("SQLite storage is forbidden in production-like environments");
   }
   if (driver === "postgres") {
-    if (!databaseUrl?.startsWith("postgres")) throw new Error("SIMULATOR_STORAGE_DRIVER=postgres requires a Postgres DATABASE_URL");
+    if (!databaseUrl?.startsWith("postgres"))
+      throw new Error("SIMULATOR_STORAGE_DRIVER=postgres requires a Postgres DATABASE_URL");
     return new PostgresSimulatorStorage(databaseUrl);
   }
   if (databaseUrl?.startsWith("postgres")) {
     return new PostgresSimulatorStorage(databaseUrl);
   }
   if (driver === "sqlite" || (!productionLike && !databaseUrl)) {
-    return new SQLiteSimulatorStorage(process.env.SIMULATOR_SQLITE_PATH ?? ".simulator/source-simulator.sqlite");
+    return new SQLiteSimulatorStorage(
+      process.env.SIMULATOR_SQLITE_PATH ?? ".simulator/source-simulator.sqlite",
+    );
   }
   if (productionLike) {
     throw new Error("Durable Postgres storage is required in production-like environments");
   }
-  return new SQLiteSimulatorStorage(process.env.SIMULATOR_SQLITE_PATH ?? ".simulator/source-simulator.sqlite");
+  return new SQLiteSimulatorStorage(
+    process.env.SIMULATOR_SQLITE_PATH ?? ".simulator/source-simulator.sqlite",
+  );
 }
 
 function resolveRuntimeEnv(env: NodeJS.ProcessEnv): RuntimeEnv {
-  if (env.SIMULATOR_RUNTIME_ENV === "production" || env.SIMULATOR_RUNTIME_ENV === "preview" || env.SIMULATOR_RUNTIME_ENV === "test") {
+  if (
+    env.SIMULATOR_RUNTIME_ENV === "production" ||
+    env.SIMULATOR_RUNTIME_ENV === "preview" ||
+    env.SIMULATOR_RUNTIME_ENV === "test"
+  ) {
     return env.SIMULATOR_RUNTIME_ENV;
   }
   if (env.VERCEL_ENV === "production") return "production";
@@ -987,14 +1356,16 @@ function parseClockMode(value: string | undefined): "manual" | "realtime" | unde
 function parsePositiveNumber(value: string | undefined): number | undefined {
   if (!value) return undefined;
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error("Expected a positive numeric environment value");
+  if (!Number.isFinite(parsed) || parsed <= 0)
+    throw new Error("Expected a positive numeric environment value");
   return parsed;
 }
 
 function parsePositiveInteger(value: string | undefined): number | undefined {
   if (!value) return undefined;
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) throw new Error("Expected a positive integer environment value");
+  if (!Number.isInteger(parsed) || parsed <= 0)
+    throw new Error("Expected a positive integer environment value");
   return parsed;
 }
 
@@ -1006,7 +1377,11 @@ function parseBoolean(value: string | undefined): boolean | undefined {
 }
 
 function escapeHtml(value: string): string {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }
 
 const consoleHtml = `<!doctype html>

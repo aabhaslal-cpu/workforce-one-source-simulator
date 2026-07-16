@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pg from "pg";
 import { describe, expect, it } from "vitest";
-import { SourceFeedBatchV1Schema } from "../contracts.js";
+import { SourceFeedBatchV1Schema, WorkforceOneSnapshotV1Schema } from "../contracts.js";
 import { SourceSimulator } from "../engine.js";
 import { createApp } from "../simulator-app.js";
 import { sourceAdapters } from "../adapters/registry.js";
@@ -1584,9 +1584,7 @@ describe("Milestone 2 scenario packs and adapters", () => {
   it("keeps unmapped regular-workday source ACLs fail-closed", async () => {
     const simulator = await completedDatasetSimulator("regular-world-unmapped-acl", "small");
     const allRecords = await simulator.allRecords();
-    const unmapped = allRecords.find(
-      (record) => record.title === "External vendor one-off note",
-    );
+    const unmapped = allRecords.find((record) => record.title === "External vendor one-off note");
 
     expect(unmapped?.acl.groups).toEqual(["external-vendor-acl-unmapped"]);
     expect(unmapped?.acl.users).toEqual([]);
@@ -3217,6 +3215,81 @@ describe("Milestone 2 admin APIs", () => {
     expect((await history.json()).history[0].sourceId).toBe(object.sourceId);
   });
 
+  it("exports an admin-only Workforce One bootstrap snapshot without credentials", async () => {
+    const { app, simulator } = await credentialedApp(
+      await completedDatasetSimulator("workforce-one-export-seed", "small"),
+    );
+    const unauthorized = await app.request("/v1/admin/exports/workforce-one-snapshot");
+    expect(unauthorized.status).toBe(401);
+
+    const response = await app.request("/v1/admin/exports/workforce-one-snapshot", {
+      headers: adminHeaders(),
+    });
+    expect(response.status).toBe(200);
+    const snapshot = WorkforceOneSnapshotV1Schema.parse(await response.json());
+    const sourceObjects = await simulator.sourceObjects();
+    const sourceChanges = await simulator.sourceChanges();
+    const connections = simulator.connectionsForAdmin();
+    const maxLedgerSequence = Math.max(...sourceChanges.map((change) => change.ledgerSequence));
+
+    expect(snapshot.schemaVersion).toBe("workforce-one-snapshot.v1");
+    expect(snapshot.sourceObjects).toHaveLength(sourceObjects.length);
+    expect(snapshot.sourceChanges).toHaveLength(sourceChanges.length);
+    expect(snapshot.connections).toHaveLength(connections.length);
+    expect(snapshot.counts.roleAliasConnections).toBe(12);
+    expect(snapshot.counts.personConnections).toBeGreaterThan(12);
+    expect(snapshot.organization.people).toHaveLength(snapshot.counts.people);
+    expect(snapshot.organization.teams).toHaveLength(snapshot.counts.teams);
+    expect(
+      snapshot.sourceObjects.every(
+        (object) => object.sourceKey === `${object.sourceSystem}:${object.sourceId}`,
+      ),
+    ).toBe(true);
+    expect(
+      snapshot.sourceObjects.every((object) => Object.keys(object.record.rawPayload).length > 0),
+    ).toBe(true);
+    expect(
+      snapshot.sourceChanges.every((change) => Object.keys(change.record.rawPayload).length > 0),
+    ).toBe(true);
+
+    const exportedJson = JSON.stringify(snapshot);
+    expect(exportedJson).not.toContain("secret-product-manager");
+    expect(exportedJson).not.toContain("admin-test");
+    expect(exportedJson).not.toContain("dev-admin-key");
+    expect(exportedJson).not.toContain("dev-connection-secret");
+
+    const productManager = snapshot.connections.find(
+      (connection) => connection.id === "conn-product-manager",
+    );
+    expect(productManager).toBeDefined();
+    expect(productManager?.checkpoint).toMatchObject({
+      cursorVersion: 3,
+      worldRevision: snapshot.worldRevision,
+      afterSequence: maxLedgerSequence,
+    });
+    expect(decodeCursor(productManager!.checkpoint.cursor)).toMatchObject({
+      v: 3,
+      connectionId: "conn-product-manager",
+      worldRevision: snapshot.worldRevision,
+      afterSequence: maxLedgerSequence,
+    });
+    expect(productManager?.visibility.visibleSourceObjectCount).toBeGreaterThan(0);
+    expect(productManager?.visibility.visibleSourceChangeCount).toBeGreaterThan(0);
+    expect(
+      (await simulator.feed("conn-product-manager", productManager!.checkpoint.cursor, 100))
+        .records,
+    ).toHaveLength(0);
+
+    const second = WorkforceOneSnapshotV1Schema.parse(
+      await (
+        await app.request("/v1/admin/exports/workforce-one-snapshot", {
+          headers: adminHeaders(),
+        })
+      ).json(),
+    );
+    expect(second.integrity).toEqual(snapshot.integrity);
+  });
+
   it("creates real independent scenario instances through POST and validates duplicate and unknown packs", async () => {
     const { app, simulator } = await credentialedApp(
       await SourceSimulator.create({ seed: "api-create-seed", baseUrl: "http://sim.test" }),
@@ -3914,6 +3987,13 @@ describe("contract artifacts", () => {
       ),
     );
     expect(SourceFeedBatchV1Schema.safeParse(example).success).toBe(true);
+    const workforceOneSnapshotExample = JSON.parse(
+      await readFile(
+        new URL("../../examples/workforce-one-snapshot.v1.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    expect(WorkforceOneSnapshotV1Schema.safeParse(workforceOneSnapshotExample).success).toBe(true);
 
     const openApi = await readFile(
       new URL("../../openapi/source-simulator.v1.yaml", import.meta.url),
@@ -3930,8 +4010,15 @@ describe("contract artifacts", () => {
     const jsonSchema = JSON.parse(
       await readFile(new URL("../../schemas/source-feed-batch.v1.json", import.meta.url), "utf8"),
     );
+    const workforceOneSnapshotJsonSchema = JSON.parse(
+      await readFile(
+        new URL("../../schemas/workforce-one-snapshot.v1.json", import.meta.url),
+        "utf8",
+      ),
+    );
 
     expect(openApi).toContain("/sim/{sourceSystem}/{sourceId}");
+    expect(openApi).toContain("/v1/admin/exports/workforce-one-snapshot");
     expect(openApi).toContain("/v1/admin/metrics");
     expect(openApi).toContain("/v1/admin/clock");
     expect(openApi).toContain("/api/cron/tick");
@@ -3955,5 +4042,8 @@ describe("contract artifacts", () => {
     expect(openApi).toContain("connectionBoundCredential");
     expect(openApi).toContain("cronBearer");
     expect(jsonSchema.$defs.sourceRecord.required).toContain("correlation");
+    expect(workforceOneSnapshotJsonSchema.properties.schemaVersion.const).toBe(
+      "workforce-one-snapshot.v1",
+    );
   });
 });
