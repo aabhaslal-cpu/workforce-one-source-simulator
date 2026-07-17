@@ -7,6 +7,11 @@ import {
   type SourceFeedBatchV1,
   type WorkforceOneSnapshotV1,
 } from "./contracts.js";
+import {
+  contextualizeScenarioRecordTemplate,
+  customerProfiles,
+  isCustomerAnchoredRecordTemplate,
+} from "./customers.js";
 import { scenarios, tenant } from "./data.js";
 import { SOURCE_PAYLOAD_CONTRACT_VERSION } from "./source-contracts.js";
 import { preserveNoBodyDeletionPayloads } from "./source-lifecycle.js";
@@ -114,7 +119,7 @@ const ACTIVITY_PROFILE_DEFAULTS: Record<
   },
   intense: { maxSuccessorInstancesPerReconciliation: 20, minSuccessorIntervalHours: 4 },
 };
-const INSTANCE_ACCOUNTS = [
+const LEGACY_INSTANCE_ID_ACCOUNTS = [
   "Northstar Medical",
   "Summit Foods",
   "Cobalt Bank",
@@ -1741,40 +1746,41 @@ export class SourceSimulator {
     return scenario.events.flatMap((event) => {
       if (!hasEventOccurred(state, event)) return [];
       return event.records.flatMap((template) => {
+        const contextualTemplate = contextualizeScenarioRecordTemplate(template, state.account);
         const records = [
           materializeRecord(
             this.baseUrl,
             state,
             scenario,
             event,
-            template,
+            contextualTemplate,
             organization,
             state,
             "created",
           ),
         ];
-        if (template.updatedAfterHours !== undefined) {
+        if (contextualTemplate.updatedAfterHours !== undefined) {
           records.push(
             materializeRecord(
               this.baseUrl,
               state,
               scenario,
               event,
-              template,
+              contextualTemplate,
               organization,
               state,
               "updated",
             ),
           );
         }
-        if (template.deletedAfterHours !== undefined) {
+        if (contextualTemplate.deletedAfterHours !== undefined) {
           records.push(
             materializeRecord(
               this.baseUrl,
               state,
               scenario,
               event,
-              template,
+              contextualTemplate,
               organization,
               state,
               "deleted",
@@ -1783,7 +1789,9 @@ export class SourceSimulator {
         }
         return records
           .filter((record) => Date.parse(record.changeOccurredAt) <= Date.parse(state.currentTime))
-          .map((record) => ledgerEntry(worldRevision, scenario, event, state, template, record));
+          .map((record) =>
+            ledgerEntry(worldRevision, scenario, event, state, contextualTemplate, record),
+          );
       });
     });
   }
@@ -1899,6 +1907,375 @@ function requiredRoleTemplateIds(): Set<string> {
   return roleTemplateIds;
 }
 
+interface CustomerAssignmentSlot {
+  scenarioIndex: number;
+  instanceIndex: number;
+  createdWeight: number;
+  lifecycleWeight: number;
+}
+
+interface CustomerVolumeWeights {
+  created: number;
+  lifecycle: number;
+}
+
+interface CustomerBalanceScore {
+  peakRatio: number;
+  combinedRatio: number;
+  lifecycleRatio: number;
+  createdRatio: number;
+  totalSpread: number;
+}
+
+const MAX_CUSTOMER_BALANCING_SWAPS = 24;
+
+function customerVolumeWeights(
+  scenario: ScenarioDefinition,
+  datasetSize: DatasetSize,
+): CustomerVolumeWeights {
+  const horizonHours = DATASET_DURATION_HOURS[datasetSize];
+  return scenario.events.reduce<CustomerVolumeWeights>(
+    (scenarioWeights, event) =>
+      event.records.reduce<CustomerVolumeWeights>((eventWeights, record) => {
+        if (!isCustomerAnchoredRecordTemplate(record)) return eventWeights;
+        const createdVisible =
+          event.atHour + (record.visibleAfterHours ?? 0) <= horizonHours;
+        const updateVisible =
+          record.updatedAfterHours !== undefined &&
+          event.atHour + record.updatedAfterHours <= horizonHours;
+        const deletionVisible =
+          record.deletedAfterHours !== undefined &&
+          event.atHour + record.deletedAfterHours <= horizonHours;
+        const created = Number(createdVisible);
+        return {
+          created: eventWeights.created + created,
+          lifecycle:
+            eventWeights.lifecycle +
+            created +
+            Number(updateVisible) +
+            Number(deletionVisible),
+        };
+      }, scenarioWeights),
+    { created: 0, lifecycle: 0 },
+  );
+}
+
+function createInitialCustomerAssignmentRanks(
+  seed: string,
+  datasetSize: DatasetSize,
+  slots: CustomerAssignmentSlot[],
+  capacities: number[],
+): number[] {
+  const remainingCapacity = [...capacities];
+  const lifecycleByCustomer = Array<number>(capacities.length).fill(0);
+  const createdByCustomer = Array<number>(capacities.length).fill(0);
+  const totalCapacity = capacities.reduce((total, capacity) => total + capacity, 0);
+  const totalLifecycleWeight = slots.reduce(
+    (total, slot) => total + slot.lifecycleWeight,
+    0,
+  );
+  const totalCreatedWeight = slots.reduce(
+    (total, slot) => total + slot.createdWeight,
+    0,
+  );
+  const assignmentRanks = Array<number>(slots.length).fill(-1);
+  const orderedSlotIndexes = slots
+    .map((slot, slotIndex) => ({
+      slot,
+      slotIndex,
+      rank: hashNumber(
+        seed,
+        datasetSize,
+        String(slot.scenarioIndex),
+        String(slot.instanceIndex),
+        "customer-slot-rank",
+      ),
+    }))
+    .sort(
+      (left, right) =>
+        right.slot.lifecycleWeight - left.slot.lifecycleWeight ||
+        right.slot.createdWeight - left.slot.createdWeight ||
+        left.rank - right.rank ||
+        left.slotIndex - right.slotIndex,
+    );
+
+  for (const { slot, slotIndex } of orderedSlotIndexes) {
+    const customerRank = capacities
+      .map((_, rankIndex) => rankIndex)
+      .filter((rankIndex) => (remainingCapacity[rankIndex] ?? 0) > 0)
+      .sort((left, right) => {
+        const projectedLoad = (rankIndex: number): [number, number] => {
+          const capacityShare = capacities[rankIndex]! / totalCapacity;
+          const lifecycleTarget = Math.max(1, totalLifecycleWeight * capacityShare);
+          const createdTarget = Math.max(1, totalCreatedWeight * capacityShare);
+          const lifecycleLoad =
+            ((lifecycleByCustomer[rankIndex] ?? 0) + slot.lifecycleWeight) /
+            lifecycleTarget;
+          const createdLoad =
+            ((createdByCustomer[rankIndex] ?? 0) + slot.createdWeight) /
+            createdTarget;
+          return [Math.max(lifecycleLoad, createdLoad), lifecycleLoad + createdLoad];
+        };
+        const leftLoad = projectedLoad(left);
+        const rightLoad = projectedLoad(right);
+        const peakLoadDifference = leftLoad[0] - rightLoad[0];
+        if (peakLoadDifference !== 0) return peakLoadDifference;
+        const combinedLoadDifference = leftLoad[1] - rightLoad[1];
+        if (combinedLoadDifference !== 0) return combinedLoadDifference;
+        return (
+          hashNumber(
+            seed,
+            datasetSize,
+            String(slot.scenarioIndex),
+            String(slot.instanceIndex),
+            String(left),
+            "customer-assignment-tie",
+          ) -
+            hashNumber(
+              seed,
+              datasetSize,
+              String(slot.scenarioIndex),
+              String(slot.instanceIndex),
+              String(right),
+              "customer-assignment-tie",
+            ) ||
+          left - right
+        );
+      })[0]!;
+
+    assignmentRanks[slotIndex] = customerRank;
+    lifecycleByCustomer[customerRank] =
+      (lifecycleByCustomer[customerRank] ?? 0) + slot.lifecycleWeight;
+    createdByCustomer[customerRank] =
+      (createdByCustomer[customerRank] ?? 0) + slot.createdWeight;
+    remainingCapacity[customerRank] = (remainingCapacity[customerRank] ?? 0) - 1;
+  }
+
+  return assignmentRanks;
+}
+
+function customerBalanceScore(
+  lifecycleByCustomer: number[],
+  createdByCustomer: number[],
+): CustomerBalanceScore {
+  const ratio = (values: number[]): number => {
+    const minimum = Math.min(...values);
+    return minimum === 0 ? Number.POSITIVE_INFINITY : Math.max(...values) / minimum;
+  };
+  const lifecycleRatio = ratio(lifecycleByCustomer);
+  const createdRatio = ratio(createdByCustomer);
+  let totalSpread = 0;
+
+  for (const values of [lifecycleByCustomer, createdByCustomer]) {
+    totalSpread += Math.max(...values) - Math.min(...values);
+  }
+
+  return {
+    peakRatio: Math.max(lifecycleRatio, createdRatio),
+    combinedRatio: lifecycleRatio + createdRatio,
+    lifecycleRatio,
+    createdRatio,
+    totalSpread,
+  };
+}
+
+function compareCustomerBalance(
+  left: CustomerBalanceScore,
+  right: CustomerBalanceScore,
+): number {
+  return (
+    left.peakRatio - right.peakRatio ||
+    left.combinedRatio - right.combinedRatio ||
+    left.lifecycleRatio - right.lifecycleRatio ||
+    left.createdRatio - right.createdRatio ||
+    left.totalSpread - right.totalSpread
+  );
+}
+
+function refineCustomerAssignmentRanks(
+  slots: CustomerAssignmentSlot[],
+  initialAssignmentRanks: number[],
+  customerCount: number,
+): number[] {
+  const assignmentRanks = [...initialAssignmentRanks];
+  const lifecycleByCustomer = Array<number>(customerCount).fill(0);
+  const createdByCustomer = Array<number>(customerCount).fill(0);
+
+  slots.forEach((slot, slotIndex) => {
+    const customerRank = assignmentRanks[slotIndex]!;
+    lifecycleByCustomer[customerRank] =
+      (lifecycleByCustomer[customerRank] ?? 0) + slot.lifecycleWeight;
+    createdByCustomer[customerRank] =
+      (createdByCustomer[customerRank] ?? 0) + slot.createdWeight;
+  });
+
+  let currentScore = customerBalanceScore(lifecycleByCustomer, createdByCustomer);
+
+  // Bound the refinement so large dataset generation remains predictable.
+  for (
+    let iteration = 0;
+    iteration < Math.min(MAX_CUSTOMER_BALANCING_SWAPS, slots.length);
+    iteration += 1
+  ) {
+    let bestSwap: { leftIndex: number; rightIndex: number } | undefined;
+    let bestScore = currentScore;
+
+    for (let leftIndex = 0; leftIndex < slots.length; leftIndex += 1) {
+      const leftCustomer = assignmentRanks[leftIndex]!;
+      const leftSlot = slots[leftIndex]!;
+      for (let rightIndex = leftIndex + 1; rightIndex < slots.length; rightIndex += 1) {
+        const rightCustomer = assignmentRanks[rightIndex]!;
+        if (leftCustomer === rightCustomer) continue;
+        const rightSlot = slots[rightIndex]!;
+
+        lifecycleByCustomer[leftCustomer] =
+          (lifecycleByCustomer[leftCustomer] ?? 0) +
+          rightSlot.lifecycleWeight -
+          leftSlot.lifecycleWeight;
+        lifecycleByCustomer[rightCustomer] =
+          (lifecycleByCustomer[rightCustomer] ?? 0) +
+          leftSlot.lifecycleWeight -
+          rightSlot.lifecycleWeight;
+        createdByCustomer[leftCustomer] =
+          (createdByCustomer[leftCustomer] ?? 0) +
+          rightSlot.createdWeight -
+          leftSlot.createdWeight;
+        createdByCustomer[rightCustomer] =
+          (createdByCustomer[rightCustomer] ?? 0) +
+          leftSlot.createdWeight -
+          rightSlot.createdWeight;
+
+        const candidateScore = customerBalanceScore(
+          lifecycleByCustomer,
+          createdByCustomer,
+        );
+
+        lifecycleByCustomer[leftCustomer] =
+          (lifecycleByCustomer[leftCustomer] ?? 0) +
+          leftSlot.lifecycleWeight -
+          rightSlot.lifecycleWeight;
+        lifecycleByCustomer[rightCustomer] =
+          (lifecycleByCustomer[rightCustomer] ?? 0) +
+          rightSlot.lifecycleWeight -
+          leftSlot.lifecycleWeight;
+        createdByCustomer[leftCustomer] =
+          (createdByCustomer[leftCustomer] ?? 0) +
+          leftSlot.createdWeight -
+          rightSlot.createdWeight;
+        createdByCustomer[rightCustomer] =
+          (createdByCustomer[rightCustomer] ?? 0) +
+          rightSlot.createdWeight -
+          leftSlot.createdWeight;
+
+        if (compareCustomerBalance(candidateScore, bestScore) < 0) {
+          bestScore = candidateScore;
+          bestSwap = { leftIndex, rightIndex };
+        }
+      }
+    }
+
+    if (!bestSwap) break;
+    const { leftIndex, rightIndex } = bestSwap;
+    const leftCustomer = assignmentRanks[leftIndex]!;
+    const rightCustomer = assignmentRanks[rightIndex]!;
+    const leftSlot = slots[leftIndex]!;
+    const rightSlot = slots[rightIndex]!;
+
+    lifecycleByCustomer[leftCustomer] =
+      (lifecycleByCustomer[leftCustomer] ?? 0) +
+      rightSlot.lifecycleWeight -
+      leftSlot.lifecycleWeight;
+    lifecycleByCustomer[rightCustomer] =
+      (lifecycleByCustomer[rightCustomer] ?? 0) +
+      leftSlot.lifecycleWeight -
+      rightSlot.lifecycleWeight;
+    createdByCustomer[leftCustomer] =
+      (createdByCustomer[leftCustomer] ?? 0) +
+      rightSlot.createdWeight -
+      leftSlot.createdWeight;
+    createdByCustomer[rightCustomer] =
+      (createdByCustomer[rightCustomer] ?? 0) +
+      leftSlot.createdWeight -
+      rightSlot.createdWeight;
+    assignmentRanks[leftIndex] = rightCustomer;
+    assignmentRanks[rightIndex] = leftCustomer;
+    currentScore = bestScore;
+  }
+
+  return assignmentRanks;
+}
+
+function createDatasetCustomerAssignments(
+  seed: string,
+  datasetSize: DatasetSize,
+): string[][] {
+  const count = INSTANCE_COUNTS[datasetSize];
+  const slots: CustomerAssignmentSlot[] = scenarios.flatMap(
+    (scenario, scenarioIndex) => {
+      const weights = customerVolumeWeights(scenario, datasetSize);
+      return Array.from({ length: count }, (_, instanceIndex) => ({
+        scenarioIndex,
+        instanceIndex,
+        createdWeight: weights.created,
+        lifecycleWeight: weights.lifecycle,
+      }));
+    },
+  );
+  const rankedCustomers = customerProfiles
+    .map((customer, originalIndex) => ({
+      customer,
+      originalIndex,
+      rank: hashNumber(seed, datasetSize, customer.name, "customer-portfolio-rank"),
+    }))
+    .sort((left, right) => left.rank - right.rank || left.originalIndex - right.originalIndex);
+  const baseCapacity = Math.floor(slots.length / rankedCustomers.length);
+  const extraCapacity = slots.length % rankedCustomers.length;
+  const capacities = rankedCustomers.map(
+    (_, rankIndex) => baseCapacity + Number(rankIndex < extraCapacity),
+  );
+  const assignmentRanks = refineCustomerAssignmentRanks(
+    slots,
+    createInitialCustomerAssignmentRanks(seed, datasetSize, slots, capacities),
+    rankedCustomers.length,
+  );
+  const lifecycleByRank = Array<number>(rankedCustomers.length).fill(0);
+  const createdByRank = Array<number>(rankedCustomers.length).fill(0);
+  slots.forEach((slot, slotIndex) => {
+    const customerRank = assignmentRanks[slotIndex]!;
+    lifecycleByRank[customerRank] =
+      (lifecycleByRank[customerRank] ?? 0) + slot.lifecycleWeight;
+    createdByRank[customerRank] = (createdByRank[customerRank] ?? 0) + slot.createdWeight;
+  });
+
+  // Keep the legacy anchor customer from becoming the dominant generated portfolio.
+  const lightestRank = Array.from(
+    { length: rankedCustomers.length },
+    (_, rankIndex) => rankIndex,
+  ).sort(
+    (left, right) =>
+      lifecycleByRank[left]! - lifecycleByRank[right]! ||
+      createdByRank[left]! - createdByRank[right]! ||
+      left - right,
+  )[0]!;
+  const northstarRank = rankedCustomers.findIndex(
+    ({ customer }) => customer.name === customerProfiles[0]!.name,
+  );
+  if (northstarRank >= 0 && northstarRank !== lightestRank) {
+    const northstar = rankedCustomers[northstarRank]!;
+    rankedCustomers[northstarRank] = rankedCustomers[lightestRank]!;
+    rankedCustomers[lightestRank] = northstar;
+  }
+
+  const assignments = scenarios.map(() => Array<string>(count).fill(""));
+
+  slots.forEach((slot, slotIndex) => {
+    assignments[slot.scenarioIndex]![slot.instanceIndex] =
+      rankedCustomers[assignmentRanks[slotIndex]!]!.customer.name;
+  });
+
+  return assignments;
+}
+
 function createDatasetInstanceStates(
   organization: GeneratedOrganization,
   seed: string,
@@ -1906,15 +2283,18 @@ function createDatasetInstanceStates(
   startTime: string,
   completed: boolean,
 ): ScenarioInstanceState[] {
-  return scenarios.flatMap((scenario) => {
+  const customerAssignments = createDatasetCustomerAssignments(seed, datasetSize);
+  return scenarios.flatMap((scenario, scenarioIndex) => {
     const count = INSTANCE_COUNTS[datasetSize];
     const span = INSTANCE_SPANS_HOURS[datasetSize];
     return Array.from({ length: count }, (_, index) => {
       const offsetHours = count <= 1 ? 0 : Math.floor((span * index) / count);
       const startedAt = addHours(startTime, offsetHours);
-      const account =
-        INSTANCE_ACCOUNTS[
-          hashNumber(seed, scenario.id, String(index), "account") % INSTANCE_ACCOUNTS.length
+      const account = customerAssignments[scenarioIndex]![index]!;
+      const identityAccount =
+        LEGACY_INSTANCE_ID_ACCOUNTS[
+          hashNumber(seed, scenario.id, String(index), "account") %
+            LEGACY_INSTANCE_ID_ACCOUNTS.length
         ]!;
       const product =
         INSTANCE_PRODUCTS[
@@ -1929,7 +2309,9 @@ function createDatasetInstanceStates(
           hashNumber(seed, scenario.id, String(index), "service") % INSTANCE_SERVICES.length
         ]!;
       const suffix =
-        index === 0 ? "default" : `${slug(account)}-${String(index + 1).padStart(2, "0")}`;
+        index === 0
+          ? "default"
+          : `${slug(identityAccount)}-${String(index + 1).padStart(2, "0")}`;
       return createScenarioInstanceState(organization, scenario, {
         scenarioPackId: scenario.id,
         scenarioInstanceId: `${scenario.id}-${suffix}`,
@@ -1960,8 +2342,12 @@ function createScenarioInstanceState(
   const currentTime = input.completed
     ? addHours(startedAt, DATASET_DURATION_HOURS[input.datasetSize ?? "small"])
     : startedAt;
+  const identityAccount =
+    LEGACY_INSTANCE_ID_ACCOUNTS[
+      hashNumber(seed, "account") % LEGACY_INSTANCE_ID_ACCOUNTS.length
+    ]!;
   const account =
-    input.account ?? INSTANCE_ACCOUNTS[hashNumber(seed, "account") % INSTANCE_ACCOUNTS.length]!;
+    input.account ?? customerProfiles[hashNumber(seed, "account") % customerProfiles.length]!.name;
   const product =
     input.product ?? INSTANCE_PRODUCTS[hashNumber(seed, "product") % INSTANCE_PRODUCTS.length]!;
   const project =
@@ -1969,7 +2355,8 @@ function createScenarioInstanceState(
   const service =
     input.service ?? INSTANCE_SERVICES[hashNumber(seed, "service") % INSTANCE_SERVICES.length]!;
   const scenarioInstanceId =
-    input.scenarioInstanceId ?? `${scenario.id}-${slug(account)}-${shortHash(seed).slice(0, 6)}`;
+    input.scenarioInstanceId ??
+    `${scenario.id}-${slug(input.account ?? identityAccount)}-${shortHash(seed).slice(0, 6)}`;
   const baseState: ScenarioInstanceState = {
     scenarioPackId: scenario.id,
     scenarioInstanceId,

@@ -6,10 +6,16 @@
 
 - Admin-only `WorkforceOneSnapshotV1` export at `/v1/admin/exports/workforce-one-snapshot` for a future Workforce One bootstrap importer.
 - Runtime Zod contract, JSON Schema, OpenAPI entry, checked example, and tests for the bootstrap snapshot artifact.
+- Deterministic ten-customer catalog and balanced Customer Success portfolio assignments across the existing fictional organization.
+
+### Changed
+
+- Customer-anchored scenario records now use each instance's deterministic account context for names, industries, account permission groups, slugs, and source payloads. Capacity-constrained assignment balances both scenario count and customer-bearing lifecycle volume instead of overrepresenting Northstar Medical.
 
 ### Notes
 
 - The export is read-only and credential-free. It does not change normal connection feed semantics, clock reconciliation, scenario generation, storage schema, or Workforce One code.
+- Customer diversification preserves existing people, reporting lines, teams, connection IDs, scenario instance IDs, source identities, source counts, storage behavior, cursors, clocks, and routes.
 
 ## 0.3.0 - Milestone 3 Draft
 

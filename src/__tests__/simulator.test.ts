@@ -6,6 +6,12 @@ import { join } from "node:path";
 import pg from "pg";
 import { describe, expect, it } from "vitest";
 import { SourceFeedBatchV1Schema, WorkforceOneSnapshotV1Schema } from "../contracts.js";
+import {
+  contextualizeScenarioRecordTemplate,
+  customerProfiles,
+  isCustomerAnchoredRecordTemplate,
+} from "../customers.js";
+import { scenarios } from "../data.js";
 import { SourceSimulator } from "../engine.js";
 import { createApp } from "../simulator-app.js";
 import { sourceAdapters } from "../adapters/registry.js";
@@ -452,6 +458,54 @@ async function clockWorldSnapshot(simulator: SourceSimulator) {
 const postgresTestUrl = process.env.SIMULATOR_POSTGRES_TEST_URL;
 const describePostgres = postgresTestUrl ? describe : describe.skip;
 
+describe("customer portfolio contextualization", () => {
+  it("defines ten unique customer contexts and only rewrites customer-anchored record content", () => {
+    expect(customerProfiles).toHaveLength(10);
+    expect(new Set(customerProfiles.map((customer) => customer.name)).size).toBe(10);
+    expect(new Set(customerProfiles.map((customer) => customer.slug)).size).toBe(10);
+    expect(new Set(customerProfiles.map((customer) => customer.permissionGroup)).size).toBe(10);
+
+    const templates = scenarios.flatMap((scenario) =>
+      scenario.events.flatMap((event) => event.records),
+    );
+    const anchored = templates.find((template) =>
+      JSON.stringify(template).includes("Northstar Medical"),
+    );
+    const generic = templates.find(
+      (template) => !isCustomerAnchoredRecordTemplate(template),
+    );
+    expect(anchored).toBeDefined();
+    expect(generic).toBeDefined();
+
+    const contextualized = contextualizeScenarioRecordTemplate(
+      anchored!,
+      "BluePeak Energy",
+    );
+    expect(contextualized.id).toBe(anchored!.id);
+    expect(contextualized.sourceSystem).toBe(anchored!.sourceSystem);
+    expect(contextualized.objectType).toBe(anchored!.objectType);
+    expect(contextualized.actorRoleTemplateId).toBe(anchored!.actorRoleTemplateId);
+    expect(contextualized.assignmentRoleTemplateId).toBe(
+      anchored!.assignmentRoleTemplateId,
+    );
+    expect(contextualized.aclUserRoleTemplateIds).toEqual(
+      anchored!.aclUserRoleTemplateIds,
+    );
+    expect(contextualized.visibleAfterHours).toBe(anchored!.visibleAfterHours);
+    expect(contextualized.updatedAfterHours).toBe(anchored!.updatedAfterHours);
+    expect(contextualized.deletedAfterHours).toBe(anchored!.deletedAfterHours);
+    const customerContent = JSON.stringify([
+      contextualized.title,
+      contextualized.acl,
+      contextualized.rawPayload,
+    ]);
+    expect(customerContent).toContain("BluePeak Energy");
+    expect(customerContent).toContain("account-bluepeak");
+    expect(customerContent).not.toMatch(/Northstar|Summit/);
+    expect(contextualizeScenarioRecordTemplate(generic!, "BluePeak Energy")).toBe(generic);
+  });
+});
+
 describe("organization generation", () => {
   it("generates a deterministic multi-person reporting hierarchy", async () => {
     const first = await SourceSimulator.create({ seed: "org-seed" });
@@ -508,6 +562,51 @@ describe("organization generation", () => {
         current = byId.get(current.managerId)!;
       }
     }
+  });
+
+  it("assigns all ten customer portfolios without changing organizational identity", async () => {
+    const first = await SourceSimulator.create({ seed: "customer-portfolio-org" });
+    const replay = await SourceSimulator.create({ seed: "customer-portfolio-org" });
+    const customerSuccessIcs = first
+      .people()
+      .filter(
+        (person) =>
+          person.department === "customer_success" && person.roleLevel === "ic",
+      );
+    const customerGroups = new Set(
+      customerSuccessIcs.flatMap((person) =>
+        person.groupMemberships.filter((group) => group.startsWith("account-")),
+      ),
+    );
+
+    expect(customerGroups).toEqual(
+      new Set(customerProfiles.map((customer) => customer.permissionGroup)),
+    );
+    for (const customer of customerProfiles) {
+      const owner = customerSuccessIcs.find((person) =>
+        person.groupMemberships.includes(customer.permissionGroup),
+      );
+      expect(owner, customer.name).toBeDefined();
+      expect(owner?.assignedAccounts).toContain(customer.slug);
+
+      let current = owner;
+      while (current?.managerId) {
+        const manager = first.person(current.managerId).person;
+        expect(manager.groupMemberships).toContain(customer.permissionGroup);
+        expect(manager.assignedAccounts).toContain(customer.slug);
+        current = manager;
+      }
+    }
+
+    const identityProjection = (simulator: SourceSimulator) =>
+      simulator.people().map((person) => ({
+        id: person.id,
+        managerId: person.managerId,
+        directReportIds: person.directReportIds,
+        connectionId: personConnectionId(person),
+      }));
+    expect(identityProjection(first)).toEqual(identityProjection(replay));
+    expect(first.organizationSummary().validation.ok).toBe(true);
   });
 });
 
@@ -1518,6 +1617,122 @@ describe("Milestone 2 scenario packs and adapters", () => {
     expect(large.totalSourceChanges).toBeGreaterThanOrEqual(5_000);
     expect(large.totalSourceChanges).toBeLessThanOrEqual(10_000);
     expect(medium).toEqual(mediumReplay);
+  });
+
+  it("distributes every dataset size across the ten-customer portfolio deterministically", async () => {
+    for (const datasetSize of ["small", "medium", "large"] as const) {
+      const first = await completedDatasetSimulator(
+        `customer-distribution-${datasetSize}`,
+        datasetSize,
+      );
+      const replay = await completedDatasetSimulator(
+        `customer-distribution-${datasetSize}`,
+        datasetSize,
+      );
+      const firstAssignments = (await first.states()).map((state) => ({
+        scenarioInstanceId: state.scenarioInstanceId,
+        account: state.account,
+      }));
+      const replayAssignments = (await replay.states()).map((state) => ({
+        scenarioInstanceId: state.scenarioInstanceId,
+        account: state.account,
+      }));
+      const counts = customerProfiles.map(
+        (customer) =>
+          firstAssignments.filter((assignment) => assignment.account === customer.name)
+            .length,
+      );
+
+      expect(firstAssignments).toEqual(replayAssignments);
+      expect(new Set(firstAssignments.map((assignment) => assignment.account))).toEqual(
+        new Set(customerProfiles.map((customer) => customer.name)),
+      );
+      expect(Math.max(...counts) - Math.min(...counts)).toBeLessThanOrEqual(1);
+      expect(counts[0]).toBeLessThanOrEqual(Math.ceil(firstAssignments.length / 10));
+    }
+  });
+
+  it("balances customer-bearing source volume instead of overrepresenting Northstar", async () => {
+    for (const datasetSize of ["medium", "large"] as const) {
+      const simulator = await completedDatasetSimulator(
+        `customer-volume-${datasetSize}`,
+        datasetSize,
+      );
+      const changes = await simulator.sourceChanges();
+      const lifecycleCounts = customerProfiles.map(
+        (customer) =>
+          changes.filter((change) =>
+            change.record.acl.groups.includes(customer.permissionGroup),
+          ).length,
+      );
+      const createdCounts = customerProfiles.map(
+        (customer) =>
+          changes.filter(
+            (change) =>
+              change.changeType === "created" &&
+              change.record.acl.groups.includes(customer.permissionGroup),
+          ).length,
+      );
+      // Medium scenario bundles are indivisible; large datasets converge more tightly.
+      const allowedLifecycleRatio = datasetSize === "medium" ? 1.2 : 1.05;
+      const allowedCreatedRatio = datasetSize === "medium" ? 1.2 : 1.05;
+      const averageLifecycleCount =
+        lifecycleCounts.reduce((sum, count) => sum + count, 0) /
+        lifecycleCounts.length;
+
+      expect(Math.min(...lifecycleCounts)).toBeGreaterThan(0);
+      expect(Math.max(...lifecycleCounts) / Math.min(...lifecycleCounts)).toBeLessThanOrEqual(
+        allowedLifecycleRatio,
+      );
+      expect(Math.max(...createdCounts) / Math.min(...createdCounts)).toBeLessThanOrEqual(
+        allowedCreatedRatio,
+      );
+      expect(lifecycleCounts[0]).toBeLessThanOrEqual(averageLifecycleCount);
+    }
+  });
+
+  it("preserves source identities while applying customer-specific records and visibility", async () => {
+    const first = await completedDatasetSimulator("customer-record-context", "medium");
+    const replay = await completedDatasetSimulator("customer-record-context", "medium");
+    const firstChanges = await first.sourceChanges();
+    const replayChanges = await replay.sourceChanges();
+
+    expect(
+      firstChanges.map((change) => `${change.record.sourceSystem}:${change.record.sourceId}`),
+    ).toEqual(
+      replayChanges.map((change) => `${change.record.sourceSystem}:${change.record.sourceId}`),
+    );
+
+    for (const customer of customerProfiles) {
+      expect(
+        firstChanges.some((change) =>
+          change.record.acl.groups.includes(customer.permissionGroup),
+        ),
+        customer.name,
+      ).toBe(true);
+
+      const customerSuccessOwner = first
+        .people()
+        .find(
+          (person) =>
+            person.department === "customer_success" &&
+            person.roleLevel === "ic" &&
+            person.groupMemberships.includes(customer.permissionGroup),
+        );
+      expect(customerSuccessOwner, customer.name).toBeDefined();
+      expect(
+        (await first.recordsForPerson(customerSuccessOwner!.id)).records.some((record) =>
+          record.acl.groups.includes(customer.permissionGroup),
+        ),
+        customer.name,
+      ).toBe(true);
+    }
+
+    for (const department of ["product", "engineering"] as const) {
+      const person = first.people().find((candidate) => candidate.department === department);
+      expect(person).toBeDefined();
+      expect((await first.recordsForPerson(person!.id)).records.length).toBeGreaterThan(0);
+    }
   });
 
   it("keeps cross-functional relationships explicit and separate from primary reporting", async () => {

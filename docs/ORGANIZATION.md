@@ -32,6 +32,23 @@ Overrides are available through `customDirectorsPerVp`, `customManagersPerDirect
 
 Organization config is validated against enabled scenario requirements before it is accepted. A config that removes all people for a role required by scenario packs is rejected with a 400 instead of being allowed to fail later during materialization.
 
+## Customer Portfolio
+
+The organization uses one deterministic ten-customer catalog:
+
+- Northstar Medical
+- Summit Foods
+- Cobalt Bank
+- Beacon Retail
+- Atlas Logistics
+- Pioneer Health
+- BluePeak Energy
+- Redwood Manufacturing
+- Juniper Education
+- Solstice Media
+
+Customer Success ICs receive balanced account assignments in stable person order. Their managers, Directors, and VP receive the aggregate account assignments and account permission groups of the people below them. The original Northstar account membership and placeholder assignment remain as compatibility access, while the ten-customer portfolios are additive. Reporting hierarchy and permissions remain separate models: Product and Engineering access continues to come from the existing source groups and explicit cross-functional relationships.
+
 ## Relationships
 
 Primary reporting lines are cycle-free. Every non-root person has exactly one primary manager.
@@ -44,7 +61,7 @@ Milestone 2 adds explicit cross-functional relationships:
 - `team-incident-response`
 - dotted-line release and account-gap relationships
 
-These memberships add permission groups and work assignments but do not change primary managers.
+These memberships add permission groups and work assignments but do not change primary managers. The explicit Northstar and Summit teams remain compatibility relationships; diversified customer portfolios are assigned alongside them.
 
 ## APIs
 
