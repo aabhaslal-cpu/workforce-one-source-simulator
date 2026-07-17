@@ -11,6 +11,7 @@ import type {
   Team,
 } from "./domain.js";
 import { departments, roleLevels, sourceSystems } from "./domain.js";
+import { customerProfiles } from "./customers.js";
 import { tenant } from "./data.js";
 
 export const roleTemplates: RoleTemplate[] = departments.flatMap((department) =>
@@ -207,6 +208,7 @@ export function generateOrganization(input: OrganizationConfig = defaultOrganiza
     }
   }
 
+  assignCustomerSuccessPortfolios(people);
   applyCrossFunctionalRelationships(people, teams, reportingRelationships);
 
   const tree = buildTree(people);
@@ -385,6 +387,28 @@ function addPersonScope(
   if (assignments.account) pushUnique(person.assignedAccounts, assignments.account);
   if (assignments.workstream) pushUnique(person.assignedWorkstreams, assignments.workstream);
   pushUnique(person.permissionScopes, `group:${group}`);
+}
+
+function assignCustomerSuccessPortfolios(people: Person[]): void {
+  const peopleById = new Map(people.map((person) => [person.id, person]));
+  const customerSuccessIcs = people
+    .filter(
+      (person) =>
+        person.department === "customer_success" && person.roleLevel === "ic",
+    )
+    .sort((left, right) => left.stableKey.localeCompare(right.stableKey));
+
+  customerSuccessIcs.forEach((ic, index) => {
+    const customer = customerProfiles[index % customerProfiles.length]!;
+    let current: Person | undefined = ic;
+    while (current) {
+      addPersonScope(current, customer.permissionGroup, {
+        account: customer.slug,
+        workstream: `${customer.slug}-account`,
+      });
+      current = current.managerId ? peopleById.get(current.managerId) : undefined;
+    }
+  });
 }
 
 function createPerson(

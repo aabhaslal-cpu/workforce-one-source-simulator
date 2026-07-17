@@ -13,6 +13,7 @@ Built:
 - Strict TypeScript/Hono service.
 - Deterministic organization generator for Product, Engineering, and Customer Success.
 - Multiple actual people at IC, Manager, Director, and VP levels.
+- Deterministic ten-customer portfolio spanning healthcare, food, finance, retail, logistics, energy, manufacturing, education, and media, with balanced account context across scenario instances.
 - Uneven spans of control, primary reporting lines, dotted-line relationships, project teams, account teams, launch membership, incident membership, source identities, permission groups, and work ownership.
 - Connection-bound authentication where each credential resolves server-side to exactly one connection ID.
 - Admin-gated people, organization, team, source, dataset, relationship, and visibility inspection.
@@ -20,6 +21,7 @@ Built:
 - Modular source adapters for Slack, Gmail, Calendar, Notion, Jira, Productboard, Amplitude-style analytics, GitHub, PagerDuty-style incidents, Salesforce, Gainsight-style customer success, and Zendesk-style support, with provider-family Zod validation and manifest parity tests.
 - Eleven scenario packs covering regular workdays, launch readiness, adoption lag, roadmap tradeoff, incident response, delivery slip, technical debt/staffing risk, renewal risk, implementation blocker, expansion opportunity, and major cross-functional release.
 - Persisted scenario instance state. Packs are reusable templates; instances hold their own seed, dataset size, clock, pause state, event occurrence times, event log, completion state, participants, and account/project/product/service/workstream context.
+- Customer context changes the fictional account names, industries, and account permission groups in applicable source bodies without changing organization identities, scenario instance IDs, source IDs, source counts, or feed mechanics.
 - Persisted company clock with manual mode, realtime mode, bounded catch-up, speed multiplier, pause/resume, restart persistence, feed-triggered micro-reconciliation, and a protected cron-compatible reconciliation endpoint.
 - Clock configuration updates fail closed with `clock_backlog_conflict` when bounded realtime catch-up still has wall-clock backlog and the request changes time-affecting settings; operators must drain backlog with `POST /v1/admin/clock/reconcile` first.
 - Deterministic continuous activity orchestrator. Completed instances can create successor instances from the existing 11 packs, preserving one shared Product/Engineering/Customer Success company world.

@@ -20,11 +20,15 @@ The ranges match Milestone 2 targets:
 
 Each scenario pack has deterministic instances with account, product, project, service, workstream, seed, and time offset. Source IDs include scenario instance ID so instances do not collide.
 
+Dataset generation assigns account-bearing instances across the ten-customer catalog with a deterministic capacity-constrained distribution. It balances both scenario-instance count and the lifecycle volume of customer-bearing source records, so a customer is not overrepresented merely because it receives a record-heavy scenario pack. The same seed, dataset size, and organization config reproduce the same customer mapping. Applicable Northstar/Summit-authored template bodies are contextualized to the instance customer while custom account overrides outside the catalog remain untouched.
+
 Scenario packs are templates. Instances are persisted runtime entities with their own current time, pause state, event occurrence times, triggered events, event log, completion state, participants, and context. Advancing one instance does not advance any other instance from the same pack.
 
 Automatically scheduled events use `startedAt + atHour`. Manual triggers use the instance `currentTime` at trigger time, and delayed updates/deletions are calculated from that persisted occurrence time.
 
 The source-change ledger is occurred-only. Dataset generation creates completed instances and reconstructs the current world from changes that have occurred by each instance clock; ordinary instance advancement appends newly reached changes.
+
+Customer diversification does not change instance counts, source-change counts, stable scenario instance IDs, source IDs, ledger ordering, cursor semantics, or lifecycle timing.
 
 ## Continuous Activity
 
