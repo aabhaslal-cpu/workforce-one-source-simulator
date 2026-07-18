@@ -251,6 +251,44 @@ export interface DatasetMetadata {
   worldRevision: string;
 }
 
+export interface DatasetFlowScenarioPackSummary {
+  scenarioPackId: string;
+  title: string;
+  department: Department | "cross_functional";
+  sourceSystems: SourceSystem[];
+  instanceCount: number;
+  activeInstanceCount: number;
+  completedInstanceCount: number;
+  sourceChangeCount: number;
+}
+
+export interface DatasetFlowConnectionSummary {
+  connectionId: string;
+  label: string;
+  personId: string;
+  roleTemplateId: string;
+  visibleScenarioPackCount: number;
+  visibleSourceChangeCount: number;
+  visibleSourceSystems: SourceSystem[];
+}
+
+export interface DatasetFlowSummary {
+  schemaVersion: "dataset-flow-summary.v1";
+  datasetMetadata: DatasetMetadata;
+  allScenarioPacksPresent: boolean;
+  scenarioPacks: DatasetFlowScenarioPackSummary[];
+  connections: DatasetFlowConnectionSummary[];
+  clock: {
+    mode: SimulationClockMode;
+    paused: boolean;
+    continuousActivity: boolean;
+    speedMultiplier: number;
+    activityProfile: ContinuousOrchestrationState["activityProfile"];
+    maxSuccessorInstancesPerReconciliation: number;
+    minSuccessorIntervalHours: number;
+  };
+}
+
 export type SimulationClockMode = "manual" | "realtime";
 
 export interface SimulationReconciliationReport {

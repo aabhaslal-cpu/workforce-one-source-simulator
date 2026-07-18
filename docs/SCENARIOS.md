@@ -6,19 +6,19 @@ The simulator creates source evidence only. It does not define expected Workforc
 
 ## Scenario Packs
 
-| Pack | Departments | Key Sources |
-| --- | --- | --- |
-| `regular-workday` | Product, Engineering, CS | All 12 source systems |
-| `product-launch-readiness` | Product, Engineering, CS | Slack, Gmail, Calendar, Notion, Jira, Productboard, Amplitude |
-| `feature-adoption-lag` | Product, CS | Amplitude, Productboard, Zendesk, Slack, Gmail, Notion |
-| `roadmap-tradeoff` | Product, Engineering, CS | Productboard, Gmail, Jira, Calendar, Notion, Slack |
-| `reliability-incident` | Engineering, CS | PagerDuty, Slack, GitHub, Jira, Calendar, Notion, Gmail, Zendesk |
-| `migration-delivery-slip` | Engineering, Product, CS | Jira, GitHub, Calendar, Slack, Gmail, Notion, Salesforce |
-| `technical-debt-staffing-risk` | Engineering | Jira, GitHub, PagerDuty, Notion, Slack, Calendar, Gmail |
-| `renewal-risk` | Customer Success, Product, Engineering | Salesforce, Gmail, Zendesk, Gainsight, Slack, Calendar, Productboard |
-| `implementation-blocker` | CS, Engineering, Product | Gainsight, Salesforce, Zendesk, Slack, Jira, Calendar, Notion |
-| `expansion-opportunity` | CS, Product, Engineering | Amplitude, Salesforce, Gainsight, Productboard, GitHub, Gmail, Calendar |
-| `major-cross-functional-product-release` | Product, Engineering, CS | All 12 source systems |
+| Pack                                     | Departments                            | Key Sources                                                             |
+| ---------------------------------------- | -------------------------------------- | ----------------------------------------------------------------------- |
+| `regular-workday`                        | Product, Engineering, CS               | All 12 source systems                                                   |
+| `product-launch-readiness`               | Product, Engineering, CS               | Slack, Gmail, Calendar, Notion, Jira, Productboard, Amplitude           |
+| `feature-adoption-lag`                   | Product, CS                            | Amplitude, Productboard, Zendesk, Slack, Gmail, Notion                  |
+| `roadmap-tradeoff`                       | Product, Engineering, CS               | Productboard, Gmail, Jira, Calendar, Notion, Slack                      |
+| `reliability-incident`                   | Engineering, CS                        | PagerDuty, Slack, GitHub, Jira, Calendar, Notion, Gmail, Zendesk        |
+| `migration-delivery-slip`                | Engineering, Product, CS               | Jira, GitHub, Calendar, Slack, Gmail, Notion, Salesforce                |
+| `technical-debt-staffing-risk`           | Engineering                            | Jira, GitHub, PagerDuty, Notion, Slack, Calendar, Gmail                 |
+| `renewal-risk`                           | Customer Success, Product, Engineering | Salesforce, Gmail, Zendesk, Gainsight, Slack, Calendar, Productboard    |
+| `implementation-blocker`                 | CS, Engineering, Product               | Gainsight, Salesforce, Zendesk, Slack, Jira, Calendar, Notion           |
+| `expansion-opportunity`                  | CS, Product, Engineering               | Amplitude, Salesforce, Gainsight, Productboard, GitHub, Gmail, Calendar |
+| `major-cross-functional-product-release` | Product, Engineering, CS               | All 12 source systems                                                   |
 
 ## Imperfect Data
 
@@ -40,6 +40,11 @@ Dataset size controls deterministic scenario instances:
 - Large: 440 instances total.
 
 Each instance has a scenario pack ID and distinct scenario instance ID.
+
+Generating a dataset creates instances for every scenario pack in one operation. Operators do not need to
+select a scenario pack to "send" it to Workforce One; the selected pack in `/console` is only a lens for
+inspection and targeted mutation. Use the console's All Scenario Flow action to verify pack coverage,
+connection-visible change counts, and continuous-clock status without exposing raw payloads or secrets.
 
 Instances, not packs, hold runtime state: seed, dataset size, started time, current time, pause state, event occurrence times, triggered event IDs, event log, completion state, concrete participants, and account/product/project/service/workstream context. Instance APIs mutate only the selected instance.
 

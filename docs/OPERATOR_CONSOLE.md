@@ -34,18 +34,25 @@ Supports:
 - scenario instance detail
 - independent instance advance/reset/trigger/pause/resume
 
+The scenario dropdown is an inspection and mutation lens for a selected pack or instance. It is not the
+feed switch. Dataset generation and normal connector feeds operate over the whole simulator world.
+
 ## Sources And Dataset
 
 Supports:
 
 - current dataset metadata
+- all-scenario flow summary proving every pack is loaded and which connections can see scenario data
 - deterministic dataset generation by seed and size
 - source-object projection inspection
 - source-change ledger inspection
 - source-object history inspection
 - simulator deep-link targets
 
-The console requires the admin credential for detailed reads and writes. It does not display credential material.
+The console requires the simulator project's `SIMULATOR_ADMIN_API_KEY` for detailed reads and writes.
+The local-development fallback is `dev-admin-key`; production deployments do not use that default. The
+admin key only unlocks operator inspection. Workforce One ingestion uses connection credentials, so
+changing the admin key does not change which source records flow through connector feeds.
 
 ## Clock
 

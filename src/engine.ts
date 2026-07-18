@@ -12,6 +12,7 @@ import { SOURCE_PAYLOAD_CONTRACT_VERSION } from "./source-contracts.js";
 import { preserveNoBodyDeletionPayloads } from "./source-lifecycle.js";
 import {
   type ContinuousOrchestrationState,
+  type DatasetFlowSummary,
   type DatasetMetadata,
   sourceSystems,
   type DatasetSize,
@@ -541,6 +542,69 @@ export class SourceSimulator {
       await this.storage.listSourceObjects(),
       await this.requireWorldRevision(),
     );
+  }
+
+  async datasetFlowSummary(): Promise<DatasetFlowSummary> {
+    const [datasetMetadata, states, ledgerEntries, clockState] = await Promise.all([
+      this.datasetMetadata(),
+      this.states(),
+      this.visibleLedgerEntries(),
+      this.requireClockState(),
+    ]);
+    const orchestrationState = await this.requireOrchestrationState(clockState);
+    const sourceChangesByPack = new Map<string, number>();
+    for (const change of ledgerEntries) {
+      sourceChangesByPack.set(
+        change.scenarioPackId,
+        (sourceChangesByPack.get(change.scenarioPackId) ?? 0) + 1,
+      );
+    }
+    const scenarioPacks = scenarios.map((scenario) => {
+      const packStates = states.filter((state) => state.scenarioPackId === scenario.id);
+      return {
+        scenarioPackId: scenario.id,
+        title: scenario.title,
+        department: scenario.department,
+        sourceSystems: [...scenario.sourceSystems].sort(),
+        instanceCount: packStates.length,
+        activeInstanceCount: packStates.filter((state) => state.completionState === "active")
+          .length,
+        completedInstanceCount: packStates.filter((state) => state.completionState === "completed")
+          .length,
+        sourceChangeCount: sourceChangesByPack.get(scenario.id) ?? 0,
+      };
+    });
+    const connections = this.connections.map((connection) => {
+      const visible = ledgerEntries.filter((change) => canConnectionSee(change.record, connection));
+      return {
+        connectionId: connection.id,
+        label: connection.label,
+        personId: connection.personId,
+        roleTemplateId: connection.roleTemplateId,
+        visibleScenarioPackCount: new Set(visible.map((change) => change.scenarioPackId)).size,
+        visibleSourceChangeCount: visible.length,
+        visibleSourceSystems: [...new Set(visible.map((change) => change.sourceSystem))].sort(),
+      };
+    });
+    return {
+      schemaVersion: "dataset-flow-summary.v1",
+      datasetMetadata,
+      allScenarioPacksPresent: scenarioPacks.every(
+        (scenario) => scenario.instanceCount > 0 && scenario.sourceChangeCount > 0,
+      ),
+      scenarioPacks,
+      connections,
+      clock: {
+        mode: clockState.mode,
+        paused: clockState.paused,
+        continuousActivity: clockState.continuousActivity,
+        speedMultiplier: clockState.speedMultiplier,
+        activityProfile: orchestrationState.activityProfile,
+        maxSuccessorInstancesPerReconciliation:
+          orchestrationState.maxSuccessorInstancesPerReconciliation,
+        minSuccessorIntervalHours: orchestrationState.minSuccessorIntervalHours,
+      },
+    };
   }
 
   async generateDataset(

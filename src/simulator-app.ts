@@ -720,6 +720,9 @@ export async function createApp(options: AppOptions = {}) {
     return c.json(await simulator.generateDataset(body));
   });
   app.get("/v1/admin/datasets/current", async (c) => c.json(await simulator.datasetMetadata()));
+  app.get("/v1/admin/datasets/flow-summary", async (c) =>
+    c.json(await simulator.datasetFlowSummary()),
+  );
   app.post("/v1/admin/datasets/reset", async (c) => {
     await readJsonBody(c.req.raw, EmptyBodySchema);
     return c.json(await simulator.resetDataset());
@@ -1405,7 +1408,7 @@ const consoleHtml = `<!doctype html>
     <section class="panel">
       <h2>Organization</h2>
       <div class="row">
-        <label>Admin key <input id="key" value="dev-admin-key" /></label>
+        <label>Admin key <input id="key" placeholder="Paste SIMULATOR_ADMIN_API_KEY; local default is dev-admin-key" /></label>
         <label>Seed <input id="orgSeed" value="wfo-m1-org-seed" /></label>
         <label>Department <select id="department"><option value="">All</option><option>product</option><option>engineering</option><option>customer_success</option></select></label>
         <label>Level <select id="level"><option value="">All</option><option>ic</option><option>manager</option><option>director</option><option>vp</option></select></label>
@@ -1425,6 +1428,10 @@ const consoleHtml = `<!doctype html>
     </section>
     <section class="panel">
       <h2>Scenario</h2>
+      <p>
+        Scenario selection is an inspection lens. Dataset generation and the feed include all scenario packs;
+        use All Scenario Flow below to prove what is loaded and visible.
+      </p>
       <div class="row">
         <label>Scenario <select id="scenario">
           <option>product-launch-readiness</option>
@@ -1514,6 +1521,7 @@ const consoleHtml = `<!doctype html>
         <label>Dataset <select id="dataset"><option>small</option><option>medium</option><option>large</option></select></label>
         <label>Dataset seed <input id="datasetSeed" value="wfo-m2-dataset-seed" /></label>
         <button onclick="datasetCurrent()">Current Dataset</button>
+        <button onclick="datasetFlow()">All Scenario Flow</button>
         <button onclick="datasetGenerate()">Generate Dataset</button>
         <button onclick="sourceObjects()">Source Objects</button>
         <button onclick="sourceChanges()">Source Changes</button>
@@ -1529,11 +1537,30 @@ const consoleHtml = `<!doctype html>
   </main>
 <script>
 const out = document.getElementById('out');
+const keyInput = document.getElementById('key');
+keyInput.value = sessionStorage.getItem('simulatorAdminApiKey') || '';
+keyInput.addEventListener('input', () => sessionStorage.setItem('simulatorAdminApiKey', key()));
 function scenario() { return document.getElementById('scenario').value; }
-function key() { return document.getElementById('key').value; }
+function key() { return keyInput.value; }
 function headers(extra = {}) { return { 'x-admin-api-key': key(), ...extra }; }
 function show(value) { out.textContent = JSON.stringify(value, null, 2); }
-async function getJson(url, opts = {}) { const res = await fetch(url, opts); return res.json(); }
+async function getJson(url, opts = {}) {
+  const res = await fetch(url, opts);
+  let body;
+  try {
+    body = await res.json();
+  } catch {
+    body = { error: res.statusText || 'Non-JSON response' };
+  }
+  if (res.ok) return body;
+  return {
+    ...body,
+    status: res.status,
+    hint: res.status === 401
+      ? 'Admin key rejected. Paste the simulator project SIMULATOR_ADMIN_API_KEY. The dev-admin-key value only works in local development.'
+      : undefined
+  };
+}
 async function callAdmin(action, method) { show(await getJson('/v1/admin/scenarios/' + scenario() + '/' + action, { method, headers: headers({ 'content-type': 'application/json' }), body: method === 'POST' ? '{}' : undefined })); }
 async function advance() { show(await getJson('/v1/admin/scenarios/' + scenario() + '/advance', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ hours: 24 }) })); }
 async function records() { show(await getJson('/v1/admin/records', { headers: headers() })); }
@@ -1574,6 +1601,7 @@ async function packs() { show(await getJson('/v1/catalog/scenario-packs')); }
 async function instances() { show(await getJson('/v1/catalog/scenario-instances', { headers: headers() })); }
 async function instanceDetail() { show(await getJson('/v1/admin/scenario-instances/' + document.getElementById('instance').value, { headers: headers() })); }
 async function datasetCurrent() { show(await getJson('/v1/admin/datasets/current', { headers: headers() })); }
+async function datasetFlow() { show(await getJson('/v1/admin/datasets/flow-summary', { headers: headers() })); }
 async function datasetGenerate() { show(await getJson('/v1/admin/datasets/generate', { method: 'POST', headers: headers({ 'content-type': 'application/json' }), body: JSON.stringify({ seed: document.getElementById('datasetSeed').value, datasetSize: document.getElementById('dataset').value }) })); }
 async function sourceObjects() { show(await getJson('/v1/admin/source-objects', { headers: headers() })); }
 async function sourceChanges() { show(await getJson('/v1/admin/source-changes', { headers: headers() })); }
