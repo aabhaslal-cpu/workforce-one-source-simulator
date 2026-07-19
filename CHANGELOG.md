@@ -6,10 +6,12 @@
 
 - Admin-only `WorkforceOneSnapshotV1` export at `/v1/admin/exports/workforce-one-snapshot` for a future Workforce One bootstrap importer.
 - Runtime Zod contract, JSON Schema, OpenAPI entry, checked example, and tests for the bootstrap snapshot artifact.
+- Scenario packs now automatically add one role-private, source-native work artifact for every participant role, including PM release-readiness items, CS escalation/QBR follow-ups, engineering readiness tasks, and workbook-reference artifacts.
 
 ### Notes
 
 - The export is read-only and credential-free. It does not change normal connection feed semantics, clock reconciliation, scenario generation, storage schema, or Workforce One code.
+- Role-specific work artifacts are simulator source records only. They do not encode Workforce One conclusions and they flow through the existing adapter, ACL, ledger, and connection-feed paths.
 
 ## 0.3.0 - Milestone 3 Draft
 

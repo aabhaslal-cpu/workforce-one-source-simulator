@@ -6,19 +6,19 @@ The simulator creates source evidence only. It does not define expected Workforc
 
 ## Scenario Packs
 
-| Pack | Departments | Key Sources |
-| --- | --- | --- |
-| `regular-workday` | Product, Engineering, CS | All 12 source systems |
-| `product-launch-readiness` | Product, Engineering, CS | Slack, Gmail, Calendar, Notion, Jira, Productboard, Amplitude |
-| `feature-adoption-lag` | Product, CS | Amplitude, Productboard, Zendesk, Slack, Gmail, Notion |
-| `roadmap-tradeoff` | Product, Engineering, CS | Productboard, Gmail, Jira, Calendar, Notion, Slack |
-| `reliability-incident` | Engineering, CS | PagerDuty, Slack, GitHub, Jira, Calendar, Notion, Gmail, Zendesk |
-| `migration-delivery-slip` | Engineering, Product, CS | Jira, GitHub, Calendar, Slack, Gmail, Notion, Salesforce |
-| `technical-debt-staffing-risk` | Engineering | Jira, GitHub, PagerDuty, Notion, Slack, Calendar, Gmail |
-| `renewal-risk` | Customer Success, Product, Engineering | Salesforce, Gmail, Zendesk, Gainsight, Slack, Calendar, Productboard |
-| `implementation-blocker` | CS, Engineering, Product | Gainsight, Salesforce, Zendesk, Slack, Jira, Calendar, Notion |
-| `expansion-opportunity` | CS, Product, Engineering | Amplitude, Salesforce, Gainsight, Productboard, GitHub, Gmail, Calendar |
-| `major-cross-functional-product-release` | Product, Engineering, CS | All 12 source systems |
+| Pack                                     | Departments                            | Key Sources                                                             |
+| ---------------------------------------- | -------------------------------------- | ----------------------------------------------------------------------- |
+| `regular-workday`                        | Product, Engineering, CS               | All 12 source systems                                                   |
+| `product-launch-readiness`               | Product, Engineering, CS               | Slack, Gmail, Calendar, Notion, Jira, Productboard, Amplitude           |
+| `feature-adoption-lag`                   | Product, CS                            | Amplitude, Productboard, Zendesk, Slack, Gmail, Notion                  |
+| `roadmap-tradeoff`                       | Product, Engineering, CS               | Productboard, Gmail, Jira, Calendar, Notion, Slack                      |
+| `reliability-incident`                   | Engineering, CS                        | PagerDuty, Slack, GitHub, Jira, Calendar, Notion, Gmail, Zendesk        |
+| `migration-delivery-slip`                | Engineering, Product, CS               | Jira, GitHub, Calendar, Slack, Gmail, Notion, Salesforce                |
+| `technical-debt-staffing-risk`           | Engineering                            | Jira, GitHub, PagerDuty, Notion, Slack, Calendar, Gmail                 |
+| `renewal-risk`                           | Customer Success, Product, Engineering | Salesforce, Gmail, Zendesk, Gainsight, Slack, Calendar, Productboard    |
+| `implementation-blocker`                 | CS, Engineering, Product               | Gainsight, Salesforce, Zendesk, Slack, Jira, Calendar, Notion           |
+| `expansion-opportunity`                  | CS, Product, Engineering               | Amplitude, Salesforce, Gainsight, Productboard, GitHub, Gmail, Calendar |
+| `major-cross-functional-product-release` | Product, Engineering, CS               | All 12 source systems                                                   |
 
 ## Imperfect Data
 
@@ -30,6 +30,16 @@ The packs include late email, Slack edits, corrected analytics, delayed Salesfor
 - Manager artifacts show coordination, assignments, escalations, and team status.
 - Director artifacts show multi-team dependencies, tradeoffs, and portfolio reviews.
 - VP artifacts show executive summaries, launch confidence, customer exposure, and investment discussion.
+
+## Role-Specific Work Artifacts
+
+Every scenario instance automatically includes a `role-specific-work-artifacts` event with one source-native artifact for each participant role in that scenario. These records make each generated individual feel like they have real work in their own systems: a PM can receive a release-readiness email or tracker task, a CSM can receive an escalation/QBR follow-up, and an engineering leader can receive readiness reviews or blocker approvals.
+
+These artifacts are not Workforce One conclusions. They are ordinary simulated source objects routed through the existing adapters, ACL materialization, ledger, and connection feed. Each artifact is private to the generated person assigned to that role, so it reaches the right connection without creating a simulator-only side channel.
+
+The artifact source adapts to the sources available in the scenario. For example, a release-readiness item may appear as Gmail metadata/snippet when Gmail is present, Productboard or Jira when product systems are present, or a Notion page when that is the available source. Workbook references such as `Launch readiness tracker.xlsx` are modeled as source text references only; the simulator does not ingest real attachments.
+
+Selecting a scenario in the operator console is for inspection and manual control. Dataset generation and continuous mode use the same scenario packs, so role-specific artifacts are included automatically wherever those packs are instantiated.
 
 ## Instances
 

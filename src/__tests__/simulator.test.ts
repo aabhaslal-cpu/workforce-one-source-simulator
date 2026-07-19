@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { SourceFeedBatchV1Schema, WorkforceOneSnapshotV1Schema } from "../contracts.js";
 import { SourceSimulator } from "../engine.js";
 import { createApp } from "../simulator-app.js";
+import { scenarios } from "../data.js";
 import { sourceAdapters } from "../adapters/registry.js";
 import {
   assertNoSimulatorMetadata,
@@ -16,7 +17,7 @@ import {
   validateVendorPayload,
   vendorPayloadSchemas,
 } from "../adapters/vendor-schemas.js";
-import { defaultOrganizationConfig, personConnectionId } from "../organization.js";
+import { defaultOrganizationConfig, personConnectionId, roleTemplates } from "../organization.js";
 import {
   MemorySimulatorStorage,
   PostgresSimulatorStorage,
@@ -1070,6 +1071,94 @@ describe("SourceSimulator", () => {
 });
 
 describe("Milestone 2 scenario packs and adapters", () => {
+  it("adds one private work artifact for every scenario participant role", () => {
+    for (const scenario of scenarios) {
+      const roleWorkEvent = scenario.events.find(
+        (event) => event.id === "role-specific-work-artifacts",
+      );
+      expect(roleWorkEvent, scenario.id).toBeDefined();
+      expect(roleWorkEvent!.records).toHaveLength(scenario.participantRoleTemplateIds.length);
+
+      for (const roleTemplateId of scenario.participantRoleTemplateIds) {
+        const roleId = roleTemplateId.replace(/^role-/, "");
+        const artifact = roleWorkEvent!.records.find(
+          (record) => record.assignmentRoleTemplateId === roleTemplateId,
+        );
+        expect(artifact, `${scenario.id}:${roleTemplateId}`).toBeDefined();
+        expect(artifact!.id).toBe(`role-work-${roleId}`);
+        expect(artifact!.aclUserRoleTemplateIds).toEqual([roleTemplateId]);
+        expect(artifact!.acl.groups).toEqual([]);
+        expect(artifact!.rawPayload).not.toHaveProperty("body");
+        expect(artifact!.rawPayload).not.toHaveProperty("attachments");
+        expect(artifact!.rawPayload).not.toHaveProperty("mime");
+        expect(artifact!.rawPayload).not.toHaveProperty("raw");
+      }
+    }
+  });
+
+  it("delivers role work artifacts only through their assigned role visibility", async () => {
+    const simulator = await completedDatasetSimulator("role-work-visibility", "small");
+    const recordsByPerson = new Map<string, SourceRecord[]>(
+      await Promise.all(
+        simulator.people().map(async (person): Promise<[string, SourceRecord[]]> => {
+          return [person.id, (await simulator.recordsForPerson(person.id)).records];
+        }),
+      ),
+    );
+    const roleArtifacts = (await simulator.allRecords()).filter((record) =>
+      record.correlation.templateId.startsWith("role-work-"),
+    );
+    const emittedRoleTemplates = new Set(
+      roleArtifacts.map(
+        (record) => `role-${record.correlation.templateId.replace(/^role-work-/, "")}`,
+      ),
+    );
+    expect(emittedRoleTemplates).toEqual(
+      new Set(roleTemplates.map((roleTemplate) => roleTemplate.id)),
+    );
+
+    for (const artifact of roleArtifacts) {
+      expect(artifact.acl.groups).toEqual([]);
+      expect(artifact.acl.users).toHaveLength(1);
+      const assignedPersonId = artifact.acl.users[0];
+      expect(assignedPersonId).toBeDefined();
+      if (!assignedPersonId) throw new Error(`Missing assigned user for ${artifact.sourceId}`);
+      expect(
+        recordsByPerson
+          .get(assignedPersonId)!
+          .some((record) => record.sourceId === artifact.sourceId),
+        artifact.sourceId,
+      ).toBe(true);
+
+      for (const [otherPersonId, otherRecords] of recordsByPerson) {
+        if (otherPersonId === assignedPersonId) continue;
+        expect(
+          otherRecords.some((record) => record.sourceId === artifact.sourceId),
+          `${artifact.sourceId} leaked to ${otherPersonId}`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  it("keeps Gmail role work artifacts metadata-and-snippet only after normalization", async () => {
+    const simulator = await completedDatasetSimulator("role-work-gmail-minimized", "small");
+    const gmailArtifacts = (await simulator.allRecords()).filter(
+      (record) =>
+        record.sourceSystem === "gmail" && record.correlation.templateId.startsWith("role-work-"),
+    );
+    expect(gmailArtifacts.length).toBeGreaterThan(0);
+
+    for (const artifact of gmailArtifacts) {
+      expect(artifact.rawPayload.snippet).toEqual(expect.any(String));
+      expect(artifact.rawPayload).not.toHaveProperty("body");
+      expect(artifact.rawPayload).not.toHaveProperty("attachments");
+      const payload = artifact.rawPayload.payload as Record<string, unknown>;
+      expect(payload.mimeType).toBe("text/plain");
+      expect(payload.body).toEqual({ size: expect.any(Number) });
+      expect(JSON.stringify(artifact.rawPayload)).not.toMatch(/"data"\s*:/);
+    }
+  });
+
   it("registers all required source adapters and validates emitted vendor payloads", async () => {
     const simulator = await completedDatasetSimulator("adapter-seed", "small");
     expect(sourceAdapters.map((adapter) => adapter.sourceSystem).sort()).toEqual(

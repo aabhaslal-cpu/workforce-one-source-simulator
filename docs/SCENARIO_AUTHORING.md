@@ -11,6 +11,8 @@ When adding or editing a pack:
 - model future business events in `src/data.ts`
 - let scenario instances hold runtime seed, clock, event occurrence times, event log, participants, and context
 - do not write Workforce One conclusions into source records
+- keep role-specific work artifacts source-native and role-private; examples include PM release-readiness emails or tasks, CSM escalation/QBR follow-ups, engineering readiness reviews, and safe workbook references
+- use existing adapters, ACLs, and connection feeds for role-specific artifacts; do not add simulator-only side channels or synthetic Workforce One insight records
 
 ## Event Timing
 

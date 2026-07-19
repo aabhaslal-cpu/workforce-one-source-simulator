@@ -39,7 +39,976 @@ function record(
   };
 }
 
-export const scenarios: ScenarioDefinition[] = [
+const sourcePreferredForScenario = (
+  scenarioSourceSystems: SourceSystem[],
+  preferred: SourceSystem[],
+): SourceSystem => {
+  const available = preferred.find((sourceSystem) => scenarioSourceSystems.includes(sourceSystem));
+  return available ?? scenarioSourceSystems[0] ?? "gmail";
+};
+
+const roleWorkArtifact = (
+  scenarioSourceSystems: SourceSystem[],
+  roleTemplateId: string,
+): ScenarioRecordTemplate => {
+  const id = `role-work-${roleTemplateId.replace(/^role-/, "")}`;
+  const options = {
+    assignmentRoleTemplateId: roleTemplateId,
+    aclUserRoleTemplateIds: [roleTemplateId],
+  };
+
+  switch (roleTemplateId) {
+    case "role-product-ic": {
+      const sourceSystem = sourcePreferredForScenario(scenarioSourceSystems, [
+        "productboard",
+        "jira",
+        "notion",
+        "gmail",
+      ]);
+      if (sourceSystem === "jira") {
+        return record(
+          id,
+          "jira",
+          "task",
+          "Customer ask triage for release notes",
+          roleTemplateId,
+          [],
+          {
+            projectKey: "PROD",
+            issueKey: "PROD-1412",
+            priority: "Medium",
+            status: "Open",
+            summary:
+              "Turn customer asks into release-note acceptance criteria and identify which follow-up needs the PM.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "notion") {
+        return record(
+          id,
+          "notion",
+          "page",
+          "Customer ask triage notes",
+          roleTemplateId,
+          [],
+          {
+            database: "Product Discovery",
+            status: "Draft",
+            summary:
+              "Notes summarize customer asks, release-note gaps, and open PM follow-up questions.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "gmail") {
+        return record(
+          id,
+          "gmail",
+          "email",
+          "Customer ask triage follow-up",
+          roleTemplateId,
+          [],
+          {
+            subject: "Customer asks to triage before release notes",
+            labels: ["workforce-one"],
+            summary:
+              "Please triage the customer asks and flag which ones need PM review before the release note is finalized.",
+          },
+          options,
+        );
+      }
+      return record(
+        id,
+        "productboard",
+        "note",
+        "Customer ask triage for release notes",
+        roleTemplateId,
+        [],
+        {
+          productArea: "Workflow Hub",
+          status: "new",
+          priorityNote:
+            "Customer asks need triage before the release note locks; details should be linked back to the PM.",
+        },
+        options,
+      );
+    }
+    case "role-product-manager": {
+      const sourceSystem = sourcePreferredForScenario(scenarioSourceSystems, [
+        "gmail",
+        "productboard",
+        "jira",
+        "notion",
+      ]);
+      if (sourceSystem === "productboard") {
+        return record(
+          id,
+          "productboard",
+          "note",
+          "Release readiness customer signal",
+          roleTemplateId,
+          [],
+          {
+            productArea: "Launch Readiness",
+            status: "new",
+            priorityNote:
+              "Customer-facing readiness gaps are collected for PM decision; supporting details are in Launch readiness tracker.xlsx.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "jira") {
+        return record(
+          id,
+          "jira",
+          "task",
+          "Review release readiness workbook",
+          roleTemplateId,
+          [],
+          {
+            projectKey: "PROD",
+            issueKey: "PROD-2205",
+            priority: "High",
+            status: "Open",
+            summary:
+              "Review launch readiness tracker.xlsx and decide which gaps block the customer-facing release.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "notion") {
+        return record(
+          id,
+          "notion",
+          "page",
+          "Release readiness workbook review",
+          roleTemplateId,
+          [],
+          {
+            database: "Launch Planning",
+            status: "Needs review",
+            summary:
+              "PM notes reference Launch readiness tracker.xlsx and customer-facing release gaps.",
+          },
+          options,
+        );
+      }
+      return record(
+        id,
+        "gmail",
+        "email",
+        "Release readiness gaps before customer note",
+        roleTemplateId,
+        [],
+        {
+          subject: "Release readiness gaps before customer note",
+          labels: ["workforce-one", "release"],
+          summary:
+            "Please review the release readiness gaps before the customer note goes out. Details are in Launch readiness tracker.xlsx.",
+        },
+        options,
+      );
+    }
+    case "role-product-director": {
+      const sourceSystem = sourcePreferredForScenario(scenarioSourceSystems, [
+        "calendar",
+        "notion",
+        "gmail",
+        "slack",
+      ]);
+      if (sourceSystem === "notion") {
+        return record(
+          id,
+          "notion",
+          "page",
+          "Product launch tradeoff memo",
+          roleTemplateId,
+          [],
+          {
+            database: "Decision Memos",
+            status: "Review",
+            summary:
+              "Director memo frames customer promise, adoption evidence, and engineering readiness tradeoffs.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "gmail") {
+        return record(
+          id,
+          "gmail",
+          "email",
+          "Product launch tradeoff review",
+          roleTemplateId,
+          [],
+          {
+            subject: "Tradeoff review before launch leadership sync",
+            labels: ["workforce-one", "leadership"],
+            summary:
+              "Please review the launch tradeoff memo and decide what needs escalation before leadership sync.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "slack") {
+        return record(
+          id,
+          "slack",
+          "thread",
+          "Product launch tradeoff review",
+          roleTemplateId,
+          [],
+          {
+            channel: "#product-leadership",
+            summary:
+              "Director-level thread compares customer promise, adoption signal, and readiness risk before launch sync.",
+          },
+          options,
+        );
+      }
+      return record(
+        id,
+        "calendar",
+        "meeting",
+        "Product launch tradeoff review",
+        roleTemplateId,
+        [],
+        {
+          agenda:
+            "Customer promise, adoption signal, engineering readiness, and launch decision tradeoffs",
+          status: "confirmed",
+          summary:
+            "Director reviews launch tradeoffs and decides what should be escalated before leadership sync.",
+        },
+        options,
+      );
+    }
+    case "role-product-vp": {
+      const sourceSystem = sourcePreferredForScenario(scenarioSourceSystems, [
+        "gmail",
+        "calendar",
+        "notion",
+        "slack",
+      ]);
+      if (sourceSystem === "calendar") {
+        return record(
+          id,
+          "calendar",
+          "meeting",
+          "Executive product launch readout",
+          roleTemplateId,
+          [],
+          {
+            agenda:
+              "Decision needed on release confidence, customer exposure, and executive messaging",
+            status: "confirmed",
+            summary:
+              "VP Product reviews release confidence and executive messaging before customer-facing commitments are made.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "notion") {
+        return record(
+          id,
+          "notion",
+          "page",
+          "Executive product launch readout",
+          roleTemplateId,
+          [],
+          {
+            database: "Exec Readouts",
+            status: "Ready",
+            summary:
+              "Executive readout summarizes release confidence, customer exposure, and launch messaging risks.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "slack") {
+        return record(
+          id,
+          "slack",
+          "thread",
+          "Executive product launch readout",
+          roleTemplateId,
+          [],
+          {
+            channel: "#exec-product",
+            summary:
+              "VP Product asks for a concise release confidence call before customer-facing commitments are confirmed.",
+          },
+          options,
+        );
+      }
+      return record(
+        id,
+        "gmail",
+        "email",
+        "Executive product launch readout needed",
+        roleTemplateId,
+        [],
+        {
+          subject: "Executive product launch readout needed",
+          labels: ["workforce-one", "exec"],
+          summary:
+            "Please send the concise product launch readout with customer exposure, readiness risk, and the decision needed.",
+        },
+        options,
+      );
+    }
+    case "role-engineering-ic": {
+      const sourceSystem = sourcePreferredForScenario(scenarioSourceSystems, [
+        "jira",
+        "github",
+        "slack",
+        "gmail",
+      ]);
+      if (sourceSystem === "github") {
+        return record(
+          id,
+          "github",
+          "issue",
+          "Patch readiness checklist gap",
+          roleTemplateId,
+          [],
+          {
+            repository: "acme/workflow-service",
+            status: "open",
+            summary:
+              "Engineer owns the readiness checklist gap and needs to link the fix before the launch checkpoint.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "slack") {
+        return record(
+          id,
+          "slack",
+          "thread",
+          "Readiness checklist gap handoff",
+          roleTemplateId,
+          [],
+          {
+            channel: "#eng-launch",
+            summary:
+              "Engineering IC is asked to close the readiness checklist gap and note the test evidence.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "gmail") {
+        return record(
+          id,
+          "gmail",
+          "email",
+          "Readiness checklist gap assigned",
+          roleTemplateId,
+          [],
+          {
+            subject: "Readiness checklist gap assigned",
+            labels: ["workforce-one", "engineering"],
+            summary:
+              "Please close the launch readiness checklist gap and attach the verification note before handoff.",
+          },
+          options,
+        );
+      }
+      return record(
+        id,
+        "jira",
+        "task",
+        "Fix launch readiness checklist gap",
+        roleTemplateId,
+        [],
+        {
+          projectKey: "ENG",
+          issueKey: "ENG-4318",
+          priority: "High",
+          status: "Open",
+          summary:
+            "Fix the launch readiness checklist gap and link the verification evidence before the release checkpoint.",
+        },
+        options,
+      );
+    }
+    case "role-engineering-manager": {
+      const sourceSystem = sourcePreferredForScenario(scenarioSourceSystems, [
+        "slack",
+        "jira",
+        "gmail",
+        "notion",
+      ]);
+      if (sourceSystem === "jira") {
+        return record(
+          id,
+          "jira",
+          "task",
+          "Coordinate readiness blockers",
+          roleTemplateId,
+          [],
+          {
+            projectKey: "ENG",
+            issueKey: "ENG-4430",
+            priority: "High",
+            status: "In Progress",
+            summary:
+              "Engineering manager coordinates readiness blockers and points the team to the launch dependency workbook.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "gmail") {
+        return record(
+          id,
+          "gmail",
+          "email",
+          "Engineering readiness blockers need owner updates",
+          roleTemplateId,
+          [],
+          {
+            subject: "Engineering readiness blockers need owner updates",
+            labels: ["workforce-one", "engineering"],
+            summary:
+              "Please collect owner updates on the readiness blockers. Details are in Engineering launch dependencies.xlsx.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "notion") {
+        return record(
+          id,
+          "notion",
+          "page",
+          "Engineering readiness blocker rollup",
+          roleTemplateId,
+          [],
+          {
+            database: "Engineering Launch",
+            status: "Needs owner updates",
+            summary:
+              "Manager rollup tracks readiness blockers and links Engineering launch dependencies.xlsx.",
+          },
+          options,
+        );
+      }
+      return record(
+        id,
+        "slack",
+        "thread",
+        "Engineering readiness blockers need owner updates",
+        roleTemplateId,
+        [],
+        {
+          channel: "#eng-launch",
+          summary:
+            "Manager asks owners for launch blocker updates and points everyone to Engineering launch dependencies.xlsx.",
+        },
+        options,
+      );
+    }
+    case "role-engineering-director": {
+      const sourceSystem = sourcePreferredForScenario(scenarioSourceSystems, [
+        "notion",
+        "calendar",
+        "github",
+        "gmail",
+      ]);
+      if (sourceSystem === "calendar") {
+        return record(
+          id,
+          "calendar",
+          "meeting",
+          "Engineering readiness review",
+          roleTemplateId,
+          [],
+          {
+            agenda: "Readiness blockers, dependency owners, launch risk, and escalation path",
+            status: "confirmed",
+            summary:
+              "Director reviews engineering readiness and decides which blockers need executive escalation.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "github") {
+        return record(
+          id,
+          "github",
+          "pull_request",
+          "Engineering readiness evidence rollup",
+          roleTemplateId,
+          [],
+          {
+            repository: "acme/workflow-service",
+            status: "open",
+            summary:
+              "Director reviews readiness evidence and release-blocking changes before the launch checkpoint.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "gmail") {
+        return record(
+          id,
+          "gmail",
+          "email",
+          "Engineering readiness review needed",
+          roleTemplateId,
+          [],
+          {
+            subject: "Engineering readiness review needed",
+            labels: ["workforce-one", "engineering"],
+            summary:
+              "Please review engineering readiness blockers and decide which dependency needs leadership escalation.",
+          },
+          options,
+        );
+      }
+      return record(
+        id,
+        "notion",
+        "page",
+        "Engineering readiness review",
+        roleTemplateId,
+        [],
+        {
+          database: "Engineering Reviews",
+          status: "Review",
+          summary:
+            "Director review of launch blockers, dependency owners, and engineering readiness evidence.",
+        },
+        options,
+      );
+    }
+    case "role-engineering-vp": {
+      const sourceSystem = sourcePreferredForScenario(scenarioSourceSystems, [
+        "gmail",
+        "calendar",
+        "notion",
+        "pagerduty",
+      ]);
+      if (sourceSystem === "calendar") {
+        return record(
+          id,
+          "calendar",
+          "meeting",
+          "Engineering launch exception review",
+          roleTemplateId,
+          [],
+          {
+            agenda:
+              "Exception approval, reliability risk, readiness evidence, and customer exposure",
+            status: "confirmed",
+            summary:
+              "VP Engineering reviews whether launch exception risk is acceptable before executive readout.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "notion") {
+        return record(
+          id,
+          "notion",
+          "page",
+          "Engineering launch exception decision",
+          roleTemplateId,
+          [],
+          {
+            database: "Exec Decisions",
+            status: "Decision needed",
+            summary:
+              "VP Engineering decision note on launch exception, reliability risk, and customer exposure.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "pagerduty") {
+        return record(
+          id,
+          "pagerduty",
+          "incident",
+          "Launch exception reliability watch",
+          roleTemplateId,
+          [],
+          {
+            service: "workflow-service",
+            status: "triggered",
+            severity: "warning",
+            summary:
+              "Reliability watch opened for launch exception review before VP Engineering approval.",
+          },
+          options,
+        );
+      }
+      return record(
+        id,
+        "gmail",
+        "email",
+        "Release readiness exception approval",
+        roleTemplateId,
+        [],
+        {
+          subject: "Release readiness exception approval",
+          labels: ["workforce-one", "exec"],
+          summary:
+            "Please approve or reject the engineering readiness exception after reviewing reliability risk and customer exposure.",
+        },
+        options,
+      );
+    }
+    case "role-customer-success-ic": {
+      const sourceSystem = sourcePreferredForScenario(scenarioSourceSystems, [
+        "salesforce",
+        "gainsight",
+        "gmail",
+        "zendesk",
+      ]);
+      if (sourceSystem === "gainsight") {
+        return record(
+          id,
+          "gainsight",
+          "cta",
+          "QBR follow-up owner task",
+          roleTemplateId,
+          [],
+          {
+            account: "Northstar Medical",
+            status: "Open",
+            riskReason:
+              "Customer asked for a crisp follow-up from the QBR and confirmation of owner next steps.",
+            summary:
+              "CS IC owns the QBR follow-up and needs to draft the customer reply with next steps.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "gmail") {
+        return record(
+          id,
+          "gmail",
+          "email",
+          "Draft QBR follow-up reply",
+          roleTemplateId,
+          [],
+          {
+            subject: "Draft QBR follow-up reply",
+            labels: ["workforce-one", "customer"],
+            summary:
+              "Please draft a friendly QBR follow-up reply confirming owners, timing, and the customer questions we took away.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "zendesk") {
+        return record(
+          id,
+          "zendesk",
+          "ticket",
+          "Customer QBR follow-up request",
+          roleTemplateId,
+          [],
+          {
+            account: "Northstar Medical",
+            status: "open",
+            severity: "normal",
+            summary:
+              "Customer asks for QBR follow-up owners and timing to be confirmed in writing.",
+          },
+          options,
+        );
+      }
+      return record(
+        id,
+        "salesforce",
+        "task",
+        "Draft QBR follow-up reply",
+        roleTemplateId,
+        [],
+        {
+          account: "Northstar Medical",
+          status: "Not Started",
+          subject: "Draft QBR follow-up reply with owner next steps",
+          summary:
+            "CS IC should draft a QBR follow-up reply confirming owners, timing, and customer questions.",
+        },
+        options,
+      );
+    }
+    case "role-customer-success-manager": {
+      const sourceSystem = sourcePreferredForScenario(scenarioSourceSystems, [
+        "gmail",
+        "zendesk",
+        "gainsight",
+        "salesforce",
+      ]);
+      if (sourceSystem === "zendesk") {
+        return record(
+          id,
+          "zendesk",
+          "ticket",
+          "Customer escalation needs response owner",
+          roleTemplateId,
+          [],
+          {
+            account: "Northstar Medical",
+            status: "open",
+            severity: "high",
+            escalation: true,
+            summary:
+              "Customer escalation asks for a clear response owner and timing before the next stakeholder meeting.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "gainsight") {
+        return record(
+          id,
+          "gainsight",
+          "cta",
+          "Customer escalation response owner",
+          roleTemplateId,
+          [],
+          {
+            account: "Northstar Medical",
+            status: "Open",
+            riskReason:
+              "Escalation needs response owner and timing before the next customer stakeholder meeting.",
+            summary:
+              "CS manager owns the escalation response plan and needs to align Product and Engineering inputs.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "salesforce") {
+        return record(
+          id,
+          "salesforce",
+          "task",
+          "Customer escalation response owner",
+          roleTemplateId,
+          [],
+          {
+            account: "Northstar Medical",
+            status: "Not Started",
+            subject: "Confirm escalation response owner and timing",
+            summary:
+              "CS manager needs to confirm the escalation response owner and timing before the next customer meeting.",
+          },
+          options,
+        );
+      }
+      return record(
+        id,
+        "gmail",
+        "email",
+        "Customer escalation needs response owner",
+        roleTemplateId,
+        [],
+        {
+          subject: "Customer escalation needs response owner",
+          labels: ["workforce-one", "customer"],
+          summary:
+            "Please confirm who owns the escalation response and when we can reply to the customer before the next stakeholder meeting.",
+        },
+        options,
+      );
+    }
+    case "role-customer-success-director": {
+      const sourceSystem = sourcePreferredForScenario(scenarioSourceSystems, [
+        "gainsight",
+        "salesforce",
+        "calendar",
+        "gmail",
+      ]);
+      if (sourceSystem === "salesforce") {
+        return record(
+          id,
+          "salesforce",
+          "opportunity",
+          "Customer risk executive rollup",
+          roleTemplateId,
+          [],
+          {
+            account: "Northstar Medical",
+            stageName: "Renewal Review",
+            amount: 425000,
+            closeDate: "2026-09-30",
+            summary:
+              "CS Director reviews renewal risk and escalation status before executive rollup.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "calendar") {
+        return record(
+          id,
+          "calendar",
+          "meeting",
+          "Customer risk executive rollup",
+          roleTemplateId,
+          [],
+          {
+            agenda: "Escalation owner, renewal exposure, QBR commitments, and leadership ask",
+            status: "confirmed",
+            summary:
+              "CS Director reviews customer risk, escalation ownership, and QBR commitments before leadership readout.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "gmail") {
+        return record(
+          id,
+          "gmail",
+          "email",
+          "Customer risk executive rollup",
+          roleTemplateId,
+          [],
+          {
+            subject: "Customer risk executive rollup",
+            labels: ["workforce-one", "customer"],
+            summary:
+              "Please summarize escalation ownership, renewal exposure, and QBR commitments for the executive rollup.",
+          },
+          options,
+        );
+      }
+      return record(
+        id,
+        "gainsight",
+        "success_plan",
+        "Customer risk executive rollup",
+        roleTemplateId,
+        [],
+        {
+          account: "Northstar Medical",
+          status: "Open",
+          riskReason:
+            "Director-level rollup needs escalation ownership, renewal exposure, and QBR commitment status.",
+          summary:
+            "CS Director prepares the customer risk rollup and flags where leadership needs to intervene.",
+        },
+        options,
+      );
+    }
+    case "role-customer-success-vp": {
+      const sourceSystem = sourcePreferredForScenario(scenarioSourceSystems, [
+        "gmail",
+        "calendar",
+        "gainsight",
+        "salesforce",
+      ]);
+      if (sourceSystem === "calendar") {
+        return record(
+          id,
+          "calendar",
+          "meeting",
+          "Executive customer risk decision",
+          roleTemplateId,
+          [],
+          {
+            agenda:
+              "Renewal exposure, escalation posture, customer reply timing, and executive decision",
+            status: "confirmed",
+            summary:
+              "VP CS reviews renewal exposure and escalation response before executive customer decision.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "gainsight") {
+        return record(
+          id,
+          "gainsight",
+          "cta",
+          "Executive customer risk decision",
+          roleTemplateId,
+          [],
+          {
+            account: "Northstar Medical",
+            status: "Open",
+            riskReason:
+              "Executive decision needed on customer escalation posture and renewal exposure.",
+            summary:
+              "VP CS owns the executive customer risk decision and needs the escalation plan summarized.",
+          },
+          options,
+        );
+      }
+      if (sourceSystem === "salesforce") {
+        return record(
+          id,
+          "salesforce",
+          "opportunity",
+          "Executive customer risk decision",
+          roleTemplateId,
+          [],
+          {
+            account: "Northstar Medical",
+            stageName: "Executive Review",
+            amount: 425000,
+            closeDate: "2026-09-30",
+            summary:
+              "VP CS reviews renewal exposure and customer escalation posture before the executive decision.",
+          },
+          options,
+        );
+      }
+      return record(
+        id,
+        "gmail",
+        "email",
+        "Executive customer risk decision",
+        roleTemplateId,
+        [],
+        {
+          subject: "Executive customer risk decision",
+          labels: ["workforce-one", "exec"],
+          summary:
+            "Please review renewal exposure, escalation posture, and the customer reply timing before the executive decision.",
+        },
+        options,
+      );
+    }
+    default:
+      return record(
+        id,
+        sourcePreferredForScenario(scenarioSourceSystems, ["gmail", "slack", "notion"]),
+        "email",
+        "Role-specific work follow-up",
+        roleTemplateId,
+        [],
+        {
+          subject: "Role-specific work follow-up",
+          labels: ["workforce-one"],
+          summary: "Follow-up work item for the person assigned to this scenario role.",
+        },
+        options,
+      );
+  }
+};
+
+const roleWorkArtifactsForScenario = (scenario: ScenarioDefinition): ScenarioRecordTemplate[] =>
+  scenario.participantRoleTemplateIds.map((roleTemplateId) =>
+    roleWorkArtifact(scenario.sourceSystems, roleTemplateId),
+  );
+
+const withRoleWorkArtifacts = (scenario: ScenarioDefinition): ScenarioDefinition => ({
+  ...scenario,
+  events: [
+    ...scenario.events,
+    {
+      id: "role-specific-work-artifacts",
+      label: "Role-specific source work artifacts",
+      atHour: 1,
+      records: roleWorkArtifactsForScenario(scenario),
+    },
+  ],
+});
+
+const baseScenarios: ScenarioDefinition[] = [
   {
     id: "regular-workday",
     title: "Regular workday",
@@ -2116,5 +3085,7 @@ export const scenarios: ScenarioDefinition[] = [
     ],
   },
 ];
+
+export const scenarios: ScenarioDefinition[] = baseScenarios.map(withRoleWorkArtifacts);
 
 export const scenarioById = new Map(scenarios.map((scenario) => [scenario.id, scenario]));
