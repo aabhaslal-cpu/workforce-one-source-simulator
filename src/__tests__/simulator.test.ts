@@ -2965,7 +2965,12 @@ describe("Milestone 3 operations", () => {
 
     const { app } = await credentialedApp();
     expect((await app.request("/")).status).toBe(302);
-    expect((await app.request("/console")).status).toBe(200);
+    const consoleResponse = await app.request("/console");
+    expect(consoleResponse.status).toBe(200);
+    const consoleHtml = await consoleResponse.text();
+    expect(consoleHtml).toContain("All Scenario Flow");
+    expect(consoleHtml).toContain("Scenario selection is an inspection lens");
+    expect(consoleHtml).toContain("Admin key rejected");
     expect((await app.request("/healthz")).status).toBe(200);
     expect((await app.request("/readyz")).status).toBe(200);
     expect((await app.request("/v1/catalog")).status).toBe(200);
@@ -3302,6 +3307,46 @@ describe("Milestone 2 admin APIs", () => {
       { headers: adminHeaders() },
     );
     expect((await history.json()).history[0].sourceId).toBe(object.sourceId);
+  });
+
+  it("summarizes all-scenario dataset flow without exposing credential or raw payload data", async () => {
+    const { app } = await credentialedApp(completedDatasetSimulator("flow-summary-seed", "medium"));
+
+    const unauthorized = await app.request("/v1/admin/datasets/flow-summary");
+    expect(unauthorized.status).toBe(401);
+
+    const response = await app.request("/v1/admin/datasets/flow-summary", {
+      headers: adminHeaders(),
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.schemaVersion).toBe("dataset-flow-summary.v1");
+    expect(body.datasetMetadata.scenarioPackCount).toBe(11);
+    expect(body.datasetMetadata.scenarioInstanceCount).toBe(88);
+    expect(body.allScenarioPacksPresent).toBe(true);
+    expect(body.scenarioPacks).toHaveLength(11);
+    expect(
+      body.scenarioPacks.every(
+        (pack: { instanceCount: number; sourceChangeCount: number }) =>
+          pack.instanceCount > 0 && pack.sourceChangeCount > 0,
+      ),
+    ).toBe(true);
+    expect(body.connections.length).toBeGreaterThan(0);
+    expect(
+      body.connections.some(
+        (connection: {
+          connectionId: string;
+          visibleScenarioPackCount: number;
+          visibleSourceChangeCount: number;
+        }) =>
+          connection.connectionId === "conn-product-manager" &&
+          connection.visibleScenarioPackCount > 1 &&
+          connection.visibleSourceChangeCount > 0,
+      ),
+    ).toBe(true);
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain("secret-product-manager");
+    expect(serialized).not.toContain("rawPayload");
   });
 
   it("exports an admin-only Workforce One bootstrap snapshot without credentials", async () => {
